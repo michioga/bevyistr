@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = [
+    "app",
+    "fem_core",
+    "interaction",
+    "selection",
+    "visualization",
+    "ui",
+    "gmsh",
+    "hecmw",
+    "camera",
+    "picking",
+    "box_select",
+]

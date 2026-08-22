@@ -1,0 +1,24 @@
+mod components;
+mod selection_system;
+mod state;
+
+use bevy::prelude::*;
+
+pub use components::*;
+pub use state::*;
+pub use selection_system::{click_selection_system, selection_filter_shortcut_system};
+
+pub struct SelectionPlugin;
+
+impl Plugin for SelectionPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<fem_core::SelectionFilter>();
+        app.init_resource::<fem_core::UiPointerState>();
+        app.init_resource::<SelectionState>();
+
+        app.add_systems(
+            Update,
+            (selection_filter_shortcut_system, click_selection_system),
+        );
+    }
+}

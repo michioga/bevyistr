@@ -1,0 +1,10 @@
+[package]
+name = "visualization"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = "0.19"
+fem_core = { path = "../fem_core" }
+interaction = { path = "../interaction" }
+selection = { path = "../selection" }
