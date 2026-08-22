@@ -5,12 +5,13 @@ pub mod ctrl_writer;
 pub mod frd;
 pub mod inp;
 pub mod msh_writer;
+pub mod project_writer;
 pub mod result;
 pub mod series;
 pub mod vtu;
 
 pub use cnt::{load_cnt_file, CntData, CntError};
-pub use cnt_writer::write_cnt_file;
+pub use cnt_writer::{write_cnt_file, write_cnt_file_with_contacts};
 pub use ctrl_reader::{load_hecmw_ctrl, resolve_paths, HecmwCtrlContent};
 pub use ctrl_writer::{write_hecmw_ctrl, HecmwCtrlParams};
 pub use frd::{load_frd_file, FrdError};
@@ -18,6 +19,10 @@ pub use inp::{load_inp_file, InpError};
 pub use msh_writer::{
     assembly_id_offsets, remap_element, remap_node,
     write_msh_assembly, write_msh_file,
+};
+pub use project_writer::{
+    remap_setup_for_assembly, write_frontistr_project, FrontistrExportError,
+    FrontistrExportSummary,
 };
 pub use result::{load_result_file, parse_result_str, ResultLoadError};
 pub use series::{detect_series, load_series};

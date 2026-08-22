@@ -1,12 +1,10 @@
 use bevy::prelude::*;
 
-use camera::OrbitCamera;
+use crate::OrbitCamera;
 
-pub fn focus_selected_system(
+pub(crate) fn focus_selected_system(
     keyboard: Res<ButtonInput<KeyCode>>,
-
     selected_query: Query<(&GlobalTransform, Option<&Name>)>,
-
     mut camera_query: Query<&mut OrbitCamera>,
 ) {
     if !keyboard.just_pressed(KeyCode::KeyF) {
@@ -37,8 +35,8 @@ pub fn focus_selected_system(
         return;
     };
 
-    let (focus, radius) = camera::fit_bounds(min, max);
-    let (min_radius, max_radius) = camera::radius_limits(radius);
+    let (focus, radius) = crate::fit_bounds(min, max);
+    let (min_radius, max_radius) = crate::radius_limits(radius);
 
     orbit.target_focus = focus;
 

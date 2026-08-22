@@ -277,9 +277,6 @@ pub(crate) struct LoadDirectionButton {
 pub(crate) struct SelectedLoadDirection(pub Option<(u8, f32)>);
 
 #[derive(Component)]
-pub(crate) struct ApplyConstraintHint;
-
-#[derive(Component)]
 pub(crate) struct ApplyLoadButton;
 
 /// Dynamic text below the SELECTION section showing:
@@ -3955,8 +3952,25 @@ pub(crate) fn export_button_system(
                 continue;
             };
 
-            match run_export(&dir, &stem, model, &setup) {
-                Ok(msg) => set_export_status(&mut status_query, &msg),
+            match hecmw::write_frontistr_project(&dir, &stem, model, &setup) {
+                Ok(summary) => {
+                    let part_note = if summary.part_count > 1 {
+                        format!("  ({} parts merged)", summary.part_count)
+                    } else {
+                        String::new()
+                    };
+                    let message = format!(
+                        "✓ {stem}.*{part_note}\n{}N/{}E  BC:{} Ld:{} Mat:{} Sec:{} Ctc:{}",
+                        summary.node_count,
+                        summary.element_count,
+                        summary.boundary_condition_count,
+                        summary.load_count,
+                        summary.material_count,
+                        summary.section_count,
+                        summary.contact_count,
+                    );
+                    set_export_status(&mut status_query, &message);
+                }
                 Err(e)  => set_export_status(&mut status_query, &format!("✗ {e}")),
             }
         }
@@ -3970,115 +3984,6 @@ pub(crate) fn export_button_system(
         *bg = BackgroundColor(color);
         *border = BorderColor::all(Color::srgb(0.15, 0.50, 0.28));
     }
-}
-
-fn run_export(
-    dir: &std::path::Path,
-    stem: &str,
-    model: &FemModel,
-    setup: &fem_core::AnalysisSetup,
-) -> Result<String, String> {
-    hecmw::write_hecmw_ctrl(dir, &hecmw::HecmwCtrlParams {
-        mesh_name:   stem,
-        cnt_name:    stem,
-        result_name: stem,
-    }).map_err(|e| format!("hecmw_ctrl.dat: {e}"))?;
-
-    let msh_path = dir.join(format!("{stem}.msh"));
-
-    let (node_count, elem_count, part_count) = if model.meshes.len() > 1 {
-        // Multi-part assembly: flatten all meshes into one .msh with
-        // renumbered IDs and prefixed group names.
-        hecmw::write_msh_assembly(&msh_path, model)
-            .map_err(|e| format!("{stem}.msh: {e}"))?
-    } else {
-        let (n, e) = hecmw::write_msh_file(&msh_path, model, 0)
-            .map_err(|e| format!("{stem}.msh: {e}"))?;
-        (n, e, 1)
-    };
-
-    // For multi-part assembly, remap node/element IDs in the setup's BCs
-    // and loads so they reference the assembly-wide numbering.  This is
-    // only necessary when node IDs from different parts could overlap —
-    // single-part exports are already correct as-is.
-    let cnt_path = dir.join(format!("{stem}.cnt"));
-    let (bc_count, load_count, mat_count, sec_count) = if part_count > 1 {
-        let offsets = hecmw::assembly_id_offsets(model);
-        let remapped = remap_setup_for_assembly(setup, &offsets);
-        hecmw::write_cnt_file(&cnt_path, &remapped)
-            .map_err(|e| format!("{stem}.cnt: {e}"))?
-    } else {
-        hecmw::write_cnt_file(&cnt_path, setup)
-            .map_err(|e| format!("{stem}.cnt: {e}"))?
-    };
-
-    let part_note = if part_count > 1 {
-        format!("  ({part_count} parts merged)")
-    } else {
-        String::new()
-    };
-
-    Ok(format!(
-        "✓ {stem}.*{part_note}\n{node_count}N/{elem_count}E  BC:{bc_count} Ld:{load_count} Mat:{mat_count} Sec:{sec_count}",
-    ))
-}
-
-/// Produces a clone of `setup` with every node and element ID remapped to
-/// the assembly-wide numbering, so that boundary conditions and loads that
-/// reference IDs from a specific part's original space still point to the
-/// correct rows in the combined `.msh`.
-fn remap_setup_for_assembly(
-    setup:   &fem_core::AnalysisSetup,
-    offsets: &[(u32, u32)],
-) -> fem_core::AnalysisSetup {
-    use fem_core::{BoundaryCondition, DistributedLoad, NodalLoad};
-
-    let mut out = setup.clone();
-
-    out.boundary_conditions = setup.boundary_conditions.iter().map(|bc| {
-        BoundaryCondition {
-            nodes: bc.nodes.iter()
-                .map(|&n| hecmw::remap_node(offsets, bc.mesh_index, n))
-                .collect(),
-            ..bc.clone()
-        }
-    }).collect();
-
-    out.nodal_loads = setup.nodal_loads.iter().map(|load| {
-        NodalLoad {
-            node: hecmw::remap_node(offsets, load.mesh_index, load.node),
-            ..load.clone()
-        }
-    }).collect();
-
-    out.distributed_loads = setup.distributed_loads.iter().map(|dl| {
-        let target = match &dl.target {
-            fem_core::DistributedLoadTarget::Elements(elements) => {
-                fem_core::DistributedLoadTarget::Elements(
-                    elements.iter()
-                        .map(|&e| hecmw::remap_element(offsets, dl.mesh_index, e))
-                        .collect(),
-                )
-            }
-            fem_core::DistributedLoadTarget::Faces(faces) => {
-                fem_core::DistributedLoadTarget::Faces(
-                    faces.iter()
-                        .map(|f| fem_core::ElementFaceRef::new(
-                            hecmw::remap_element(offsets, dl.mesh_index, f.element),
-                            f.local_face,
-                        ))
-                        .collect(),
-                )
-            }
-        };
-
-        DistributedLoad {
-            target,
-            ..dl.clone()
-        }
-    }).collect();
-
-    out
 }
 
 fn set_export_status(query: &mut Query<&mut Text, With<ExportStatusText>>, msg: &str) {

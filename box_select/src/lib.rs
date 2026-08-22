@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use interaction::InteractionSystems;
 mod rect_ui;
 
 use rect_ui::*;
@@ -18,10 +19,12 @@ impl Plugin for BoxSelectPlugin {
             (
                 begin_box_select,
                 update_box_select,
+                perform_box_selection,
                 end_box_select,
                 update_rect_visual,
-                perform_box_selection,
-            ),
+            )
+                .chain()
+                .in_set(InteractionSystems::Selection),
         );
     }
 }

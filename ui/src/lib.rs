@@ -2,6 +2,7 @@ mod layout;
 pub mod slider;
 
 use bevy::prelude::*;
+use interaction::InteractionSystems;
 
 use layout::{
     accept_contact_button_system, add_section_button_system, analysis_type_button_system,
@@ -64,7 +65,7 @@ impl Plugin for UiPlugin {
 
         // Group 1: pointer, navigation, mesh loading (≤16 systems)
         app.add_systems(Update, (
-            update_ui_pointer_state,
+            update_ui_pointer_state.in_set(InteractionSystems::UiInput),
             handle_scrollable_list_wheel,
             handle_panel_wheel,
             workflow_tab_button_system,
@@ -78,7 +79,7 @@ impl Plugin for UiPlugin {
             set_button_system,
             make_node_group_button_system,
             make_element_group_button_system,
-            selection_level_button_system,
+            selection_level_button_system.in_set(InteractionSystems::UiInput),
             render_mode_button_system,
         ));
 
@@ -124,7 +125,7 @@ impl Plugin for UiPlugin {
             planar_selection_toggle_system,
             update_hover_preview_group
                 .after(slider::update_sliders)
-                .before(selection::click_selection_system),
+                .in_set(InteractionSystems::Preview),
         ));
 
         // Group 5: undo/redo, planar selection, sliders, text updates (≤16 systems)

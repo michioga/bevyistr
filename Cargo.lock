@@ -2088,6 +2088,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "fem_core",
+ "interaction",
 ]
 
 [[package]]
@@ -3348,7 +3349,6 @@ name = "interaction"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "camera",
  "fem_core",
 ]
 

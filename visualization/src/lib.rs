@@ -3,6 +3,7 @@ mod colorbar;
 mod demo_mesh;
 
 use bevy::prelude::*;
+use interaction::InteractionSystems;
 
 use boundary_viz::spawn_boundary_visuals;
 use colorbar::{spawn_colorbar, update_colorbar};
@@ -16,7 +17,7 @@ use demo_mesh::{
 pub use boundary_viz::{BoundaryVisual, BoundaryVisualSettings};
 pub use colorbar::ColorbagRoot;
 pub use demo_mesh::{
-    ContourSettings, FlatMaterial, FemMeshVisual, TransparentMaterial, VisualizationMode,
+    ContourSettings, FemMeshVisual, FlatMaterial, TransparentMaterial, VisualizationMode,
     VisualizationSettings,
 };
 
@@ -46,10 +47,10 @@ impl Plugin for VisualizationPlugin {
             (
                 respawn_visuals_on_reload,
                 respawn_elements_on_setup_change.after(respawn_visuals_on_reload),
-                update_hover_materials,
+                update_hover_materials.after(InteractionSystems::Selection),
                 update_visual_layer_visibility,
                 apply_visualization_mode.after(update_visual_layer_visibility),
-                update_topology_highlights,
+                update_topology_highlights.after(InteractionSystems::Selection),
                 update_contact_candidate_highlights,
                 update_contour_surface,
                 update_colorbar,

@@ -5,7 +5,7 @@
 //! that every non-trivial FrontISTR analysis needs:
 //!
 //!   `!HEADER`, `!NODE`, `!ELEMENT` (one block per element type),
-//!   `!NGROUP`, `!EGROUP`, `!SGROUP`, `!END`
+//!   `!NGROUP`, `!EGROUP`, `!SGROUP`, `!CONTACT PAIR`, `!END`
 //!
 //! Coordinates are written in full `f64`-formatted `f32` values (6 decimal
 //! places) so precision is not lost in a read-modify-write round-trip even
@@ -21,15 +21,22 @@
 //! ranges (offsetting by the running totals of all earlier parts) and
 //! prefixing every group name with the part name (`PART2_EGRP1`) so that
 //! identically-named groups from different source files don't collide.
-//! Contact pairs between parts are *not* exported here — contacts live in
-//! the `.cnt` writer's domain, not the mesh writer's, and aren't part of
-//! this change.
+//! Contact surface pairs are mesh definitions in FrontISTR, so accepted
+//! contacts are exported as `TYPE=SURF-SURF` pairs after their surface
+//! groups. Their interaction law is written to the analysis `.cnt` file.
 
 use std::fmt::Write as FmtWrite;
 use std::io;
 use std::path::Path;
 
-use fem_core::{ElementId, ElementType, FemMesh, FemModel, NodeId};
+use fem_core::{ElementId, ElementType, FemMesh, FemModel, NodeId, SurfaceSetRef};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExportContactPair {
+    name: String,
+    slave_group: String,
+    master_group: String,
+}
 
 // ─── public API ──────────────────────────────────────────────────────────────
 
@@ -52,7 +59,8 @@ pub fn write_msh_file(
         io::Error::new(io::ErrorKind::InvalidInput, "mesh index out of range")
     })?;
 
-    let text = build_msh(mesh, "");
+    let contacts = resolve_contact_pairs(model, Some(mesh_index), false)?;
+    let text = build_msh(mesh, &contacts);
     std::fs::write(path, text.as_bytes())?;
 
     Ok((mesh.nodes.len(), mesh.elements.len()))
@@ -122,10 +130,7 @@ pub fn write_msh_assembly(
 
     // ── NGROUP / EGROUP / SGROUP (prefixed by part name to avoid collisions) ──
     for (part_index, (mesh, &(noff, eoff))) in model.meshes.iter().zip(&offsets).enumerate() {
-        let part_name = model.parts.iter()
-            .find(|p| p.mesh_index == part_index)
-            .map(|p| sanitize_group_prefix(&p.name))
-            .unwrap_or_else(|| format!("PART{}", part_index + 1));
+        let part_name = part_group_prefix(model, part_index);
 
         for nset in &mesh.node_sets {
             writeln!(combined, "!NGROUP,NGRP={part_name}_{}", nset.name).unwrap();
@@ -142,6 +147,11 @@ pub fn write_msh_assembly(
             }
         }
     }
+
+    write_contact_pairs(
+        &mut combined,
+        &resolve_contact_pairs(model, None, true)?,
+    );
 
     writeln!(combined, "!END").unwrap();
     std::fs::write(path, combined.as_bytes())?;
@@ -197,6 +207,99 @@ fn sanitize_group_prefix(name: &str) -> String {
         .to_ascii_uppercase()
 }
 
+fn part_group_prefix(model: &FemModel, mesh_index: usize) -> String {
+    model
+        .parts
+        .iter()
+        .find(|part| part.mesh_index == mesh_index)
+        .map(|part| sanitize_group_prefix(&part.name))
+        .unwrap_or_else(|| format!("PART{}", mesh_index + 1))
+}
+
+fn exported_surface_group_name(
+    model: &FemModel,
+    surface: SurfaceSetRef,
+    prefix_part: bool,
+) -> io::Result<String> {
+    let mesh = model.meshes.get(surface.mesh_index).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("contact references missing mesh {}", surface.mesh_index),
+        )
+    })?;
+    let surface_set = mesh
+        .surface_sets
+        .get(surface.surface_set_index)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "contact references missing surface set {} on mesh {}",
+                    surface.surface_set_index, surface.mesh_index
+                ),
+            )
+        })?;
+
+    if prefix_part {
+        Ok(format!(
+            "{}_{}",
+            part_group_prefix(model, surface.mesh_index),
+            surface_set.name
+        ))
+    } else {
+        Ok(surface_set.name.clone())
+    }
+}
+
+fn resolve_contact_pairs(
+    model: &FemModel,
+    selected_mesh: Option<usize>,
+    prefix_parts: bool,
+) -> io::Result<Vec<ExportContactPair>> {
+    let mut resolved = Vec::with_capacity(model.contacts.len());
+
+    for contact in &model.contacts {
+        if let Some(mesh_index) = selected_mesh {
+            let master_selected = contact.master.mesh_index == mesh_index;
+            let slave_selected = contact.slave.mesh_index == mesh_index;
+
+            if !master_selected && !slave_selected {
+                continue;
+            }
+
+            if master_selected != slave_selected {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "contact '{}' crosses mesh boundaries; export the assembly instead",
+                        contact.name
+                    ),
+                ));
+            }
+        }
+
+        resolved.push(ExportContactPair {
+            name: contact.name.clone(),
+            slave_group: exported_surface_group_name(model, contact.slave, prefix_parts)?,
+            master_group: exported_surface_group_name(model, contact.master, prefix_parts)?,
+        });
+    }
+
+    Ok(resolved)
+}
+
+fn write_contact_pairs(out: &mut String, contacts: &[ExportContactPair]) {
+    for contact in contacts {
+        writeln!(
+            out,
+            "!CONTACT PAIR, NAME={}, TYPE=SURF-SURF",
+            contact.name
+        )
+        .unwrap();
+        writeln!(out, " {},{}", contact.slave_group, contact.master_group).unwrap();
+    }
+}
+
 fn write_id_list(out: &mut String, ids: impl Iterator<Item = u32>) {
     let mut col = 0;
     let ids: Vec<u32> = ids.collect();
@@ -233,7 +336,7 @@ fn element_type_code(et: &ElementType) -> Option<&'static str> {
     }
 }
 
-fn build_msh(mesh: &FemMesh, _group_prefix: &str) -> String {
+fn build_msh(mesh: &FemMesh, contacts: &[ExportContactPair]) -> String {
     let mut out = String::with_capacity(1024 * 64);
 
     // ── HEADER ──
@@ -292,8 +395,72 @@ fn build_msh(mesh: &FemMesh, _group_prefix: &str) -> String {
         }
     }
 
+    write_contact_pairs(&mut out, contacts);
+
     writeln!(out, "!END").unwrap();
 
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use fem_core::{
+        ContactPair, ContactType, ElementFaceRef, ElementId, FemMesh, FemSurfaceSet, LocalFaceId,
+        SurfaceSetRef,
+    };
+
+    use super::*;
+
+    fn add_surface(mesh: &mut FemMesh, name: &str, local_face: u32) {
+        mesh.surface_sets.push(FemSurfaceSet {
+            name: name.into(),
+            surfaces: vec![ElementFaceRef::new(
+                ElementId(0),
+                LocalFaceId(local_face),
+            )],
+        });
+    }
+
+    #[test]
+    fn writes_surface_to_surface_contact_pair_in_slave_master_order() {
+        let mut model = FemModel::demo_hex8();
+        add_surface(&mut model.meshes[0], "MASTER", 1);
+        add_surface(&mut model.meshes[0], "SLAVE", 2);
+        model.contacts.push(ContactPair::new(
+            "CP1",
+            SurfaceSetRef::new(0, 0),
+            SurfaceSetRef::new(0, 1),
+            ContactType::Tied,
+        ));
+
+        let contacts = resolve_contact_pairs(&model, Some(0), false).unwrap();
+        let text = build_msh(&model.meshes[0], &contacts);
+
+        assert!(text.contains("!CONTACT PAIR, NAME=CP1, TYPE=SURF-SURF\n SLAVE,MASTER\n"));
+    }
+
+    #[test]
+    fn prefixes_contact_surface_groups_in_assembly_export() {
+        let mut model = FemModel::single_mesh("gear", FemMesh::demo_hex8());
+        model.add_mesh("shaft", FemMesh::demo_hex8());
+        add_surface(&mut model.meshes[0], "TEETH", 1);
+        add_surface(&mut model.meshes[1], "OUTER", 2);
+        model.contacts.push(ContactPair::new(
+            "GEAR_SHAFT",
+            SurfaceSetRef::new(0, 0),
+            SurfaceSetRef::new(1, 0),
+            ContactType::Frictionless,
+        ));
+
+        let contacts = resolve_contact_pairs(&model, None, true).unwrap();
+
+        assert_eq!(
+            contacts,
+            vec![ExportContactPair {
+                name: "GEAR_SHAFT".into(),
+                slave_group: "SHAFT_OUTER".into(),
+                master_group: "GEAR_TEETH".into(),
+            }]
+        );
+    }
+}
