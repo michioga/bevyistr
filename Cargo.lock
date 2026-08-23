@@ -2967,6 +2967,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "fem_core",
+ "hecmw",
 ]
 
 [[package]]

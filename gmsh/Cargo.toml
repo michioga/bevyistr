@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 bevy = "0.19"
 fem_core = { path = "../fem_core" }
+
+[dev-dependencies]
+hecmw = { path = "../hecmw" }
