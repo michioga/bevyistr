@@ -8,6 +8,7 @@ use fem_core::{
     FemNode, FemResultSet, rainbow_color,
 };
 use interaction::HoverResult;
+use std::collections::BTreeSet;
 
 use selection::{
     EdgeEntity, ElementEntity, FaceEntity, Hovered, NodeEntity, Selectable, Selected,
@@ -1161,11 +1162,10 @@ pub(crate) fn model_visual_scale(model: &FemModel) -> f32 {
 }
 
 /// Dispatches to a shape-appropriate spawn function based on
-/// `element.element_type`: a thin extruded plate for shell elements
-/// (Tri3/Tri6/Quad4/Quad8), a cylinder along the element axis for beam
-/// elements (Rod2), and the existing bounding-box cuboid approximation for
-/// everything else (3-D solids, and any `Unsupported` type, which we have
-/// no better shape information for).
+/// `element.element_type`: a thin extruded plate for plane/shell elements,
+/// cylinders along the geometric segments of line/beam elements, and the
+/// actual corner-face geometry for solids and interface elements. Unknown
+/// element types retain the bounding-box fallback.
 ///
 /// `section` is the [`fem_core::Section`] resolved for this specific
 /// element (via [`fem_core::AnalysisSetup::build_element_section_map`]),
@@ -1191,10 +1191,9 @@ fn spawn_element_visual(
     }
 }
 
-/// Bounding-box cuboid approximation, used for 3-D solid elements (tets,
-/// hexes, prisms/wedges) where a box is already a reasonable
-/// representative shape, and as the fallback for `Unsupported` element
-/// types we have no better geometry for.
+/// Renders a 3-D solid or interface element from its actual corner faces.
+/// A bounding-box cuboid is retained only as a fallback for unknown or
+/// malformed element types with no usable face topology.
 fn spawn_solid_element_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -1202,20 +1201,29 @@ fn spawn_solid_element_visual(
     element: &FemElement,
     materials: &MaterialSet,
 ) {
-    let Some(points) = fem_mesh.node_positions(&element.nodes) else {
-        return;
-    };
-    let Some((min, max)) = bounds(&points) else {
-        return;
-    };
+    let (mesh, transform) = match build_element_surface_mesh(fem_mesh, element) {
+        Some(mesh) => (meshes.add(mesh), Transform::default()),
+        None => {
+            let Some(points) = fem_mesh.node_positions(&element.nodes) else {
+                return;
+            };
+            let Some((min, max)) = bounds(&points) else {
+                return;
+            };
 
-    let center = (min + max) * 0.5;
-    let size = visual_size(max - min);
+            let center = (min + max) * 0.5;
+            let size = visual_size(max - min);
+            (
+                meshes.add(Cuboid::new(size.x, size.y, size.z)),
+                Transform::from_translation(center),
+            )
+        }
+    };
 
     commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
+        Mesh3d(mesh),
         MeshMaterial3d(materials.normal.clone()),
-        Transform::from_translation(center),
+        transform,
         VisualLayer::Shaded,
         Visibility::Visible,
         Selectable::element(element.id),
@@ -1230,16 +1238,38 @@ fn spawn_solid_element_visual(
     ));
 }
 
+fn build_element_surface_mesh(fem_mesh: &FemMesh, element: &FemElement) -> Option<Mesh> {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+
+    for node_ids in element.face_node_ids() {
+        let Some(points) = fem_mesh.node_positions(&node_ids) else {
+            continue;
+        };
+
+        append_face_triangles(&mut positions, &mut normals, &points);
+    }
+
+    if positions.is_empty() {
+        return None;
+    }
+
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
+    )
+}
+
 /// Number of *corner* nodes for a shell element type, ignoring mid-side
 /// nodes on quadratic elements (Tri6's nodes 4-6, Quad8's nodes 5-8) which
 /// follow this corners-then-midsides ordering convention in every format
 /// this platform parses (Gmsh, HECMW, Abaqus/CalculiX `.inp`).
 fn shell_corner_count(element_type: &fem_core::ElementType) -> usize {
-    match element_type {
-        fem_core::ElementType::Tri3 | fem_core::ElementType::Tri6 => 3,
-        fem_core::ElementType::Quad4 | fem_core::ElementType::Quad8 => 4,
-        _ => 0,
-    }
+    element_type.surface_corner_count().unwrap_or(0)
 }
 
 /// Renders a shell element (Tri3/Tri6/Quad4/Quad8) as a thin plate: the
@@ -1341,7 +1371,10 @@ fn spawn_shell_element_visual(
     ));
 }
 
-/// Renders a beam/truss element (Rod2) as a cylinder along its axis,
+/// Renders a line/beam/truss/connector element as cylinders along its
+/// geometric segments. Quadratic line elements therefore include their
+/// mid-side node, while mixed-DOF elements ignore rotation-only nodes.
+///
 /// radius derived from the assigned [`Section`]'s cross-sectional area
 /// (`r = sqrt(area / π)`, i.e. an equivalent-area circular cross-section —
 /// detailed beam profile shapes are out of scope, see
@@ -1359,51 +1392,72 @@ fn spawn_beam_element_visual(
     section: Option<&fem_core::Section>,
     model_scale: f32,
 ) {
-    let Some(points) = fem_mesh.node_positions(&element.nodes) else {
-        return;
-    };
+    let segments: Vec<(Vec3, Vec3)> = element
+        .edge_node_ids()
+        .into_iter()
+        .filter_map(|nodes| {
+            Some((
+                fem_mesh.node_position(nodes[0])?,
+                fem_mesh.node_position(nodes[1])?,
+            ))
+        })
+        .filter(|(start, end)| {
+            start.distance_squared(*end) > f32::EPSILON * f32::EPSILON
+        })
+        .collect();
 
-    if points.len() < 2 {
+    if segments.is_empty() {
         return;
     }
 
-    let start = points[0];
-    let end = points[1];
-    let delta = end - start;
-    let length = delta.length();
-
-    if length <= f32::EPSILON {
-        return;
-    }
+    let reference_length = segments
+        .iter()
+        .map(|(start, end)| start.distance(*end))
+        .sum::<f32>();
 
     let radius = match section.map(|s| &s.kind) {
         Some(fem_core::SectionKind::Beam { area }) => (area / std::f32::consts::PI).sqrt(),
         // Same model-scale safety ceiling as the shell thickness fallback
         // above — see its comment for why a purely element-relative value
         // is risky for outlier/degenerate elements.
-        _ => (length * 0.015).min(model_scale * 0.01),
+        _ => (reference_length * 0.015).min(model_scale * 0.01),
     }
     .max(1.0e-4);
 
-    let center = (start + end) * 0.5;
-    let rotation = Quat::from_rotation_arc(Vec3::Y, delta / length);
+    for (segment_index, (start, end)) in segments.into_iter().enumerate() {
+        let delta = end - start;
+        let length = delta.length();
+        let center = (start + end) * 0.5;
+        let rotation = Quat::from_rotation_arc(Vec3::Y, delta / length);
 
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder { radius, half_height: length * 0.5 })),
-        MeshMaterial3d(materials.normal.clone()),
-        Transform { translation: center, rotation, ..default() },
-        VisualLayer::Shaded,
-        Visibility::Visible,
-        Selectable::element(element.id),
-        ElementEntity::new(element.id),
-        NormalMaterial(materials.normal.clone()),
-        FlatMaterial(materials.flat.clone()),
-        TransparentMaterial(materials.transparent.clone()),
-        HoverMaterial(materials.hover.clone()),
-        SelectedMaterial(materials.selected.clone()),
-        FemMeshVisual,
-        Name::new(format!("Beam element {}", element.id.0)),
-    ));
+        commands.spawn((
+            Mesh3d(meshes.add(Cylinder {
+                radius,
+                half_height: length * 0.5,
+            })),
+            MeshMaterial3d(materials.normal.clone()),
+            Transform {
+                translation: center,
+                rotation,
+                ..default()
+            },
+            VisualLayer::Shaded,
+            Visibility::Visible,
+            Selectable::element(element.id),
+            ElementEntity::new(element.id),
+            NormalMaterial(materials.normal.clone()),
+            FlatMaterial(materials.flat.clone()),
+            TransparentMaterial(materials.transparent.clone()),
+            HoverMaterial(materials.hover.clone()),
+            SelectedMaterial(materials.selected.clone()),
+            FemMeshVisual,
+            Name::new(format!(
+                "Line element {} segment {}",
+                element.id.0,
+                segment_index + 1
+            )),
+        ));
+    }
 }
 
 fn spawn_face_visual(
@@ -1416,21 +1470,14 @@ fn spawn_face_visual(
     let Some(points) = fem_mesh.node_positions(&face.nodes) else {
         return;
     };
-    let Some((center, tangent, bitangent, normal)) = face_frame(&points) else {
+    let Some(mesh) = build_extruded_polygon_mesh(&points, FACE_THICKNESS) else {
         return;
     };
 
-    let (width, height) = face_extents(&points, center, tangent, bitangent);
-    let rotation = Quat::from_mat3(&Mat3::from_cols(tangent, bitangent, normal));
-
     commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(width, height, FACE_THICKNESS))),
+        Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.normal.clone()),
-        Transform {
-            translation: center,
-            rotation,
-            ..default()
-        },
+        Transform::default(),
         VisualLayer::Shaded,
         Visibility::Visible,
         Selectable::face(face.id),
@@ -1443,6 +1490,43 @@ fn spawn_face_visual(
         FemMeshVisual,
         Name::new(format!("Face {}", face.id.0)),
     ));
+}
+
+/// Builds a thin prism that follows the exact face polygon. The previous
+/// face visual used an oriented bounding cuboid, so triangular faces showed
+/// the unused corners of that rectangle outside the element.
+fn build_extruded_polygon_mesh(points: &[Vec3], thickness: f32) -> Option<Mesh> {
+    if points.len() < 3 {
+        return None;
+    }
+
+    let normal = face_normal(points)?;
+    let half = thickness.max(f32::EPSILON) * 0.5;
+    let top: Vec<Vec3> = points.iter().map(|point| *point + normal * half).collect();
+    let bottom: Vec<Vec3> = points.iter().map(|point| *point - normal * half).collect();
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+
+    append_face_triangles(&mut positions, &mut normals, &top);
+
+    let mut bottom_reversed = bottom.clone();
+    bottom_reversed.reverse();
+    append_face_triangles(&mut positions, &mut normals, &bottom_reversed);
+
+    for index in 0..points.len() {
+        let next = (index + 1) % points.len();
+        let wall = [bottom[index], bottom[next], top[next], top[index]];
+        append_face_triangles(&mut positions, &mut normals, &wall);
+    }
+
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
+    )
 }
 
 fn spawn_edge_visual(
@@ -1657,8 +1741,11 @@ pub(crate) fn build_contour_surface_mesh(
 fn build_boundary_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut seen = BTreeSet::new();
 
     for edge in fem_mesh.cached_boundary_edges() {
+        seen.insert(ordered_node_pair(edge.nodes));
+
         let Some(start) = fem_mesh.node_position(edge.nodes[0]) else {
             continue;
         };
@@ -1670,6 +1757,33 @@ fn build_boundary_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
         positions.push(end.to_array());
         normals.push(Vec3::Y.to_array());
         normals.push(Vec3::Y.to_array());
+    }
+
+    // Line-like elements do not contribute faces, so they never appear in
+    // `cached_boundary_edges`. Add them explicitly, including in meshes
+    // that also contain solids/shells.
+    for element in &fem_mesh.elements {
+        if !element.element_type.is_beam() {
+            continue;
+        }
+
+        for nodes in element.edge_node_ids() {
+            if !seen.insert(ordered_node_pair(nodes)) {
+                continue;
+            }
+
+            let Some(start) = fem_mesh.node_position(nodes[0]) else {
+                continue;
+            };
+            let Some(end) = fem_mesh.node_position(nodes[1]) else {
+                continue;
+            };
+
+            positions.push(start.to_array());
+            positions.push(end.to_array());
+            normals.push(Vec3::Y.to_array());
+            normals.push(Vec3::Y.to_array());
+        }
     }
 
     if positions.is_empty() {
@@ -1684,6 +1798,14 @@ fn build_boundary_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
     )
+}
+
+fn ordered_node_pair(nodes: [fem_core::NodeId; 2]) -> (fem_core::NodeId, fem_core::NodeId) {
+    if nodes[0] <= nodes[1] {
+        (nodes[0], nodes[1])
+    } else {
+        (nodes[1], nodes[0])
+    }
 }
 
 fn append_face_triangles(
@@ -1789,30 +1911,6 @@ fn visual_size(size: Vec3) -> Vec3 {
     )
 }
 
-fn face_frame(points: &[Vec3]) -> Option<(Vec3, Vec3, Vec3, Vec3)> {
-    let center = points.iter().copied().sum::<Vec3>() / points.len() as f32;
-    let origin = points[0];
-
-    for i in 1..points.len() {
-        let Some(tangent) = (points[i] - origin).try_normalize() else {
-            continue;
-        };
-
-        for j in (i + 1)..points.len() {
-            let Some(normal) = tangent.cross(points[j] - origin).try_normalize() else {
-                continue;
-            };
-            let Some(bitangent) = normal.cross(tangent).try_normalize() else {
-                continue;
-            };
-
-            return Some((center, tangent, bitangent, normal));
-        }
-    }
-
-    None
-}
-
 fn face_normal(points: &[Vec3]) -> Option<Vec3> {
     let origin = points[0];
 
@@ -1828,26 +1926,77 @@ fn face_normal(points: &[Vec3]) -> Option<Vec3> {
 
     None
 }
+#[cfg(test)]
+mod tests {
+    use bevy::mesh::VertexAttributeValues;
+    use fem_core::{ElementId, ElementType, FemElement, FemMesh, FemNode, NodeId};
 
-fn face_extents(points: &[Vec3], center: Vec3, tangent: Vec3, bitangent: Vec3) -> (f32, f32) {
-    let mut min_x = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut min_y = f32::MAX;
-    let mut max_y = f32::MIN;
+    use super::*;
 
-    for point in points {
-        let local = *point - center;
-        let x = local.dot(tangent);
-        let y = local.dot(bitangent);
+    #[test]
+    fn builds_actual_tetrahedron_surface_instead_of_a_bounding_box() {
+        let mesh = FemMesh::new(
+            vec![
+                FemNode::from_xyz(NodeId(1), 0.0, 0.0, 0.0),
+                FemNode::from_xyz(NodeId(2), 1.0, 0.0, 0.0),
+                FemNode::from_xyz(NodeId(3), 0.0, 1.0, 0.0),
+                FemNode::from_xyz(NodeId(4), 0.0, 0.0, 1.0),
+            ],
+            vec![FemElement::new(
+                ElementId(1),
+                ElementType::Tet4,
+                vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+            )],
+        );
 
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-        min_y = min_y.min(y);
-        max_y = max_y.max(y);
+        let rendered = build_element_surface_mesh(&mesh, &mesh.elements[0]).unwrap();
+
+        assert_eq!(rendered.count_vertices(), 12);
     }
 
-    (
-        (max_x - min_x).max(MIN_VISUAL_SIZE),
-        (max_y - min_y).max(MIN_VISUAL_SIZE),
-    )
+    #[test]
+    fn aggregate_edge_mesh_keeps_line_only_models_visible() {
+        let mesh = FemMesh::new(
+            vec![
+                FemNode::from_xyz(NodeId(1), 0.0, 0.0, 0.0),
+                FemNode::from_xyz(NodeId(2), 2.0, 0.0, 0.0),
+                FemNode::from_xyz(NodeId(3), 1.0, 1.0, 0.0),
+            ],
+            vec![FemElement::new(
+                ElementId(1),
+                ElementType::Rod3,
+                vec![NodeId(1), NodeId(2), NodeId(3)],
+            )],
+        );
+
+        assert!(mesh.cached_boundary_edges().is_empty());
+
+        let rendered = build_boundary_edge_mesh(&mesh).unwrap();
+
+        assert_eq!(rendered.count_vertices(), 4);
+    }
+
+    #[test]
+    fn triangular_face_visual_does_not_include_bounding_rectangle_corners() {
+        let rendered = build_extruded_polygon_mesh(
+            &[
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ],
+            0.01,
+        )
+        .unwrap();
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            rendered.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("face mesh is missing Float32x3 positions");
+        };
+
+        assert!(positions.iter().all(|position| {
+            position[0] >= 0.0
+                && position[1] >= 0.0
+                && position[0] + position[1] <= 1.0
+        }));
+    }
 }

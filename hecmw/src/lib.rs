@@ -404,6 +404,18 @@ fn parse_element(
         .map(|field| parse_u32(field, line_number, "element node id").map(NodeId))
         .collect::<Result<Vec<_>, _>>()?;
 
+    if let Some(expected) = element_type.node_count() {
+        if nodes.len() != expected {
+            return Err(HecmwParseError::new(
+                line_number,
+                format!(
+                    "element type requires {expected} nodes, but {} were provided",
+                    nodes.len()
+                ),
+            ));
+        }
+    }
+
     Ok(FemElement::new(id, element_type, nodes))
 }
 
@@ -509,26 +521,30 @@ fn parse_element_type(raw_type: &str) -> ElementType {
     let key = raw_type.trim().trim_matches('"').to_ascii_uppercase();
 
     match key.as_str() {
-        "CROD" | "ROD2" | "111" => ElementType::Rod2,
-        // Tri3: solid 231 + flat-shell 711
-        "CTRIA3" | "TRI3" | "231" | "711" => ElementType::Tri3,
-        // Tri6: solid 232 + curved-shell 761 (mixable with solid per FrontISTR docs)
-        "CTRIA6" | "TRI6" | "232" | "761" => ElementType::Tri6,
-        // Quad4: solid 241 + flat-shell 741
-        "CQUAD4" | "QUAD4" | "241" | "741" => ElementType::Quad4,
-        // Quad8: solid 242 + curved-shell 781
-        "CQUAD8" | "QUAD8" | "242" | "781" => ElementType::Quad8,
+        "LINE2" | "111" => ElementType::Rod2,
+        "LINE3" | "112" => ElementType::Rod3,
+        "CTRIA3" | "TRI3" | "231" => ElementType::Tri3,
+        "CTRIA6" | "TRI6" | "232" => ElementType::Tri6,
+        "CQUAD4" | "QUAD4" | "241" => ElementType::Quad4,
+        "CQUAD8" | "QUAD8" | "242" => ElementType::Quad8,
+        "CROD" | "ROD2" | "TRUSS2" | "301" => ElementType::Truss2,
         "CTETR4" | "CTETRA4" | "C3D4" | "TET4" | "341" => ElementType::Tet4,
         "CTETR10" | "CTETRA10" | "C3D10" | "TET10" | "342" => ElementType::Tet10,
         "CPENTA6" | "CPRISM6" | "PENTA6" | "PRISM6" | "351" => ElementType::Prism6,
         "CPENTA15" | "CPRISM15" | "PENTA15" | "PRISM15" | "352" => ElementType::Prism15,
         "CHEXA8" | "C3D8" | "HEX8" | "361" => ElementType::Hex8,
         "CHEXA20" | "C3D20" | "HEX20" | "362" => ElementType::Hex20,
-        // Beam elements (FrontISTR-specific):
-        // 611 = 3-DOF/node Euler-Bernoulli beam (cannot mix with solids)
-        // 641 = 6-DOF/node Timoshenko beam (can mix with solids/shells)
+        "CONNECTOR2" | "511" => ElementType::Connector2,
+        "INTERFACE_QUAD4" | "541" => ElementType::InterfaceQuad4,
+        "INTERFACE_QUAD8" | "542" => ElementType::InterfaceQuad8,
         "611" | "BEAM611" => ElementType::Beam611,
         "641" | "BEAM641" | "CBEAM" => ElementType::Beam641,
+        "731" | "SHELL_TRI3" => ElementType::ShellTri3,
+        "732" | "SHELL_TRI6" => ElementType::ShellTri6,
+        "741" | "SHELL_QUAD4" => ElementType::ShellQuad4,
+        "743" | "SHELL_QUAD9" => ElementType::ShellQuad9,
+        "761" | "SHELL_TRI3_MIXED" => ElementType::ShellTri3Mixed,
+        "781" | "SHELL_QUAD4_MIXED" => ElementType::ShellQuad4Mixed,
         _ => ElementType::Unsupported(key),
     }
 }
@@ -608,6 +624,89 @@ mod tests {
     use fem_core::{ContactType, ElementType, FaceId, FemEntityId, FemModel, SurfaceSetRef};
 
     use super::*;
+
+    fn documented_element_types() -> Vec<ElementType> {
+        vec![
+            ElementType::Rod2,
+            ElementType::Rod3,
+            ElementType::Tri3,
+            ElementType::Tri6,
+            ElementType::Quad4,
+            ElementType::Quad8,
+            ElementType::Truss2,
+            ElementType::Tet4,
+            ElementType::Tet10,
+            ElementType::Prism6,
+            ElementType::Prism15,
+            ElementType::Hex8,
+            ElementType::Hex20,
+            ElementType::Connector2,
+            ElementType::InterfaceQuad4,
+            ElementType::InterfaceQuad8,
+            ElementType::Beam611,
+            ElementType::Beam641,
+            ElementType::ShellTri3,
+            ElementType::ShellTri6,
+            ElementType::ShellQuad4,
+            ElementType::ShellQuad9,
+            ElementType::ShellTri3Mixed,
+            ElementType::ShellQuad4Mixed,
+        ]
+    }
+
+    #[test]
+    fn parses_every_documented_frontistr_element_for_visualization() {
+        let mesh = parse_mesh_str(include_str!("../tests/fixtures/element_library.msh")).unwrap();
+        let actual_types: Vec<_> = mesh
+            .elements
+            .iter()
+            .map(|element| element.element_type.clone())
+            .collect();
+
+        assert_eq!(actual_types, documented_element_types());
+        assert_eq!(mesh.element_sets.len(), 24);
+
+        for element in &mesh.elements {
+            assert_eq!(
+                element.element_type.node_count(),
+                Some(element.nodes.len()),
+                "wrong connectivity count for {:?}",
+                element.element_type
+            );
+
+            if element.element_type.is_beam() {
+                assert!(
+                    !element.edge_node_ids().is_empty(),
+                    "missing display segments for {:?}",
+                    element.element_type
+                );
+            } else {
+                assert!(
+                    !element.face_node_ids().is_empty(),
+                    "missing display faces for {:?}",
+                    element.element_type
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_documented_element_connectivity_count() {
+        let error = parse_mesh_str(
+            r#"
+!NODE
+ 1, 0.0, 0.0, 0.0
+ 2, 1.0, 0.0, 0.0
+ 3, 0.0, 1.0, 0.0
+ 4, 0.0, 0.0, 1.0
+!ELEMENT, TYPE=342
+ 1, 1, 2, 3, 4
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.message.contains("requires 10 nodes"));
+    }
 
     #[test]
     fn parses_named_hecmw_mesh() {

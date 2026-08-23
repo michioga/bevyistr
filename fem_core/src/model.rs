@@ -635,9 +635,24 @@ impl FemElement {
 
     pub fn edge_node_ids(&self) -> Vec<[NodeId; 2]> {
         match &self.element_type {
-            ElementType::Rod2 => self.corner_edges(&[(0, 1)]),
-            ElementType::Tri3 | ElementType::Tri6 => self.corner_edges(&[(0, 1), (1, 2), (2, 0)]),
-            ElementType::Quad4 | ElementType::Quad8 => {
+            ElementType::Rod2
+            | ElementType::Truss2
+            | ElementType::Connector2
+            | ElementType::Beam611
+            | ElementType::Beam641 => self.corner_edges(&[(0, 1)]),
+            ElementType::Rod3 => self.corner_edges(&[(0, 2), (2, 1)]),
+            ElementType::Tri3
+            | ElementType::Tri6
+            | ElementType::ShellTri3
+            | ElementType::ShellTri6
+            | ElementType::ShellTri3Mixed => {
+                self.corner_edges(&[(0, 1), (1, 2), (2, 0)])
+            }
+            ElementType::Quad4
+            | ElementType::Quad8
+            | ElementType::ShellQuad4
+            | ElementType::ShellQuad9
+            | ElementType::ShellQuad4Mixed => {
                 self.corner_edges(&[(0, 1), (1, 2), (2, 3), (3, 0)])
             }
             ElementType::Tet4 | ElementType::Tet10 => {
@@ -679,17 +694,56 @@ impl FemElement {
                     .map(|(a, b)| [self.nodes[*a], self.nodes[*b]])
                     .collect()
             }
+            ElementType::InterfaceQuad4 => self.corner_edges(&[
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 0),
+                (4, 5),
+                (5, 6),
+                (6, 7),
+                (7, 4),
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7),
+            ]),
+            ElementType::InterfaceQuad8 => self.corner_edges(&[
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 0),
+                (8, 9),
+                (9, 10),
+                (10, 11),
+                (11, 8),
+                (0, 8),
+                (1, 9),
+                (2, 10),
+                (3, 11),
+            ]),
             ElementType::Unsupported(_) => Vec::new(),
-            // Beam elements: one edge between node 0 and node 1.
-            ElementType::Beam611 | ElementType::Beam641 => self.corner_edges(&[(0, 1)]),
         }
     }
 
     pub fn face_node_ids(&self) -> Vec<Vec<NodeId>> {
         match &self.element_type {
-            ElementType::Rod2 => Vec::new(),
-            ElementType::Tri3 | ElementType::Tri6 => self.corner_faces(&[&[0, 1, 2]]),
-            ElementType::Quad4 | ElementType::Quad8 => self.corner_faces(&[&[0, 1, 2, 3]]),
+            ElementType::Rod2
+            | ElementType::Rod3
+            | ElementType::Truss2
+            | ElementType::Connector2
+            | ElementType::Beam611
+            | ElementType::Beam641 => Vec::new(),
+            ElementType::Tri3
+            | ElementType::Tri6
+            | ElementType::ShellTri3
+            | ElementType::ShellTri6
+            | ElementType::ShellTri3Mixed => self.corner_faces(&[&[0, 1, 2]]),
+            ElementType::Quad4
+            | ElementType::Quad8
+            | ElementType::ShellQuad4
+            | ElementType::ShellQuad9
+            | ElementType::ShellQuad4Mixed => self.corner_faces(&[&[0, 1, 2, 3]]),
             ElementType::Tet4 | ElementType::Tet10 => {
                 self.corner_faces(&[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[2, 0, 3]])
             }
@@ -706,12 +760,12 @@ impl FemElement {
                 }
 
                 const FACES: [[usize; 4]; 6] = [
-                    [0, 1, 2, 3],
-                    [4, 7, 6, 5],
-                    [0, 4, 5, 1],
-                    [1, 5, 6, 2],
-                    [2, 6, 7, 3],
-                    [3, 7, 4, 0],
+                    [0, 3, 2, 1],
+                    [4, 5, 6, 7],
+                    [0, 1, 5, 4],
+                    [1, 2, 6, 5],
+                    [2, 3, 7, 6],
+                    [3, 0, 4, 7],
                 ];
 
                 FACES
@@ -719,8 +773,22 @@ impl FemElement {
                     .map(|face| face.iter().map(|index| self.nodes[*index]).collect())
                     .collect()
             }
-            // Beam elements and unsupported types have no surface faces.
-            ElementType::Beam611 | ElementType::Beam641 => Vec::new(),
+            ElementType::InterfaceQuad4 => self.corner_faces(&[
+                &[0, 3, 2, 1],
+                &[4, 5, 6, 7],
+                &[0, 1, 5, 4],
+                &[1, 2, 6, 5],
+                &[2, 3, 7, 6],
+                &[3, 0, 4, 7],
+            ]),
+            ElementType::InterfaceQuad8 => self.corner_faces(&[
+                &[0, 3, 2, 1],
+                &[8, 9, 10, 11],
+                &[0, 1, 9, 8],
+                &[1, 2, 10, 9],
+                &[2, 3, 11, 10],
+                &[3, 0, 8, 11],
+            ]),
             ElementType::Unsupported(_) => Vec::new(),
         }
     }
@@ -853,17 +921,24 @@ impl FemModel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ElementType {
-    /// 2-node truss/rod (111)
+    /// HECMW 111: two-node thermal line element.
     Rod2,
 
-    /// Flat tri3 shell (711) or solid plane tri3 (231)
+    /// HECMW 112: three-node line element (retained for visualization even
+    /// though current FrontISTR analysis does not support it).
+    Rod3,
+
+    /// HECMW 231: three-node plane continuum element.
     Tri3,
-    /// Curved tri6 shell (761) or solid tri6 (232)
+    /// HECMW 232: six-node plane continuum element.
     Tri6,
-    /// Flat quad4 shell (741) or solid plane quad4 (241)
+    /// HECMW 241: four-node plane continuum element.
     Quad4,
-    /// Curved quad8 shell (781) or solid quad8 (242)
+    /// HECMW 242: eight-node plane continuum element.
     Quad8,
+
+    /// HECMW 301: two-node structural truss element.
+    Truss2,
 
     Tet4,
     Tet10,
@@ -872,39 +947,118 @@ pub enum ElementType {
     Hex8,
     Hex20,
 
-    /// 3-DOF/node Euler-Bernoulli beam (611) — 3 translational DOFs only.
-    /// Cannot be mixed with solid elements (FrontISTR limitation).
+    /// HECMW 511: two-node spring/damper connector.
+    Connector2,
+
+    /// HECMW 541: two four-node faces forming a thermal interface.
+    InterfaceQuad4,
+
+    /// HECMW 542: two eight-node faces. Retained for visualization even
+    /// though current FrontISTR analysis does not support it.
+    InterfaceQuad8,
+
+    /// HECMW 611: two-node, six-DOF Bernoulli-Euler beam.
     Beam611,
 
-    /// 6-DOF/node Timoshenko beam (641) — 3 translation + 3 rotation DOFs.
-    /// Can be mixed with solid elements.
+    /// HECMW 641: two translational plus two rotational nodes for use in a
+    /// three-DOF mixed solid/beam model.
     Beam641,
+
+    /// HECMW 731: three-node MITC3 shell.
+    ShellTri3,
+
+    /// HECMW 732: six-node triangular shell retained for visualization.
+    ShellTri6,
+
+    /// HECMW 741: four-node MITC4 shell.
+    ShellQuad4,
+
+    /// HECMW 743: nine-node MITC9 shell.
+    ShellQuad9,
+
+    /// HECMW 761: three translational plus three rotational nodes.
+    ShellTri3Mixed,
+
+    /// HECMW 781: four translational plus four rotational nodes.
+    ShellQuad4Mixed,
 
     Unsupported(String),
 }
 
 impl ElementType {
-    /// `true` for beam/truss line elements (Rod2, Beam611, Beam641), rendered
-    /// as cylinders along their axis.
+    /// Number of connectivity entries required by the HECMW element type.
+    pub const fn node_count(&self) -> Option<usize> {
+        match self {
+            Self::Rod2 | Self::Truss2 | Self::Connector2 | Self::Beam611 => Some(2),
+            Self::Rod3 | Self::Tri3 | Self::ShellTri3 => Some(3),
+            Self::Quad4 | Self::Tet4 | Self::Beam641 | Self::ShellQuad4 => Some(4),
+            Self::Tri6 | Self::Prism6 | Self::ShellTri6 | Self::ShellTri3Mixed => Some(6),
+            Self::Quad8 | Self::Hex8 | Self::InterfaceQuad4 | Self::ShellQuad4Mixed => Some(8),
+            Self::ShellQuad9 => Some(9),
+            Self::Tet10 => Some(10),
+            Self::Prism15 => Some(15),
+            Self::InterfaceQuad8 => Some(16),
+            Self::Hex20 => Some(20),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    /// Number of geometric corner nodes used to display a surface element.
+    pub const fn surface_corner_count(&self) -> Option<usize> {
+        match self {
+            Self::Tri3 | Self::Tri6 | Self::ShellTri3 | Self::ShellTri6 | Self::ShellTri3Mixed => {
+                Some(3)
+            }
+            Self::Quad4
+            | Self::Quad8
+            | Self::ShellQuad4
+            | Self::ShellQuad9
+            | Self::ShellQuad4Mixed => Some(4),
+            _ => None,
+        }
+    }
+
+    /// `true` for line, truss, connector, and beam elements rendered along
+    /// their geometric axis.
     pub const fn is_beam(&self) -> bool {
-        matches!(self, Self::Rod2 | Self::Beam611 | Self::Beam641)
+        matches!(
+            self,
+            Self::Rod2
+                | Self::Rod3
+                | Self::Truss2
+                | Self::Connector2
+                | Self::Beam611
+                | Self::Beam641
+        )
     }
 
-    /// `true` for 2-D shell elements (Tri3/Tri6/Quad4/Quad8, including the
-    /// HECMW flat-shell 711/741 codes that map to Tri3/Quad4 and the
-    /// curved-shell 761/781 codes that map to Tri6/Quad8), rendered as thin
-    /// extruded plates using the assigned [`crate::Section`] thickness.
+    /// `true` for plane-continuum and shell elements rendered as surfaces.
     pub const fn is_shell(&self) -> bool {
-        matches!(self, Self::Tri3 | Self::Tri6 | Self::Quad4 | Self::Quad8)
+        matches!(
+            self,
+            Self::Tri3
+                | Self::Tri6
+                | Self::Quad4
+                | Self::Quad8
+                | Self::ShellTri3
+                | Self::ShellTri6
+                | Self::ShellQuad4
+                | Self::ShellQuad9
+                | Self::ShellTri3Mixed
+                | Self::ShellQuad4Mixed
+        )
     }
 
-    /// `true` for 3-D solid elements (tets, hexes, prisms/wedges), for which
-    /// a bounding-box cuboid is already a reasonable representative shape.
+    /// `true` for 3-D solid elements (tets, hexes, prisms/wedges).
     pub const fn is_solid(&self) -> bool {
         matches!(
             self,
             Self::Tet4 | Self::Tet10 | Self::Prism6 | Self::Prism15 | Self::Hex8 | Self::Hex20
         )
+    }
+
+    pub const fn is_interface(&self) -> bool {
+        matches!(self, Self::InterfaceQuad4 | Self::InterfaceQuad8)
     }
 }
 

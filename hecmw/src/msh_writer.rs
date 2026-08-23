@@ -320,18 +320,29 @@ fn write_id_list(out: &mut String, ids: impl Iterator<Item = u32>) {
 fn element_type_code(et: &ElementType) -> Option<&'static str> {
     match et {
         ElementType::Rod2    => Some("111"),
+        ElementType::Rod3    => Some("112"),
         ElementType::Tri3    => Some("231"),
         ElementType::Tri6    => Some("232"),
         ElementType::Quad4   => Some("241"),
         ElementType::Quad8   => Some("242"),
+        ElementType::Truss2  => Some("301"),
         ElementType::Tet4    => Some("341"),
         ElementType::Tet10   => Some("342"),
         ElementType::Prism6  => Some("351"),
         ElementType::Prism15 => Some("352"),
         ElementType::Hex8    => Some("361"),
         ElementType::Hex20   => Some("362"),
+        ElementType::Connector2 => Some("511"),
+        ElementType::InterfaceQuad4 => Some("541"),
+        ElementType::InterfaceQuad8 => Some("542"),
         ElementType::Beam611 => Some("611"),
         ElementType::Beam641 => Some("641"),
+        ElementType::ShellTri3 => Some("731"),
+        ElementType::ShellTri6 => Some("732"),
+        ElementType::ShellQuad4 => Some("741"),
+        ElementType::ShellQuad9 => Some("743"),
+        ElementType::ShellTri3Mixed => Some("761"),
+        ElementType::ShellQuad4Mixed => Some("781"),
         ElementType::Unsupported(_) => None,
     }
 }
@@ -462,5 +473,36 @@ mod tests {
                 master_group: "GEAR_TEETH".into(),
             }]
         );
+    }
+
+    #[test]
+    fn preserves_every_documented_frontistr_element_code() {
+        let mesh = crate::parse_mesh_str(include_str!("../tests/fixtures/element_library.msh"))
+            .unwrap();
+        let text = build_msh(&mesh, &[]);
+        let reparsed = crate::parse_mesh_str(&text).unwrap();
+        let original_types: Vec<_> = mesh
+            .elements
+            .iter()
+            .map(|element| element.element_type.clone())
+            .collect();
+        let reparsed_types: Vec<_> = reparsed
+            .elements
+            .iter()
+            .map(|element| element.element_type.clone())
+            .collect();
+
+        assert_eq!(reparsed_types, original_types);
+
+        for code in [
+            "111", "112", "231", "232", "241", "242", "301", "341", "342", "351", "352",
+            "361", "362", "511", "541", "542", "611", "641", "731", "732", "741", "743",
+            "761", "781",
+        ] {
+            assert!(
+                text.contains(&format!("!ELEMENT,TYPE={code}")),
+                "missing HECMW element block {code}"
+            );
+        }
     }
 }
