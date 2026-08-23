@@ -6,7 +6,9 @@
 //! `https://manual.frontistr.com/en/intro/00_cheat_sheet.html` for the full
 //! reference. This parser handles the subset most relevant to a prepost
 //! tool: `!BOUNDARY`, `!CLOAD`, `!DLOAD`, `!MATERIAL` (+ `!ITEM=n`
-//! sub-blocks), `!SECTION`, and `!NGROUP`. Unrecognized keywords (solver
+//! sub-blocks), and `!NGROUP`. A mesh-style `!SECTION,EGRP=...,MATERIAL=...`
+//! found in `.cnt` is accepted for compatibility, while the documented CNT
+//! `!SECTION` formulation card is left untouched. Unrecognized keywords (solver
 //! settings, step control, output control, etc.) are skipped without error
 //! — this is a setup *viewer*, not a solver front-end, so being lenient
 //! about keywords we don't display is more useful than rejecting the file.
@@ -25,9 +27,10 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
+use bevy::prelude::Vec3;
 use fem_core::{
-    BoundaryCondition, DistributedLoad, DistributedLoadKind, ElementId, FemMesh,
-    FemMaterial, NodalLoad, NodeId, Section, SectionKind,
+    AnalysisSetup, BoundaryCondition, DistributedLoad, DistributedLoadKind, ElementId, FemMaterial,
+    FemMesh, NodalLoad, NodeId, Section, SectionKind,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -54,7 +57,9 @@ impl std::error::Error for CntError {
 }
 
 impl From<io::Error> for CntError {
-    fn from(e: io::Error) -> Self { Self::Io(e) }
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 
 /// Parsed contents of a `.cnt` file: everything [`load_cnt_file`] could
@@ -67,6 +72,43 @@ pub struct CntData {
     pub distributed_loads: Vec<DistributedLoad>,
     pub materials: Vec<FemMaterial>,
     pub sections: Vec<Section>,
+}
+
+impl CntData {
+    /// Merges analysis-control data into an existing setup. Material
+    /// definitions in `.cnt` take precedence over same-named definitions
+    /// loaded from `.msh`, as specified by FrontISTR.
+    pub fn merge_into(self, setup: &mut AnalysisSetup) {
+        setup.boundary_conditions.extend(self.boundary_conditions);
+        setup.nodal_loads.extend(self.nodal_loads);
+        setup.distributed_loads.extend(self.distributed_loads);
+
+        for material in self.materials {
+            if let Some(existing) = setup
+                .materials
+                .iter_mut()
+                .find(|existing| existing.name == material.name)
+            {
+                *existing = material;
+            } else {
+                setup.materials.push(material);
+            }
+        }
+
+        // `!SECTION,EGRP=...,MATERIAL=...` is a mesh-data card. Retain
+        // support for old project files that placed that form in `.cnt`,
+        // replacing an identical assignment instead of duplicating it.
+        for section in self.sections {
+            if let Some(existing) = setup.sections.iter_mut().find(|existing| {
+                existing.mesh_index == section.mesh_index
+                    && existing.element_set_name == section.element_set_name
+            }) {
+                *existing = section;
+            } else {
+                setup.sections.push(section);
+            }
+        }
+    }
 }
 
 /// Loads a FrontISTR `.cnt` file and resolves its node/element/surface
@@ -89,7 +131,8 @@ pub fn load_cnt_file(
 // Writing a `.cnt` file back out is handled by [`crate::cnt_writer::write_cnt_file`],
 // which (unlike an earlier version of this module) covers solver settings
 // (`!SOLUTION`/`!STEP`/`!SOLVER`) and `!DLOAD` as well as boundary
-// conditions, loads, materials, and sections. This module only reads.
+// conditions, loads, and material models. Mesh section assignments are
+// written by `msh_writer`. This module only reads.
 
 // ─── parser ──────────────────────────────────────────────────────────────────
 
@@ -240,7 +283,11 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         continue;
                     }
 
-                    let ngrp = if parts[0].parse::<u32>().is_err() { Some(parts[0].to_string()) } else { None };
+                    let ngrp = if parts[0].parse::<u32>().is_err() {
+                        Some(parts[0].to_string())
+                    } else {
+                        None
+                    };
                     let nodes = resolve_node_group(parts[0], &ngroups, mesh);
                     let dof: u8 = parts[1].parse().unwrap_or(1);
                     let value: f32 = parts[2].parse().unwrap_or(0.0);
@@ -304,22 +351,50 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                                 target: fem_core::DistributedLoadTarget::Faces(faces),
                                 kind: DistributedLoadKind::Pressure,
                                 value,
+                                direction: None,
                             });
                         }
                     } else if !elements.is_empty() {
+                        let direction = match load_type.as_str() {
+                            "GRAV" => {
+                                let components = parts
+                                    .get(3..6)
+                                    .map(|values| {
+                                        values
+                                            .iter()
+                                            .filter_map(|value| value.parse::<f32>().ok())
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default();
+                                if components.len() == 3 {
+                                    Some(Vec3::new(components[0], components[1], components[2]))
+                                } else {
+                                    Some(Vec3::NEG_Y)
+                                }
+                            }
+                            "BX" => Some(Vec3::X),
+                            "BY" => Some(Vec3::Y),
+                            "BZ" => Some(Vec3::Z),
+                            _ => Some(Vec3::NEG_Y),
+                        };
                         data.distributed_loads.push(DistributedLoad {
                             name: parts[0].to_string(),
                             mesh_index,
                             target: fem_core::DistributedLoadTarget::Elements(elements),
                             kind: DistributedLoadKind::Gravity,
                             value,
+                            direction,
                         });
                     }
                 }
             }
 
             "MATERIAL" => {
-                let name = header.params.get("NAME").cloned().unwrap_or_else(|| "MATERIAL".to_string());
+                let name = header
+                    .params
+                    .get("NAME")
+                    .cloned()
+                    .unwrap_or_else(|| "MATERIAL".to_string());
                 let mut material = FemMaterial::new(name);
                 i += 1;
 
@@ -330,7 +405,10 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
 
                     if sub_trimmed.starts_with("!ITEM") {
                         let sub_header = parse_keyword_header(sub_trimmed);
-                        let item_num = sub_header.params.get("ITEM").and_then(|v| v.parse::<u32>().ok())
+                        let item_num = sub_header
+                            .params
+                            .get("ITEM")
+                            .and_then(|v| v.parse::<u32>().ok())
                             .or_else(|| {
                                 // Some files write `!ITEM=1` as the keyword
                                 // name itself rather than a parameter.
@@ -345,7 +423,9 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
 
                         i += 1;
 
-                        let Some(data_line) = lines.get(i).map(|l| strip_comment(l)) else { break; };
+                        let Some(data_line) = lines.get(i).map(|l| strip_comment(l)) else {
+                            break;
+                        };
                         let values: Vec<f32> = data_line
                             .split(',')
                             .filter_map(|t| t.trim().parse::<f32>().ok())
@@ -373,7 +453,8 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         // Older/simpler files use a standalone !DENSITY
                         // block instead of !MATERIAL's !ITEM=2.
                         i += 1;
-                        if let Some(&density) = lines.get(i)
+                        if let Some(&density) = lines
+                            .get(i)
                             .map(|l| strip_comment(l))
                             .and_then(|l| l.split(',').next())
                             .and_then(|v| v.trim().parse::<f32>().ok())
@@ -410,14 +491,34 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
 
             "SECTION" => {
-                let section_type = header.params.get("TYPE").cloned().unwrap_or_default().to_uppercase();
+                // The analysis-control `!SECTION` card configures element
+                // formulation/orientation and does not assign EGRP or
+                // MATERIAL. Parse only the legacy mesh-style form that some
+                // existing projects place in `.cnt` for compatibility.
+                if !header.params.contains_key("EGRP") && !header.params.contains_key("MATERIAL") {
+                    i += 1;
+                    continue;
+                }
+                let section_type = header
+                    .params
+                    .get("TYPE")
+                    .cloned()
+                    .unwrap_or_default()
+                    .to_uppercase();
                 let egrp = header.params.get("EGRP").cloned();
                 let material_name = header.params.get("MATERIAL").cloned().unwrap_or_default();
-                let thickness = header.params.get("THICKNESS").and_then(|v| v.parse::<f32>().ok());
+                let thickness = header
+                    .params
+                    .get("THICKNESS")
+                    .and_then(|v| v.parse::<f32>().ok());
 
                 let kind = match section_type.as_str() {
-                    "SHELL" => SectionKind::Shell { thickness: thickness.unwrap_or(1.0) },
-                    "BEAM" => SectionKind::Beam { area: thickness.unwrap_or(1.0) },
+                    "SHELL" => SectionKind::Shell {
+                        thickness: thickness.unwrap_or(1.0),
+                    },
+                    "BEAM" => SectionKind::Beam {
+                        area: thickness.unwrap_or(1.0),
+                    },
                     _ => SectionKind::Solid,
                 };
 
@@ -464,7 +565,11 @@ fn resolve_node_group(
         return nodes.clone();
     }
 
-    if let Some(set) = mesh.node_sets.iter().find(|s| s.name.eq_ignore_ascii_case(token)) {
+    if let Some(set) = mesh
+        .node_sets
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(token))
+    {
         return set.nodes.clone();
     }
 
@@ -478,9 +583,67 @@ fn resolve_element_group(token: &str, mesh: &FemMesh) -> Vec<ElementId> {
         return vec![ElementId(id)];
     }
 
-    if let Some(set) = mesh.element_sets.iter().find(|s| s.name.eq_ignore_ascii_case(token)) {
+    if let Some(set) = mesh
+        .element_sets
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(token))
+    {
         return set.elements.clone();
     }
 
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_gravity_direction_cosines() {
+        let model = fem_core::FemModel::demo_hex8();
+        let data = parse_cnt(
+            "!DLOAD\n 0,GRAV,9.81,0.0,0.0,-1.0\n!END\n",
+            &model.meshes[0],
+            0,
+        );
+
+        assert_eq!(data.distributed_loads.len(), 1);
+        assert_eq!(data.distributed_loads[0].direction, Some(Vec3::NEG_Z));
+    }
+
+    #[test]
+    fn ignores_analysis_control_section_formulation_card() {
+        let model = fem_core::FemModel::demo_hex8();
+        let data = parse_cnt(
+            "!SECTION,SECNUM=1,FORM361=FBAR\n!END\n",
+            &model.meshes[0],
+            0,
+        );
+
+        assert!(data.sections.is_empty());
+    }
+
+    #[test]
+    fn cnt_material_overrides_same_named_mesh_material() {
+        let mut setup = AnalysisSetup::default();
+        setup.materials.push(FemMaterial {
+            name: "STEEL".into(),
+            young_modulus: Some(1.0),
+            poisson_ratio: Some(0.1),
+            density: None,
+        });
+        CntData {
+            materials: vec![FemMaterial {
+                name: "STEEL".into(),
+                young_modulus: Some(210_000.0),
+                poisson_ratio: Some(0.3),
+                density: Some(7.85e-9),
+            }],
+            ..Default::default()
+        }
+        .merge_into(&mut setup);
+
+        assert_eq!(setup.materials.len(), 1);
+        assert_eq!(setup.materials[0].young_modulus, Some(210_000.0));
+    }
 }

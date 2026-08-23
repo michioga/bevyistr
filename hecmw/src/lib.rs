@@ -10,23 +10,22 @@ pub mod result;
 pub mod series;
 pub mod vtu;
 
-pub use cnt::{load_cnt_file, CntData, CntError};
+pub use cnt::{CntData, CntError, load_cnt_file};
 pub use cnt_writer::{write_cnt_file, write_cnt_file_with_contacts};
-pub use ctrl_reader::{load_hecmw_ctrl, resolve_paths, HecmwCtrlContent};
-pub use ctrl_writer::{write_hecmw_ctrl, HecmwCtrlParams};
-pub use frd::{load_frd_file, FrdError};
-pub use inp::{load_inp_file, InpError};
+pub use ctrl_reader::{HecmwCtrlContent, load_hecmw_ctrl, resolve_paths};
+pub use ctrl_writer::{HecmwCtrlParams, write_hecmw_ctrl};
+pub use frd::{FrdError, load_frd_file};
+pub use inp::{InpError, load_inp_file};
 pub use msh_writer::{
-    assembly_id_offsets, remap_element, remap_node,
-    write_msh_assembly, write_msh_file,
+    assembly_id_offsets, remap_element, remap_node, write_msh_assembly,
+    write_msh_assembly_with_setup, write_msh_file, write_msh_file_with_setup,
 };
 pub use project_writer::{
-    remap_setup_for_assembly, write_frontistr_project, FrontistrExportError,
-    FrontistrExportSummary,
+    FrontistrExportError, FrontistrExportSummary, remap_setup_for_assembly, write_frontistr_project,
 };
-pub use result::{load_result_file, parse_result_str, ResultLoadError};
+pub use result::{ResultLoadError, load_result_file, parse_result_str};
 pub use series::{detect_series, load_series};
-pub use vtu::{load_vtu_file, VtuError};
+pub use vtu::{VtuError, load_vtu_file};
 
 use std::fmt;
 use std::fs;
@@ -118,19 +117,20 @@ pub fn load_mesh_file_with_setup(
     path: impl AsRef<Path>,
 ) -> Result<(FemMesh, Vec<fem_core::FemMaterial>, Vec<fem_core::Section>), HecmwLoadError> {
     let source = fs::read_to_string(path)?;
-    let mesh   = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
+    let mesh = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
     let (materials, sections) = parse_msh_setup(&source, 0);
     Ok((mesh, materials, sections))
 }
 
 /// Extracts `!MATERIAL` / `!SECTION` blocks from a `.msh` source string.
-fn parse_msh_setup(source: &str, mesh_index: usize)
-    -> (Vec<fem_core::FemMaterial>, Vec<fem_core::Section>)
-{
+fn parse_msh_setup(
+    source: &str,
+    mesh_index: usize,
+) -> (Vec<fem_core::FemMaterial>, Vec<fem_core::Section>) {
     use fem_core::{FemMaterial, Section as FemSection, SectionKind};
 
     let mut materials: Vec<FemMaterial> = Vec::new();
-    let mut sections:  Vec<FemSection>  = Vec::new();
+    let mut sections: Vec<FemSection> = Vec::new();
 
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
@@ -139,22 +139,27 @@ fn parse_msh_setup(source: &str, mesh_index: usize)
         let line = lines[i].trim();
 
         if line.is_empty() || line.starts_with('#') || line.starts_with("!!") {
-            i += 1; continue;
+            i += 1;
+            continue;
         }
 
         if !line.starts_with('!') {
-            i += 1; continue;
+            i += 1;
+            continue;
         }
 
         let upper = line.to_ascii_uppercase();
 
         // ── !MATERIAL ──────────────────────────────────────────────────────
         if upper.starts_with("!MATERIAL") {
-            let name = line.split(',').find_map(|p| {
-                let t = p.trim();
-                let u = t.to_ascii_uppercase();
-                u.strip_prefix("NAME=").map(|_| t[5..].trim().to_string())
-            }).unwrap_or_else(|| "MAT".to_string());
+            let name = line
+                .split(',')
+                .find_map(|p| {
+                    let t = p.trim();
+                    let u = t.to_ascii_uppercase();
+                    u.strip_prefix("NAME=").map(|_| t[5..].trim().to_string())
+                })
+                .unwrap_or_else(|| "MAT".to_string());
 
             let mut mat = FemMaterial::new(name);
             i += 1;
@@ -165,25 +170,48 @@ fn parse_msh_setup(source: &str, mesh_index: usize)
                 let sub_upper = sub.to_ascii_uppercase();
 
                 if sub.is_empty() || sub.starts_with("!!") || sub.starts_with('#') {
-                    i += 1; continue;
+                    i += 1;
+                    continue;
                 }
 
-                if sub.starts_with('!') && !sub_upper.starts_with("!ITEM") && !sub_upper.starts_with("!ELASTIC") && !sub_upper.starts_with("!DENSITY") && !sub_upper.starts_with("!PLASTIC") && !sub_upper.starts_with("!HYPERELASTIC") && !sub_upper.starts_with("!VISCOSITY") && !sub_upper.starts_with("!ISOTROPIC") {
+                if sub.starts_with('!')
+                    && !sub_upper.starts_with("!ITEM")
+                    && !sub_upper.starts_with("!ELASTIC")
+                    && !sub_upper.starts_with("!DENSITY")
+                    && !sub_upper.starts_with("!PLASTIC")
+                    && !sub_upper.starts_with("!HYPERELASTIC")
+                    && !sub_upper.starts_with("!VISCOSITY")
+                    && !sub_upper.starts_with("!ISOTROPIC")
+                {
                     break; // next top-level keyword
                 }
 
                 if sub_upper.starts_with("!ELASTIC") || sub_upper.starts_with("!ITEM=1") {
                     i += 1;
                     if i < lines.len() {
-                        let vals: Vec<f32> = lines[i].trim().split(',')
-                            .filter_map(|v| v.trim().parse::<f32>().ok()).collect();
-                        if let Some(&e) = vals.first() { mat.young_modulus = Some(e); }
-                        if let Some(&nu) = vals.get(1) { mat.poisson_ratio = Some(nu); }
+                        let vals: Vec<f32> = lines[i]
+                            .trim()
+                            .split(',')
+                            .filter_map(|v| v.trim().parse::<f32>().ok())
+                            .collect();
+                        if let Some(&e) = vals.first() {
+                            mat.young_modulus = Some(e);
+                        }
+                        if let Some(&nu) = vals.get(1) {
+                            mat.poisson_ratio = Some(nu);
+                        }
                     }
                 } else if sub_upper.starts_with("!DENSITY") || sub_upper.starts_with("!ITEM=2") {
                     i += 1;
                     if i < lines.len() {
-                        if let Ok(rho) = lines[i].trim().split(',').next().unwrap_or("").trim().parse::<f32>() {
+                        if let Ok(rho) = lines[i]
+                            .trim()
+                            .split(',')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .parse::<f32>()
+                        {
                             mat.density = Some(rho);
                         }
                     }
@@ -198,20 +226,29 @@ fn parse_msh_setup(source: &str, mesh_index: usize)
 
         // ── !SECTION ───────────────────────────────────────────────────────
         if upper.starts_with("!SECTION") {
-            let sec_type = line.split(',').find_map(|p| {
-                let u = p.trim().to_ascii_uppercase();
-                u.strip_prefix("TYPE=").map(|_| p.trim()[5..].trim().to_ascii_uppercase())
-            }).unwrap_or_default();
+            let sec_type = line
+                .split(',')
+                .find_map(|p| {
+                    let u = p.trim().to_ascii_uppercase();
+                    u.strip_prefix("TYPE=")
+                        .map(|_| p.trim()[5..].trim().to_ascii_uppercase())
+                })
+                .unwrap_or_default();
 
             let egrp = line.split(',').find_map(|p| {
                 let u = p.trim().to_ascii_uppercase();
-                u.strip_prefix("EGRP=").map(|_| p.trim()[5..].trim().to_string())
+                u.strip_prefix("EGRP=")
+                    .map(|_| p.trim()[5..].trim().to_string())
             });
 
-            let mat_name = line.split(',').find_map(|p| {
-                let u = p.trim().to_ascii_uppercase();
-                u.strip_prefix("MATERIAL=").map(|_| p.trim()[9..].trim().to_string())
-            }).unwrap_or_default();
+            let mat_name = line
+                .split(',')
+                .find_map(|p| {
+                    let u = p.trim().to_ascii_uppercase();
+                    u.strip_prefix("MATERIAL=")
+                        .map(|_| p.trim()[9..].trim().to_string())
+                })
+                .unwrap_or_default();
 
             let kind = match sec_type.as_str() {
                 "SHELL" => {
@@ -220,9 +257,17 @@ fn parse_msh_setup(source: &str, mesh_index: usize)
                     let thickness = if i < lines.len() {
                         let next = lines[i].trim();
                         if !next.starts_with('!') {
-                            next.split(',').next().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(1.0)
-                        } else { i -= 1; 1.0 }
-                    } else { 1.0 };
+                            next.split(',')
+                                .next()
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(1.0)
+                        } else {
+                            i -= 1;
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
                     SectionKind::Shell { thickness }
                 }
                 "BEAM" => {
@@ -230,9 +275,17 @@ fn parse_msh_setup(source: &str, mesh_index: usize)
                     let area = if i < lines.len() {
                         let next = lines[i].trim();
                         if !next.starts_with('!') {
-                            next.split(',').next().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(1.0)
-                        } else { i -= 1; 1.0 }
-                    } else { 1.0 };
+                            next.split(',')
+                                .next()
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(1.0)
+                        } else {
+                            i -= 1;
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
                     SectionKind::Beam { area }
                 }
                 _ => SectionKind::Solid,
@@ -889,6 +942,35 @@ mod tests {
         assert_eq!(
             mesh.surface_sets[0].surfaces,
             vec![ElementFaceRef::new(ElementId(10), LocalFaceId(1))]
+        );
+    }
+
+    #[test]
+    fn parses_generate_groups_with_omitted_steps_and_multiple_ranges() {
+        let mesh = parse_mesh_str(
+            r#"
+!NGROUP, NGRP=FIX, GENERATE
+ 2, 2, 1
+ 3, 3, 1
+ 1, 1, 1
+ 69, 69, 1
+ 67, 67, 1
+!EGROUP, EGRP=EA04, GENERATE
+ 301, 309, 2
+ 311, 313
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            mesh.node_sets[0].nodes,
+            [2, 3, 1, 69, 67].map(NodeId).to_vec()
+        );
+        assert_eq!(
+            mesh.element_sets[0].elements,
+            [301, 303, 305, 307, 309, 311, 312, 313]
+                .map(ElementId)
+                .to_vec()
         );
     }
 }

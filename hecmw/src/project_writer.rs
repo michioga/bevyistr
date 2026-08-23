@@ -12,9 +12,10 @@ use fem_core::{
     FemModel, NodalLoad,
 };
 
+use crate::msh_writer::part_group_prefix;
 use crate::{
     HecmwCtrlParams, assembly_id_offsets, remap_element, remap_node, write_cnt_file_with_contacts,
-    write_hecmw_ctrl, write_msh_assembly, write_msh_file,
+    write_hecmw_ctrl, write_msh_assembly_with_setup, write_msh_file_with_setup,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,23 +80,25 @@ pub fn write_frontistr_project(
     )
     .map_err(|error| FrontistrExportError::new("hecmw_ctrl.dat", error))?;
 
-    let msh_name = format!("{stem}.msh");
-    let msh_path = dir.join(&msh_name);
-    let (node_count, element_count, part_count) = if model.meshes.len() > 1 {
-        write_msh_assembly(&msh_path, model)
-            .map_err(|error| FrontistrExportError::new(&msh_name, error))?
-    } else {
-        let (nodes, elements) = write_msh_file(&msh_path, model, 0)
-            .map_err(|error| FrontistrExportError::new(&msh_name, error))?;
-        (nodes, elements, model.meshes.len())
-    };
-
-    let remapped_setup;
+    let part_count = model.meshes.len();
+    let mut remapped_setup;
     let setup = if part_count > 1 {
         remapped_setup = remap_setup_for_assembly(setup, &assembly_id_offsets(model));
+        prefix_assembly_group_references(&mut remapped_setup, model);
         &remapped_setup
     } else {
         setup
+    };
+
+    let msh_name = format!("{stem}.msh");
+    let msh_path = dir.join(&msh_name);
+    let (node_count, element_count, part_count) = if part_count > 1 {
+        write_msh_assembly_with_setup(&msh_path, model, setup)
+            .map_err(|error| FrontistrExportError::new(&msh_name, error))?
+    } else {
+        let (nodes, elements) = write_msh_file_with_setup(&msh_path, model, 0, setup)
+            .map_err(|error| FrontistrExportError::new(&msh_name, error))?;
+        (nodes, elements, model.meshes.len())
     };
 
     let cnt_name = format!("{stem}.cnt");
@@ -177,12 +180,31 @@ pub fn remap_setup_for_assembly(setup: &AnalysisSetup, offsets: &[(u32, u32)]) -
     remapped
 }
 
+/// Keeps compact node-group references in `.cnt` aligned with the part
+/// prefixes used by the flattened assembly's `.msh` groups.
+fn prefix_assembly_group_references(setup: &mut AnalysisSetup, model: &FemModel) {
+    for condition in &mut setup.boundary_conditions {
+        if let Some(group) = &mut condition.ngrp_name {
+            *group = format!(
+                "{}_{}",
+                part_group_prefix(model, condition.mesh_index),
+                group
+            );
+        }
+    }
+    for load in &mut setup.nodal_loads {
+        if let Some(group) = &mut load.ngrp_name {
+            *group = format!("{}_{}", part_group_prefix(model, load.mesh_index), group);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use fem_core::{
         BoundaryCondition, ContactPair, ContactType, DistributedLoad, DistributedLoadKind,
         DistributedLoadTarget, ElementFaceRef, ElementId, FemSurfaceSet, LocalFaceId, NodalLoad,
-        NodeId, SurfaceSetRef,
+        NodeId, SectionKind, SurfaceSetRef,
     };
 
     use super::*;
@@ -216,6 +238,7 @@ mod tests {
                 )]),
                 kind: DistributedLoadKind::Pressure,
                 value: 2.0,
+                direction: None,
             }],
             ..Default::default()
         };
@@ -229,6 +252,44 @@ mod tests {
             DistributedLoadTarget::Faces(vec![
                 ElementFaceRef::new(ElementId(204), LocalFaceId(2),)
             ])
+        );
+    }
+
+    #[test]
+    fn prefixes_compact_group_references_for_assembly() {
+        let mut model = FemModel::demo_hex8();
+        let second_mesh = model.meshes[0].clone();
+        model.add_mesh("SECOND", second_mesh);
+        let mut setup = AnalysisSetup {
+            boundary_conditions: vec![BoundaryCondition {
+                name: "fixed".into(),
+                mesh_index: 1,
+                nodes: vec![NodeId(0)],
+                ngrp_name: Some("FIX".into()),
+                dof_start: 1,
+                dof_end: 3,
+                value: 0.0,
+            }],
+            nodal_loads: vec![NodalLoad {
+                name: "force".into(),
+                mesh_index: 1,
+                node: NodeId(0),
+                ngrp_name: Some("LOAD".into()),
+                dof: 1,
+                value: 1.0,
+            }],
+            ..Default::default()
+        };
+
+        prefix_assembly_group_references(&mut setup, &model);
+
+        assert_eq!(
+            setup.boundary_conditions[0].ngrp_name.as_deref(),
+            Some("SECOND_FIX")
+        );
+        assert_eq!(
+            setup.nodal_loads[0].ngrp_name.as_deref(),
+            Some("SECOND_LOAD")
         );
     }
 
@@ -275,6 +336,41 @@ mod tests {
         assert!(control_text.contains(" CP1"));
 
         for file in ["hecmw_ctrl.dat", "contact.msh", "contact.cnt"] {
+            std::fs::remove_file(dir.join(file)).unwrap();
+        }
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn separates_mesh_assignments_from_analysis_control() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "bevyistr_frontistr_sections_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir(&dir).unwrap();
+
+        let model = FemModel::demo_hex8();
+        let mut setup = AnalysisSetup::default();
+        setup.add_material("STEEL", Some(210_000.0), Some(0.3), Some(7.85e-9));
+        setup.add_section(0, "STEEL", None, SectionKind::Solid);
+
+        write_frontistr_project(&dir, "solid", &model, &setup).unwrap();
+        let mesh_text = std::fs::read_to_string(dir.join("solid.msh")).unwrap();
+        let control_text = std::fs::read_to_string(dir.join("solid.cnt")).unwrap();
+
+        assert!(mesh_text.contains("!EGROUP,EGRP=ALL"));
+        assert!(mesh_text.contains("!MATERIAL,NAME=STEEL,ITEM=2"));
+        assert!(mesh_text.contains("!SECTION,TYPE=SOLID,EGRP=ALL,MATERIAL=STEEL"));
+        assert!(control_text.contains("!MATERIAL, NAME=STEEL"));
+        assert!(!control_text.contains("!SECTION"));
+        assert!(control_text.contains("!output_type=VTK"));
+
+        for file in ["hecmw_ctrl.dat", "solid.msh", "solid.cnt"] {
             std::fs::remove_file(dir.join(file)).unwrap();
         }
         std::fs::remove_dir(dir).unwrap();

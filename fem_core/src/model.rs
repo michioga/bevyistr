@@ -444,8 +444,9 @@ impl TopologyCache {
             .map(|(index, node)| (node.id, index))
             .collect();
 
+        let edges = derive_edges(elements);
         let boundary_faces = derive_boundary_faces(elements);
-        let boundary_edges = derive_boundary_edges_from_faces(&boundary_faces);
+        let boundary_edges = derive_boundary_edges_from_faces(&edges, &boundary_faces);
 
         let boundary_face_bounds: Vec<Aabb> = boundary_faces
             .iter()
@@ -478,7 +479,7 @@ impl TopologyCache {
 
         Self {
             node_indices,
-            edges: derive_edges(elements),
+            edges,
             faces: derive_faces(elements),
             boundary_faces,
             boundary_edges,
@@ -1188,14 +1189,14 @@ fn derive_boundary_faces(elements: &[FemElement]) -> Vec<FemFace> {
 }
 
 fn derive_boundary_edges(elements: &[FemElement]) -> Vec<FemEdge> {
+    let edges = derive_edges(elements);
     let boundary_faces = derive_boundary_faces(elements);
 
-    derive_boundary_edges_from_faces(&boundary_faces)
+    derive_boundary_edges_from_faces(&edges, &boundary_faces)
 }
 
-fn derive_boundary_edges_from_faces(faces: &[FemFace]) -> Vec<FemEdge> {
-    let mut seen = BTreeSet::new();
-    let mut edges = Vec::new();
+fn derive_boundary_edges_from_faces(edges: &[FemEdge], faces: &[FemFace]) -> Vec<FemEdge> {
+    let mut boundary_node_pairs = BTreeSet::new();
 
     for face in faces {
         if face.nodes.len() < 2 {
@@ -1205,16 +1206,36 @@ fn derive_boundary_edges_from_faces(faces: &[FemFace]) -> Vec<FemEdge> {
         for index in 0..face.nodes.len() {
             let a = face.nodes[index];
             let b = face.nodes[(index + 1) % face.nodes.len()];
-            let key = ordered_pair(a, b);
-
-            if seen.insert(key) {
-                edges.push(FemEdge {
-                    id: EdgeId(edges.len() as u32),
-                    nodes: [a, b],
-                });
-            }
+            boundary_node_pairs.insert(ordered_pair(a, b));
         }
     }
 
     edges
+        .iter()
+        .filter(|edge| boundary_node_pairs.contains(&ordered_pair(edge.nodes[0], edge.nodes[1])))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boundary_edges_preserve_complete_topology_ids() {
+        let mesh = FemMesh::demo_hex8();
+
+        for boundary_edge in mesh.cached_boundary_edges() {
+            let complete_edge = mesh
+                .cached_edges()
+                .iter()
+                .find(|edge| edge.id == boundary_edge.id)
+                .expect("a boundary edge must retain its complete-topology ID");
+
+            assert_eq!(
+                ordered_pair(boundary_edge.nodes[0], boundary_edge.nodes[1]),
+                ordered_pair(complete_edge.nodes[0], complete_edge.nodes[1])
+            );
+        }
+    }
 }

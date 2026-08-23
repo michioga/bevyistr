@@ -71,8 +71,12 @@ pub fn spawn_boundary_visuals(
         commands.entity(entity).despawn();
     }
 
-    let Some(model) = model.as_deref() else { return; };
-    let Some(setup) = setup.as_deref() else { return; };
+    let Some(model) = model.as_deref() else {
+        return;
+    };
+    let Some(setup) = setup.as_deref() else {
+        return;
+    };
 
     if setup.is_empty() {
         return;
@@ -104,17 +108,32 @@ pub fn spawn_boundary_visuals(
 
     if settings.show_constraints {
         spawn_constraint_symbols(
-            &mut commands, &mut meshes, model, setup, symbol_size, constraint_material,
+            &mut commands,
+            &mut meshes,
+            model,
+            setup,
+            symbol_size,
+            constraint_material,
         );
     }
 
     if settings.show_loads {
         spawn_load_arrows(
-            &mut commands, &mut meshes, model, setup, symbol_size, load_material,
+            &mut commands,
+            &mut meshes,
+            model,
+            setup,
+            symbol_size,
+            load_material,
         );
         spawn_dload_arrows(
-            &mut commands, &mut meshes, model, setup, symbol_size,
-            pressure_material, gravity_material,
+            &mut commands,
+            &mut meshes,
+            model,
+            setup,
+            symbol_size,
+            pressure_material,
+            gravity_material,
         );
     }
 }
@@ -175,10 +194,14 @@ fn build_constraint_mesh(model: &FemModel, setup: &AnalysisSetup, size: f32) -> 
             continue;
         }
 
-        let Some(mesh) = model.meshes.get(bc.mesh_index) else { continue; };
+        let Some(mesh) = model.meshes.get(bc.mesh_index) else {
+            continue;
+        };
 
         for &node_id in &bc.nodes {
-            let Some(position) = mesh.node_position(node_id) else { continue; };
+            let Some(position) = mesh.node_position(node_id) else {
+                continue;
+            };
 
             for (dof, axis) in [(1u8, Vec3::X), (2, Vec3::Y), (3, Vec3::Z)] {
                 if dof < bc.dof_start || dof > bc.dof_end {
@@ -304,8 +327,12 @@ fn spawn_load_arrows(
         .max(1.0e-9);
 
     for load in &setup.nodal_loads {
-        let Some(mesh) = model.meshes.get(load.mesh_index) else { continue; };
-        let Some(position) = mesh.node_position(load.node) else { continue; };
+        let Some(mesh) = model.meshes.get(load.mesh_index) else {
+            continue;
+        };
+        let Some(position) = mesh.node_position(load.node) else {
+            continue;
+        };
 
         let axis = match load.dof {
             1 => Vec3::X,
@@ -327,25 +354,39 @@ fn spawn_load_arrows(
         let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
 
         // Shaft: cylinder from the node outward.
-        let shaft_mesh = meshes.add(Cylinder { radius: radius * 0.6, half_height: shaft_len * 0.5 });
+        let shaft_mesh = meshes.add(Cylinder {
+            radius: radius * 0.6,
+            half_height: shaft_len * 0.5,
+        });
         let shaft_center = position + direction * (shaft_len * 0.5);
 
         commands.spawn((
             Mesh3d(shaft_mesh),
             MeshMaterial3d(material.clone()),
-            Transform { translation: shaft_center, rotation, ..default() },
+            Transform {
+                translation: shaft_center,
+                rotation,
+                ..default()
+            },
             BoundaryVisual,
             Name::new(format!("Load shaft {} @ node {}", load.name, load.node.0)),
         ));
 
         // Head: cone at the tip, pointing in the load direction.
-        let head_mesh = meshes.add(Cone { radius, height: head_len });
+        let head_mesh = meshes.add(Cone {
+            radius,
+            height: head_len,
+        });
         let head_center = position + direction * (shaft_len + head_len * 0.5);
 
         commands.spawn((
             Mesh3d(head_mesh),
             MeshMaterial3d(material.clone()),
-            Transform { translation: head_center, rotation, ..default() },
+            Transform {
+                translation: head_center,
+                rotation,
+                ..default()
+            },
             BoundaryVisual,
             Name::new(format!("Load head {} @ node {}", load.name, load.node.0)),
         ));
@@ -358,13 +399,9 @@ fn spawn_load_arrows(
 /// pressure acts *into* the surface) — the surface-load counterpart of
 /// [`spawn_load_arrows`]'s nodal-load arrows.
 ///
-/// Gravity loads don't carry direction data (see
-/// [`fem_core::DistributedLoadKind::Gravity`]'s doc comment — only a
-/// magnitude is stored, direction is implicit), so they get one schematic
-/// arrow pointing -Y from the centroid of their targeted elements instead
-/// of a precise per-face rendering — enough to confirm "a gravity load
-/// exists and roughly where," which is the only claim that can honestly be
-/// drawn from the data available.
+/// Gravity loads get one schematic arrow from the centroid of their
+/// targeted elements, oriented using the direction cosine stored with the
+/// load.
 fn spawn_dload_arrows(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -389,7 +426,9 @@ fn spawn_dload_arrows(
     > = std::collections::HashMap::new();
 
     for dl in &setup.distributed_loads {
-        let Some(mesh) = model.meshes.get(dl.mesh_index) else { continue; };
+        let Some(mesh) = model.meshes.get(dl.mesh_index) else {
+            continue;
+        };
 
         let length = base_size * (1.0 + 2.0 * (dl.value.abs() / max_magnitude));
         let shaft_len = length * 0.7;
@@ -397,7 +436,10 @@ fn spawn_dload_arrows(
         let radius = base_size * 0.10;
 
         match (dl.kind, &dl.target) {
-            (fem_core::DistributedLoadKind::Pressure, fem_core::DistributedLoadTarget::Faces(faces)) => {
+            (
+                fem_core::DistributedLoadKind::Pressure,
+                fem_core::DistributedLoadTarget::Faces(faces),
+            ) => {
                 let lookup = face_lookup.entry(dl.mesh_index).or_insert_with(|| {
                     mesh.cached_boundary_faces()
                         .iter()
@@ -410,31 +452,53 @@ fn spawn_dload_arrows(
                 });
 
                 for face_ref in faces {
-                    let Some(geom) = lookup.get(face_ref) else { continue; };
+                    let Some(geom) = lookup.get(face_ref) else {
+                        continue;
+                    };
 
                     let direction = -geom.normal * dl.value.signum();
                     let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
 
-                    let shaft_mesh = meshes.add(Cylinder { radius: radius * 0.6, half_height: shaft_len * 0.5 });
+                    let shaft_mesh = meshes.add(Cylinder {
+                        radius: radius * 0.6,
+                        half_height: shaft_len * 0.5,
+                    });
                     let shaft_center = geom.centroid + direction * (shaft_len * 0.5);
 
                     commands.spawn((
                         Mesh3d(shaft_mesh),
                         MeshMaterial3d(pressure_material.clone()),
-                        Transform { translation: shaft_center, rotation, ..default() },
+                        Transform {
+                            translation: shaft_center,
+                            rotation,
+                            ..default()
+                        },
                         BoundaryVisual,
-                        Name::new(format!("DLoad shaft {} @ elem {}", dl.name, face_ref.element.0)),
+                        Name::new(format!(
+                            "DLoad shaft {} @ elem {}",
+                            dl.name, face_ref.element.0
+                        )),
                     ));
 
-                    let head_mesh = meshes.add(Cone { radius, height: head_len });
+                    let head_mesh = meshes.add(Cone {
+                        radius,
+                        height: head_len,
+                    });
                     let head_center = geom.centroid + direction * (shaft_len + head_len * 0.5);
 
                     commands.spawn((
                         Mesh3d(head_mesh),
                         MeshMaterial3d(pressure_material.clone()),
-                        Transform { translation: head_center, rotation, ..default() },
+                        Transform {
+                            translation: head_center,
+                            rotation,
+                            ..default()
+                        },
                         BoundaryVisual,
-                        Name::new(format!("DLoad head {} @ elem {}", dl.name, face_ref.element.0)),
+                        Name::new(format!(
+                            "DLoad head {} @ elem {}",
+                            dl.name, face_ref.element.0
+                        )),
                     ));
                 }
             }
@@ -466,10 +530,18 @@ fn spawn_dload_arrows(
                 }
                 centroid /= count as f32;
 
-                let direction = Vec3::NEG_Y;
+                let direction = dl
+                    .direction
+                    .filter(|direction| direction.length_squared() > f32::EPSILON)
+                    .map(|direction| direction.normalize())
+                    .unwrap_or(Vec3::NEG_Y)
+                    * dl.value.signum();
                 let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
 
-                let shaft_mesh = meshes.add(Cylinder { radius: radius * 0.6, half_height: shaft_len * 0.5 });
+                let shaft_mesh = meshes.add(Cylinder {
+                    radius: radius * 0.6,
+                    half_height: shaft_len * 0.5,
+                });
                 commands.spawn((
                     Mesh3d(shaft_mesh),
                     MeshMaterial3d(gravity_material.clone()),
@@ -482,7 +554,10 @@ fn spawn_dload_arrows(
                     Name::new(format!("DLoad(gravity) shaft {}", dl.name)),
                 ));
 
-                let head_mesh = meshes.add(Cone { radius, height: head_len });
+                let head_mesh = meshes.add(Cone {
+                    radius,
+                    height: head_len,
+                });
                 commands.spawn((
                     Mesh3d(head_mesh),
                     MeshMaterial3d(gravity_material.clone()),
@@ -499,7 +574,10 @@ fn spawn_dload_arrows(
             // (no face info — e.g. hand-built from a bare element group
             // rather than a picked surface) has nothing to anchor an arrow
             // to; skip it rather than guessing a face.
-            (fem_core::DistributedLoadKind::Pressure, fem_core::DistributedLoadTarget::Elements(_)) => {}
+            (
+                fem_core::DistributedLoadKind::Pressure,
+                fem_core::DistributedLoadTarget::Elements(_),
+            ) => {}
         }
     }
 }
@@ -541,19 +619,11 @@ mod tests {
         let mut positions = Vec::new();
         let mut normals = Vec::new();
 
-        append_constraint_cone(
-            &mut positions,
-            &mut normals,
-            Vec3::ZERO,
-            Vec3::X,
-            2.0,
-            4,
-        );
+        append_constraint_cone(&mut positions, &mut normals, Vec3::ZERO, Vec3::X, 2.0, 4);
 
         // The first side triangle is [tip, base ring 0, base ring 1].
         assert_eq!(positions[0][0], -2.0);
         assert_eq!(positions[1][0], 0.0);
         assert_eq!(positions[2][0], 0.0);
     }
-
 }

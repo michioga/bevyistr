@@ -251,11 +251,12 @@ pub(crate) fn spawn_model_visuals(
     fem_model: &FemModel,
     analysis_setup: Option<&fem_core::AnalysisSetup>,
 ) {
-    // Selected colour: bright lime-green, near-opaque — same hue as the
+    // Selected colour: bright opaque lime-green — same hue as the
     // topology-highlight overlay so per-entity and aggregate models look
-    // consistent when something is selected.
-    let selected_element = Color::srgba(0.10, 1.0, 0.45, 0.90);
-    let selected_face    = Color::srgba(0.10, 1.0, 0.45, 0.90);
+    // consistent when something is selected. Selection must write depth;
+    // otherwise rear faces can show through when the camera moves.
+    let selected_element = Color::srgb(0.10, 1.0, 0.45);
+    let selected_face    = Color::srgb(0.10, 1.0, 0.45);
     let selected_edge    = Color::srgb(0.10, 1.0, 0.45);
     let selected_node    = Color::srgb(0.10, 1.0, 0.45);
 
@@ -471,20 +472,17 @@ pub(crate) fn spawn_topology_highlights(
         ..default()
     });
 
-    // Selected: bright lime-green, near-opaque — strongly distinct from both
-    // the blue model surface and the yellow hover colour so selection is
-    // immediately visible even at a glance. A higher depth_bias than hover
-    // so a fully redundant hover overlay (already suppressed in
-    // `update_topology_highlights`, but any residual overlap) never wins
-    // the depth test over the selected colour.
-    let selected_material = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.10, 1.0, 0.45, 0.92),
-        alpha_mode: AlphaMode::Blend,
-        cull_mode: None,
-        unlit: true,
-        depth_bias: 3.0,
-        ..default()
-    });
+    // Selected: bright opaque lime-green. Keeping this in the opaque render
+    // pass makes it write depth, so rear selected faces and internal edges do
+    // not leak through a merged multi-face highlight as the camera moves.
+    // Back-face culling stays disabled for shell meshes that must remain
+    // selectable and visible from either side.
+    let mut selected_material = selection_material(Color::srgb(0.10, 1.0, 0.45));
+    selected_material.cull_mode = None;
+    selected_material.double_sided = true;
+    selected_material.unlit = true;
+    selected_material.depth_bias = 3.0;
+    let selected_material = materials.add(selected_material);
 
     spawn_topology_highlight(
         &mut commands,
@@ -1046,12 +1044,12 @@ fn apply_topology_highlight(
     Some(())
 }
 
-/// Builds one merged mesh covering every boundary face resolved from
-/// `targets` (a `Face` target maps to its own face; an `Element` target
-/// maps to whichever single boundary face [`find_boundary_face_for_target`]
-/// finds for it — same resolution the single-target highlight always
-/// used), rendered exactly coincident with the true surface — no vertex
-/// offset.
+/// Builds one merged highlight mesh from `targets`. A `Face` target
+/// contributes only that boundary face; an
+/// `Element` target contributes every geometric face of the FEM element,
+/// making surface selection and whole-element selection visually distinct.
+/// The mesh is rendered exactly coincident with the true geometry — no
+/// vertex offset.
 ///
 /// An earlier version of this nudged each triangle outward along its own
 /// normal to avoid z-fighting with the base mesh. That works fine for a
@@ -1075,10 +1073,7 @@ fn build_multi_face_highlight_mesh(
     let mut normals = Vec::new();
 
     for target in targets {
-        let Some((fem_mesh, face)) = find_boundary_face_for_target(model, target) else { continue; };
-        let Some(points) = fem_mesh.node_positions(&face.nodes) else { continue; };
-
-        append_face_triangles(&mut positions, &mut normals, &points);
+        append_target_highlight_triangles(model, target, &mut positions, &mut normals);
     }
 
     (!positions.is_empty()).then(|| {
@@ -1091,23 +1086,49 @@ fn build_multi_face_highlight_mesh(
     })
 }
 
-fn find_boundary_face_for_target(
+fn append_target_highlight_triangles(
     model: &FemModel,
     target: FemEntityId,
-) -> Option<(&FemMesh, &FemFace)> {
-    for fem_mesh in &model.meshes {
-        for face in fem_mesh.cached_boundary_faces() {
-            match target {
-                FemEntityId::Face(id) if face.id == id => return Some((fem_mesh, face)),
-                FemEntityId::Element(id) if face.element == Some(id) => {
-                    return Some((fem_mesh, face));
-                }
-                _ => {}
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+) {
+    match target {
+        FemEntityId::Face(id) => {
+            let Some((fem_mesh, face)) = model.meshes.iter().find_map(|fem_mesh| {
+                fem_mesh
+                    .cached_boundary_faces()
+                    .iter()
+                    .find(|face| face.id == id)
+                    .map(|face| (fem_mesh, face))
+            }) else {
+                return;
+            };
+            let Some(points) = fem_mesh.node_positions(&face.nodes) else {
+                return;
+            };
+
+            append_face_triangles(positions, normals, &points);
+        }
+        FemEntityId::Element(id) => {
+            let Some((fem_mesh, element)) = model.meshes.iter().find_map(|fem_mesh| {
+                fem_mesh
+                    .elements
+                    .iter()
+                    .find(|element| element.id == id)
+                    .map(|element| (fem_mesh, element))
+            }) else {
+                return;
+            };
+
+            for face_nodes in element.face_node_ids() {
+                let Some(points) = fem_mesh.node_positions(&face_nodes) else {
+                    continue;
+                };
+                append_face_triangles(positions, normals, &points);
             }
         }
+        FemEntityId::Node(_) | FemEntityId::Edge(_) => {}
     }
-
-    None
 }
 
 /// Builds a single mesh covering every boundary face in `face_ids`,
@@ -1869,10 +1890,17 @@ fn material_set(
     MaterialSet {
         normal: materials.add(standard_material(normal, blend)),
         hover: materials.add(standard_material(hover, blend)),
-        selected: materials.add(standard_material(selected, blend)),
+        // Selection is always opaque, even when the resting face/element
+        // material is blended. This keeps selected geometry in the depth-
+        // writing render pass and prevents rear geometry showing through.
+        selected: materials.add(selection_material(selected)),
         flat: materials.add(flat_material),
         transparent: materials.add(transparent_material),
     }
+}
+
+fn selection_material(color: Color) -> StandardMaterial {
+    standard_material(color.with_alpha(1.0), false)
 }
 
 fn standard_material(color: Color, blend: bool) -> StandardMaterial {
@@ -1932,6 +1960,34 @@ mod tests {
     use fem_core::{ElementId, ElementType, FemElement, FemMesh, FemNode, NodeId};
 
     use super::*;
+
+    #[test]
+    fn selection_material_is_opaque_and_writes_depth() {
+        let material = selection_material(Color::srgba(0.10, 1.0, 0.45, 0.25));
+
+        assert_eq!(material.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(material.base_color.to_srgba().alpha, 1.0);
+    }
+
+    #[test]
+    fn element_highlight_contains_the_whole_element_not_one_boundary_face() {
+        let model = FemModel::demo_hex8();
+        let face_id = model.meshes[0].cached_boundary_faces()[0].id;
+
+        let face = build_multi_face_highlight_mesh(
+            &model,
+            [FemEntityId::Face(face_id)].into_iter(),
+        )
+        .unwrap();
+        let element = build_multi_face_highlight_mesh(
+            &model,
+            [FemEntityId::Element(ElementId(0))].into_iter(),
+        )
+        .unwrap();
+
+        assert_eq!(face.count_vertices(), 6);
+        assert_eq!(element.count_vertices(), 36);
+    }
 
     #[test]
     fn builds_actual_tetrahedron_surface_instead_of_a_bounding_box() {

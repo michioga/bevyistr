@@ -67,12 +67,18 @@ impl BoundaryCondition {
     pub fn dof_label(&self) -> String {
         const NAMES: [&str; 6] = ["Ux", "Uy", "Uz", "Rx", "Ry", "Rz"];
 
-        let start_label = NAMES.get(self.dof_start.saturating_sub(1) as usize).copied().unwrap_or("?");
+        let start_label = NAMES
+            .get(self.dof_start.saturating_sub(1) as usize)
+            .copied()
+            .unwrap_or("?");
 
         if self.dof_start == self.dof_end {
             start_label.to_string()
         } else {
-            let end_label = NAMES.get(self.dof_end.saturating_sub(1) as usize).copied().unwrap_or("?");
+            let end_label = NAMES
+                .get(self.dof_end.saturating_sub(1) as usize)
+                .copied()
+                .unwrap_or("?");
 
             format!("{start_label}-{end_label}")
         }
@@ -123,6 +129,11 @@ pub struct DistributedLoad {
     /// matching the FrontISTR/Abaqus `P` convention) or traction
     /// magnitude, depending on `kind`.
     pub value: f32,
+
+    /// Direction of a gravity load as a direction cosine. `None` for
+    /// pressure loads. Older inputs that omit the four required `GRAV`
+    /// parameters are interpreted as acting in the global -Y direction.
+    pub direction: Option<Vec3>,
 }
 
 /// What a [`DistributedLoad`] is applied to.
@@ -178,7 +189,8 @@ pub enum DistributedLoadKind {
     Pressure,
 
     /// Gravity / body force along a fixed direction (`value` is
-    /// acceleration magnitude; direction is implicit, typically -Y or -Z).
+    /// acceleration magnitude and [`DistributedLoad::direction`] stores
+    /// the direction cosine).
     Gravity,
 }
 
@@ -276,11 +288,11 @@ pub struct SolverSettings {
 impl Default for SolverSettings {
     fn default() -> Self {
         Self {
-            analysis_type:   AnalysisType::Static,
-            substeps:        1,
-            max_iterations:  100,
+            analysis_type: AnalysisType::Static,
+            substeps: 1,
+            max_iterations: 100,
             convergence_tol: 1.0e-6,
-            solver_method:   LinearSolverMethod::Cg,
+            solver_method: LinearSolverMethod::Cg,
         }
     }
 }
@@ -296,19 +308,19 @@ pub enum AnalysisType {
 impl AnalysisType {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Static   => "Static",
+            Self::Static => "Static",
             Self::NlStatic => "Nonlinear",
-            Self::Dynamic  => "Dynamic",
-            Self::Eigen    => "Eigenvalue",
+            Self::Dynamic => "Dynamic",
+            Self::Eigen => "Eigenvalue",
         }
     }
     /// FrontISTR `!SOLUTION,TYPE=` keyword value.
     pub const fn frontistr_type(self) -> &'static str {
         match self {
-            Self::Static   => "STATIC",
+            Self::Static => "STATIC",
             Self::NlStatic => "NLSTATIC",
-            Self::Dynamic  => "DYNAMIC",
-            Self::Eigen    => "EIGEN",
+            Self::Dynamic => "DYNAMIC",
+            Self::Eigen => "EIGEN",
         }
     }
 }
@@ -323,16 +335,16 @@ pub enum LinearSolverMethod {
 impl LinearSolverMethod {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Cg     => "CG",
+            Self::Cg => "CG",
             Self::Direct => "Direct",
-            Self::Gmres  => "GMRES",
+            Self::Gmres => "GMRES",
         }
     }
     pub const fn frontistr_method(self) -> &'static str {
         match self {
-            Self::Cg     => "CG",
+            Self::Cg => "CG",
             Self::Direct => "DIRECT",
-            Self::Gmres  => "GMRES",
+            Self::Gmres => "GMRES",
         }
     }
 }
@@ -358,11 +370,11 @@ impl Default for AnalysisSetup {
     fn default() -> Self {
         Self {
             boundary_conditions: Vec::new(),
-            nodal_loads:         Vec::new(),
-            distributed_loads:   Vec::new(),
-            materials:           Vec::new(),
-            sections:            Vec::new(),
-            solver:              SolverSettings::default(),
+            nodal_loads: Vec::new(),
+            distributed_loads: Vec::new(),
+            materials: Vec::new(),
+            sections: Vec::new(),
+            solver: SolverSettings::default(),
         }
     }
 }
@@ -429,13 +441,7 @@ impl AnalysisSetup {
     /// selection becomes multiple [`NodalLoad`] entries here — they share a
     /// name so the UI can still treat "the load just created" as one unit
     /// (e.g. for undoing or summarizing it).
-    pub fn add_load(
-        &mut self,
-        mesh_index: usize,
-        nodes: &[NodeId],
-        dof: u8,
-        value: f32,
-    ) -> usize {
+    pub fn add_load(&mut self, mesh_index: usize, nodes: &[NodeId], dof: u8, value: f32) -> usize {
         let name = self.next_auto_name("LOAD");
         let start_index = self.nodal_loads.len();
 
@@ -463,7 +469,11 @@ impl AnalysisSetup {
         density: Option<f32>,
     ) -> usize {
         let name = name.into();
-        let name = if name.is_empty() { self.next_auto_name("MAT") } else { name };
+        let name = if name.is_empty() {
+            self.next_auto_name("MAT")
+        } else {
+            name
+        };
 
         self.materials.push(FemMaterial {
             name,
@@ -569,7 +579,9 @@ impl AnalysisSetup {
 
     /// Sections that apply to `mesh_index`, in load order.
     pub fn sections_for_mesh(&self, mesh_index: usize) -> impl Iterator<Item = &Section> {
-        self.sections.iter().filter(move |s| s.mesh_index == mesh_index)
+        self.sections
+            .iter()
+            .filter(move |s| s.mesh_index == mesh_index)
     }
 
     /// Resolves every [`Section`] for `mesh_index` against `mesh`'s

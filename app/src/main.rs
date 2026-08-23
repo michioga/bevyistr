@@ -5,14 +5,14 @@ use bevy::prelude::*;
 use std::path::PathBuf;
 
 use box_select::BoxSelectPlugin;
-use camera::{fit_bounds, radius_limits, CameraPlugin, OrbitCamera};
+use camera::{CameraPlugin, OrbitCamera, fit_bounds, radius_limits};
 use fem_core::FemModel;
+use gmsh;
 use interaction::InteractionPlugin;
 use picking::PickingPlugin;
 use selection::SelectionPlugin;
 use ui::UiPlugin;
 use visualization::VisualizationPlugin;
-use gmsh;
 
 fn main() {
     let arg_path = std::env::args_os().nth(1).map(PathBuf::from);
@@ -46,17 +46,19 @@ fn main() {
 
         let (model, materials, sections) = load_initial_model(mesh_path?)?;
 
-        for m in materials { initial_setup.materials.push(m); setup_has_content = true; }
-        for s in sections  { initial_setup.sections.push(s);  setup_has_content = true; }
+        for m in materials {
+            initial_setup.materials.push(m);
+            setup_has_content = true;
+        }
+        for s in sections {
+            initial_setup.sections.push(s);
+            setup_has_content = true;
+        }
 
         if let Some(cnt_path) = cnt_path {
             match hecmw::load_cnt_file(&cnt_path, &model.meshes[0], 0) {
                 Ok(data) => {
-                    initial_setup.boundary_conditions.extend(data.boundary_conditions);
-                    initial_setup.nodal_loads.extend(data.nodal_loads);
-                    initial_setup.distributed_loads.extend(data.distributed_loads);
-                    initial_setup.materials.extend(data.materials);
-                    initial_setup.sections.extend(data.sections);
+                    data.merge_into(&mut initial_setup);
                     setup_has_content = true;
                 }
                 Err(e) => eprintln!("Failed to parse {}: {e}", cnt_path.display()),
@@ -121,9 +123,9 @@ fn main() {
 /// Uses the extended loader that also extracts embedded !MATERIAL/!SECTION
 /// blocks from the .msh file, so `hinge.msh` sets up steel + solid section
 /// automatically.
-fn load_initial_model(path: PathBuf)
-    -> Option<(FemModel, Vec<fem_core::FemMaterial>, Vec<fem_core::Section>)>
-{
+fn load_initial_model(
+    path: PathBuf,
+) -> Option<(FemModel, Vec<fem_core::FemMaterial>, Vec<fem_core::Section>)> {
     match hecmw::load_mesh_file_with_setup(&path) {
         Ok((mesh, materials, sections)) => {
             let name = path
@@ -214,8 +216,8 @@ fn spawn_grid(mut commands: Commands) {
     commands.spawn((
         InfiniteGrid,
         InfiniteGridSettings {
-            x_axis_color:   Color::srgb(0.70, 0.20, 0.20),
-            z_axis_color:   Color::srgb(0.20, 0.50, 0.70),
+            x_axis_color: Color::srgb(0.70, 0.20, 0.20),
+            z_axis_color: Color::srgb(0.20, 0.50, 0.70),
             major_line_color: Color::srgba(0.35, 0.50, 0.60, 0.55),
             minor_line_color: Color::srgba(0.20, 0.32, 0.40, 0.30),
             ..default()
@@ -240,10 +242,10 @@ fn spawn_grid(mut commands: Commands) {
 /// visible — and its line spacing sensible — regardless of what units
 /// the mesh happens to use.
 fn rescale_grid_on_reload(
-    model:            Option<Res<FemModel>>,
-    version:          Res<fem_core::FemModelVersion>,
+    model: Option<Res<FemModel>>,
+    version: Res<fem_core::FemModelVersion>,
     mut last_version: Local<Option<u64>>,
-    mut grid_query:   Query<&mut InfiniteGridSettings, With<InfiniteGrid>>,
+    mut grid_query: Query<&mut InfiniteGridSettings, With<InfiniteGrid>>,
 ) {
     let current = version.value;
 
@@ -252,10 +254,14 @@ fn rescale_grid_on_reload(
     }
     *last_version = Some(current);
 
-    let Some((min, max)) = model.as_deref().and_then(FemModel::bounds) else { return; };
+    let Some((min, max)) = model.as_deref().and_then(FemModel::bounds) else {
+        return;
+    };
     let (_, radius) = fit_bounds(min, max);
 
-    let Ok(mut settings) = grid_query.single_mut() else { return; };
+    let Ok(mut settings) = grid_query.single_mut() else {
+        return;
+    };
 
     // Calibrated against the built-in demo cube's own fit radius (~3.3
     // units), where the untouched defaults already look right — a model

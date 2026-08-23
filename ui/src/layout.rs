@@ -1,16 +1,16 @@
-use bevy::prelude::*;
+use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use camera::OrbitCamera;
 use fem_core::{
     ContactCandidateState, ContactType, FemEntityId, FemModel, FemModelVersion, FemResultSet,
     MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel, UiPointerState,
 };
-use crate::slider::{spawn_slider, SliderConfig, SliderId, SliderState, SliderTrack};
-use visualization::ContourSettings;
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionState};
 use std::path::Path;
+use visualization::ContourSettings;
 use visualization::{VisualizationMode, VisualizationSettings};
 
 const PANEL_BG: Color = Color::srgba(0.035, 0.04, 0.045, 0.88);
@@ -70,21 +70,24 @@ pub(crate) struct MakeElementGroupButton;
 /// track the toggle and the threshold — no click-time seed bookkeeping.
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct PlanarSelectionSettings {
-    pub enabled:   bool,
+    pub enabled: bool,
     pub angle_deg: f32,
 }
 
 impl Default for PlanarSelectionSettings {
     fn default() -> Self {
         Self {
-            enabled:      false,
-            angle_deg:    15.0,
+            enabled: false,
+            angle_deg: 15.0,
         }
     }
 }
 
 #[derive(Component)]
 pub(crate) struct PlanarSelectionToggle;
+
+#[derive(Component)]
+pub(crate) struct PlanarSelectionHint;
 
 /// Active section type selection for the "Add Section" panel.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -174,7 +177,11 @@ pub(crate) struct PlaybackState {
 
 impl Default for PlaybackState {
     fn default() -> Self {
-        Self { playing: false, interval: 0.2, elapsed: 0.0 }
+        Self {
+            playing: false,
+            interval: 0.2,
+            elapsed: 0.0,
+        }
     }
 }
 
@@ -708,7 +715,15 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     label: "Angle threshold (deg)",
                     id: SliderId::PlanarAngle,
                 });
-                hint_text(sec, "Click face/element to select coplanar neighbours");
+                sec.spawn((
+                    Text::new("Face = surface  |  Element = whole element"),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+                    PlanarSelectionHint,
+                ));
 
                 sec.spawn((
                     Node { flex_direction: FlexDirection::Row, column_gap: px(6.0), ..default() },
@@ -1428,30 +1443,26 @@ fn spawn_sidebar_navigation(parent: &mut ChildSpawnerCommands) {
             Name::new("SidebarNavigation"),
         ))
         .with_children(|nav| {
-            nav.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(4.0),
-                    ..default()
-                },
-            ))
-            .with_children(|row| {
-                sidebar_page_button(row, SidebarPage::Model, "Model");
-                sidebar_page_button(row, SidebarPage::Contact, "Contact");
-                sidebar_page_button(row, SidebarPage::Loads, "BC / Loads");
-            });
-            nav.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(4.0),
-                    ..default()
-                },
-            ))
-            .with_children(|row| {
-                sidebar_page_button(row, SidebarPage::Materials, "Materials");
-                sidebar_page_button(row, SidebarPage::Solve, "Solve");
-                sidebar_page_button(row, SidebarPage::Results, "Results");
-            });
+            nav.spawn((Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(4.0),
+                ..default()
+            },))
+                .with_children(|row| {
+                    sidebar_page_button(row, SidebarPage::Model, "Model");
+                    sidebar_page_button(row, SidebarPage::Contact, "Contact");
+                    sidebar_page_button(row, SidebarPage::Loads, "BC / Loads");
+                });
+            nav.spawn((Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(4.0),
+                ..default()
+            },))
+                .with_children(|row| {
+                    sidebar_page_button(row, SidebarPage::Materials, "Materials");
+                    sidebar_page_button(row, SidebarPage::Solve, "Solve");
+                    sidebar_page_button(row, SidebarPage::Results, "Results");
+                });
         });
 }
 
@@ -1504,11 +1515,7 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
         });
 }
 
-fn sidebar_page_button(
-    parent: &mut ChildSpawnerCommands,
-    page: SidebarPage,
-    label: &'static str,
-) {
+fn sidebar_page_button(parent: &mut ChildSpawnerCommands, page: SidebarPage, label: &'static str) {
     parent
         .spawn((
             Button,
@@ -1602,7 +1609,10 @@ fn section(
         .with_children(|sec| {
             sec.spawn((
                 Text::new(title),
-                TextFont { font_size: FontSize::Px(9.5), ..default() },
+                TextFont {
+                    font_size: FontSize::Px(9.5),
+                    ..default()
+                },
                 TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
             ));
             children_fn(sec);
@@ -1615,96 +1625,134 @@ fn action_button(
     marker: impl Bundle,
     name: &'static str,
 ) {
-    parent.spawn((
-        Button,
-        Node {
-            flex_grow: 1.0,
-            height: px(28.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(5.0)),
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::all(PANEL_BORDER),
-        marker,
-        Name::new(name),
-    )).with_child((
-        Text::new(label),
-        TextFont { font_size: FontSize::Px(11.5), ..default() },
-        TextColor(TEXT_MAIN),
-    ));
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(28.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(5.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            marker,
+            Name::new(name),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(11.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
 }
 
-fn constraint_preset_button(parent: &mut ChildSpawnerCommands, label: &'static str, dof_start: u8, dof_end: u8) {
-    parent.spawn((
-        Button,
-        Node {
-            flex_grow: 1.0,
-            height: px(24.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(4.0)),
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::all(PANEL_BORDER),
-        ConstraintPresetButton { dof_start, dof_end, label },
-        Name::new(format!("ConstraintPreset_{label}")),
-    )).with_child((
-        Text::new(label),
-        TextFont { font_size: FontSize::Px(9.5), ..default() },
-        TextColor(TEXT_MAIN),
-        ConstraintPresetLabel,   // ← enables dynamic count label
-    ));
+fn constraint_preset_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &'static str,
+    dof_start: u8,
+    dof_end: u8,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(24.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            ConstraintPresetButton {
+                dof_start,
+                dof_end,
+                label,
+            },
+            Name::new(format!("ConstraintPreset_{label}")),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(9.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+            ConstraintPresetLabel, // ← enables dynamic count label
+        ));
 }
 
-fn load_direction_button(parent: &mut ChildSpawnerCommands, label: &'static str, dof: u8, sign: f32) {
-    parent.spawn((
-        Button,
-        Node {
-            flex_grow: 1.0,
-            height: px(24.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(4.0)),
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::all(PANEL_BORDER),
-        LoadDirectionButton { dof, sign },
-        Name::new(format!("LoadDirection_{label}")),
-    )).with_child((
-        Text::new(label),
-        TextFont { font_size: FontSize::Px(9.5), ..default() },
-        TextColor(TEXT_MAIN),
-    ));
+fn load_direction_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &'static str,
+    dof: u8,
+    sign: f32,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(24.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            LoadDirectionButton { dof, sign },
+            Name::new(format!("LoadDirection_{label}")),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(9.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
 }
 
-fn material_preset_button(parent: &mut ChildSpawnerCommands, preset_index: usize, label: &'static str) {
-    parent.spawn((
-        Button,
-        Node {
-            flex_grow: 1.0,
-            height: px(22.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(4.0)),
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::all(PANEL_BORDER),
-        MaterialPresetButton { preset_index },
-        Name::new(format!("MaterialPreset_{label}")),
-    )).with_child((
-        Text::new(label),
-        TextFont { font_size: FontSize::Px(9.5), ..default() },
-        TextColor(TEXT_MAIN),
-    ));
+fn material_preset_button(
+    parent: &mut ChildSpawnerCommands,
+    preset_index: usize,
+    label: &'static str,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(22.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            MaterialPresetButton { preset_index },
+            Name::new(format!("MaterialPreset_{label}")),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(9.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
 }
 
 /// One built-in material preset offered by the "Create from selection"
@@ -1722,10 +1770,34 @@ struct MaterialPreset {
 
 fn material_presets() -> &'static [MaterialPreset] {
     const PRESETS: &[MaterialPreset] = &[
-        MaterialPreset { label: "+ Steel",    name: "STEEL",    young_modulus: 2.05e11, poisson_ratio: 0.30, density: 7850.0 },
-        MaterialPreset { label: "+ Aluminum", name: "ALUMINUM", young_modulus: 6.90e10, poisson_ratio: 0.33, density: 2700.0 },
-        MaterialPreset { label: "+ Concrete", name: "CONCRETE", young_modulus: 3.00e10, poisson_ratio: 0.20, density: 2400.0 },
-        MaterialPreset { label: "+ Titanium", name: "TITANIUM", young_modulus: 1.14e11, poisson_ratio: 0.34, density: 4500.0 },
+        MaterialPreset {
+            label: "+ Steel",
+            name: "STEEL",
+            young_modulus: 2.05e11,
+            poisson_ratio: 0.30,
+            density: 7850.0,
+        },
+        MaterialPreset {
+            label: "+ Aluminum",
+            name: "ALUMINUM",
+            young_modulus: 6.90e10,
+            poisson_ratio: 0.33,
+            density: 2700.0,
+        },
+        MaterialPreset {
+            label: "+ Concrete",
+            name: "CONCRETE",
+            young_modulus: 3.00e10,
+            poisson_ratio: 0.20,
+            density: 2400.0,
+        },
+        MaterialPreset {
+            label: "+ Titanium",
+            name: "TITANIUM",
+            young_modulus: 1.14e11,
+            poisson_ratio: 0.34,
+            density: 4500.0,
+        },
     ];
 
     PRESETS
@@ -1734,7 +1806,10 @@ fn material_presets() -> &'static [MaterialPreset] {
 fn hint_text(parent: &mut ChildSpawnerCommands, text: &'static str) {
     parent.spawn((
         Text::new(text),
-        TextFont { font_size: FontSize::Px(10.0), ..default() },
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
         TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
     ));
 }
@@ -1742,13 +1817,13 @@ fn hint_text(parent: &mut ChildSpawnerCommands, text: &'static str) {
 fn segment_style(is_first: bool, is_last: bool) -> (BorderRadius, UiRect) {
     let r = 5.0f32;
     let border = UiRect {
-        top:    px(1.0),
+        top: px(1.0),
         bottom: px(1.0),
-        left:   if is_first { px(1.0) } else { px(0.0) },
-        right:  px(1.0),
+        left: if is_first { px(1.0) } else { px(0.0) },
+        right: px(1.0),
     };
     let (tl, bl) = if is_first { (r, r) } else { (0.0, 0.0) };
-    let (tr, br) = if is_last  { (r, r) } else { (0.0, 0.0) };
+    let (tr, br) = if is_last { (r, r) } else { (0.0, 0.0) };
     (BorderRadius::new(px(tl), px(tr), px(br), px(bl)), border)
 }
 
@@ -1831,8 +1906,12 @@ pub(crate) fn handle_scrollable_list_wheel(
         With<ScrollableList>,
     >,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
 
     for ev in wheel_events.read() {
         let line_height = 24.0;
@@ -1846,8 +1925,8 @@ pub(crate) fn handle_scrollable_list_wheel(
         }
 
         for (mut scroll, node, transform) in &mut scrollable_query {
-            let scale  = node.inverse_scale_factor;
-            let size   = node.size() * scale;
+            let scale = node.inverse_scale_factor;
+            let size = node.size() * scale;
             let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
 
             let over = cursor.x >= origin.x
@@ -1878,36 +1957,48 @@ pub(crate) fn handle_panel_wheel(
     >,
     list_query: Query<(&ComputedNode, &UiGlobalTransform), With<ScrollableList>>,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
 
     // If cursor is over any ScrollableList, the list handler takes priority.
     let over_sublist = list_query.iter().any(|(node, transform)| {
-        let scale  = node.inverse_scale_factor;
-        let size   = node.size() * scale;
+        let scale = node.inverse_scale_factor;
+        let size = node.size() * scale;
         let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
-        cursor.x >= origin.x && cursor.x <= origin.x + size.x
-        && cursor.y >= origin.y && cursor.y <= origin.y + size.y
+        cursor.x >= origin.x
+            && cursor.x <= origin.x + size.x
+            && cursor.y >= origin.y
+            && cursor.y <= origin.y + size.y
     });
 
-    if over_sublist { return; }
+    if over_sublist {
+        return;
+    }
 
     for ev in wheel_events.read() {
         let line_height = 28.0;
         let delta_y = match ev.unit {
-            MouseScrollUnit::Line  => ev.y * line_height,
+            MouseScrollUnit::Line => ev.y * line_height,
             MouseScrollUnit::Pixel => ev.y,
         };
 
-        if delta_y == 0.0 { continue; }
+        if delta_y == 0.0 {
+            continue;
+        }
 
         for (mut scroll, node, transform) in &mut panel_query {
-            let scale  = node.inverse_scale_factor;
-            let size   = node.size() * scale;
+            let scale = node.inverse_scale_factor;
+            let size = node.size() * scale;
             let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
 
-            let over_panel = cursor.x >= origin.x && cursor.x <= origin.x + size.x
-                && cursor.y >= origin.y && cursor.y <= origin.y + size.y;
+            let over_panel = cursor.x >= origin.x
+                && cursor.x <= origin.x + size.x
+                && cursor.y >= origin.y
+                && cursor.y <= origin.y + size.y;
 
             if over_panel {
                 scroll.0.y = (scroll.0.y - delta_y).max(0.0);
@@ -1965,7 +2056,8 @@ pub(crate) fn selection_level_button_system(
     hovered_query: Query<Entity, With<Hovered>>,
     selected_query: Query<Entity, With<Selected>>,
 ) {
-    for (_entity, interaction, button, mut background, mut border, mut bevy_button) in &mut buttons {
+    for (_entity, interaction, button, mut background, mut border, mut bevy_button) in &mut buttons
+    {
         if *interaction == Interaction::Pressed && filter.level != button.level {
             filter.level = button.level;
             hover.clear();
@@ -2127,34 +2219,68 @@ pub(crate) fn import_mesh_button_system(
 /// the mesh is added as a new [`fem_core::Part`] via [`FemModel::add_mesh`]
 /// instead of replacing the whole model, building up a mixed-part assembly.
 pub(crate) fn mesh_load_system(
-    mut model:   ResMut<FemModel>,
+    mut model: ResMut<FemModel>,
     mut request: ResMut<MeshLoadRequest>,
-    mut status:  ResMut<MeshLoadStatus>,
+    mut status: ResMut<MeshLoadStatus>,
     mut version: ResMut<FemModelVersion>,
-    mut setup:   ResMut<fem_core::AnalysisSetup>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
 ) {
-    let Some((path, import)) = request.take() else { return; };
+    let Some((path, import)) = request.take() else {
+        return;
+    };
 
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
 
     match ext.as_str() {
-        "geo" => {
-            match gmsh::run_gmsh(&path, None) {
-                Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup); }
-                Err(e)   => { status.failed(path, e.to_string()); }
+        "geo" => match gmsh::run_gmsh(&path, None) {
+            Ok(mesh) => {
+                apply_mesh(
+                    mesh,
+                    &path,
+                    import,
+                    &mut model,
+                    &mut status,
+                    &mut version,
+                    &mut setup,
+                );
             }
-        }
-        "inp" => {
-            match hecmw::load_inp_file(&path) {
-                Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup); }
-                Err(e)   => { status.failed(path, e.to_string()); }
+            Err(e) => {
+                status.failed(path, e.to_string());
             }
-        }
+        },
+        "inp" => match hecmw::load_inp_file(&path) {
+            Ok(mesh) => {
+                apply_mesh(
+                    mesh,
+                    &path,
+                    import,
+                    &mut model,
+                    &mut status,
+                    &mut version,
+                    &mut setup,
+                );
+            }
+            Err(e) => {
+                status.failed(path, e.to_string());
+            }
+        },
         _ => {
             // .msh: HECMW extended loader captures !MATERIAL/!SECTION, then Gmsh fallback.
             match hecmw::load_mesh_file_with_setup(&path) {
                 Ok((mesh, materials, sections)) => {
-                    apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup);
+                    apply_mesh(
+                        mesh,
+                        &path,
+                        import,
+                        &mut model,
+                        &mut status,
+                        &mut version,
+                        &mut setup,
+                    );
                     // Merge embedded material/section blocks into AnalysisSetup,
                     // skipping duplicates by name.
                     let mut changed = false;
@@ -2168,29 +2294,45 @@ pub(crate) fn mesh_load_system(
                         setup.sections.push(s);
                         changed = true;
                     }
-                    if changed { setup.set_changed(); }
-                }
-                Err(_) => {
-                    match gmsh::load_msh_file(&path) {
-                        Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup); }
-                        Err(e)   => { status.failed(path, e.to_string()); }
+                    if changed {
+                        setup.set_changed();
                     }
                 }
+                Err(_) => match gmsh::load_msh_file(&path) {
+                    Ok(mesh) => {
+                        apply_mesh(
+                            mesh,
+                            &path,
+                            import,
+                            &mut model,
+                            &mut status,
+                            &mut version,
+                            &mut setup,
+                        );
+                    }
+                    Err(e) => {
+                        status.failed(path, e.to_string());
+                    }
+                },
             }
         }
     }
 }
 
 fn apply_mesh(
-    mesh:    fem_core::FemMesh,
-    path:    &std::path::PathBuf,
-    import:  bool,
-    model:   &mut FemModel,
-    status:  &mut MeshLoadStatus,
+    mesh: fem_core::FemMesh,
+    path: &std::path::PathBuf,
+    import: bool,
+    model: &mut FemModel,
+    status: &mut MeshLoadStatus,
     version: &mut FemModelVersion,
-    setup:   &mut fem_core::AnalysisSetup,
+    setup: &mut fem_core::AnalysisSetup,
 ) {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("mesh").to_string();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("mesh")
+        .to_string();
     if import {
         model.add_mesh(name, mesh);
     } else {
@@ -2425,7 +2567,11 @@ pub(crate) fn rebuild_sets_list(
             for (set_index, set) in mesh.node_sets.iter().enumerate() {
                 set_list_button(
                     list,
-                    SetButton { mesh_index, kind: SetKind::Node, set_index },
+                    SetButton {
+                        mesh_index,
+                        kind: SetKind::Node,
+                        set_index,
+                    },
                     &format!("[N] {}  ({} nodes)", set.name, set.nodes.len()),
                 );
             }
@@ -2433,7 +2579,11 @@ pub(crate) fn rebuild_sets_list(
             for (set_index, set) in mesh.element_sets.iter().enumerate() {
                 set_list_button(
                     list,
-                    SetButton { mesh_index, kind: SetKind::Element, set_index },
+                    SetButton {
+                        mesh_index,
+                        kind: SetKind::Element,
+                        set_index,
+                    },
                     &format!("[E] {}  ({} elems)", set.name, set.elements.len()),
                 );
             }
@@ -2441,7 +2591,11 @@ pub(crate) fn rebuild_sets_list(
             for (set_index, set) in mesh.surface_sets.iter().enumerate() {
                 set_list_button(
                     list,
-                    SetButton { mesh_index, kind: SetKind::Surface, set_index },
+                    SetButton {
+                        mesh_index,
+                        kind: SetKind::Surface,
+                        set_index,
+                    },
                     &format!("[S] {}  ({} faces)", set.name, set.surfaces.len()),
                 );
             }
@@ -2468,46 +2622,96 @@ pub(crate) fn rebuild_boundary_loads_list(
         return;
     }
 
-    let Ok(container) = container_query.single() else { return; };
+    let Ok(container) = container_query.single() else {
+        return;
+    };
 
     if let Ok(children) = children_query.get(container) {
-        for &child in children { commands.entity(child).despawn(); }
+        for &child in children {
+            commands.entity(child).despawn();
+        }
     }
 
     commands.entity(container).with_children(|list| {
         for (index, bc) in setup.boundary_conditions.iter().enumerate() {
-            let label = format!("[BC] {}  {}  ({} nodes)  val={:.4}", bc.name, bc.dof_label(), bc.nodes.len(), bc.value);
-            setup_entry_row(list, &label, DeleteSetupEntry::BoundaryCondition(index), &format!("BC_{}", bc.name));
+            let label = format!(
+                "[BC] {}  {}  ({} nodes)  val={:.4}",
+                bc.name,
+                bc.dof_label(),
+                bc.nodes.len(),
+                bc.value
+            );
+            setup_entry_row(
+                list,
+                &label,
+                DeleteSetupEntry::BoundaryCondition(index),
+                &format!("BC_{}", bc.name),
+            );
         }
 
         // Group nodal loads by name for display (one entry per unique name).
         let mut seen_load_names: Vec<&str> = Vec::new();
         for (index, load) in setup.nodal_loads.iter().enumerate() {
-            if seen_load_names.contains(&load.name.as_str()) { continue; }
+            if seen_load_names.contains(&load.name.as_str()) {
+                continue;
+            }
             seen_load_names.push(&load.name);
-            let dof_label = match load.dof { 1 => "Fx", 2 => "Fy", 3 => "Fz", _ => "?" };
-            let count = setup.nodal_loads.iter().filter(|l| l.name == load.name).count();
-            let label = format!("[Load] {}  {}={:.3}  ({} nodes)", load.name, dof_label, load.value, count);
-            setup_entry_row(list, &label, DeleteSetupEntry::LoadGroup(index), &format!("Load_{}", load.name));
+            let dof_label = match load.dof {
+                1 => "Fx",
+                2 => "Fy",
+                3 => "Fz",
+                _ => "?",
+            };
+            let count = setup
+                .nodal_loads
+                .iter()
+                .filter(|l| l.name == load.name)
+                .count();
+            let label = format!(
+                "[Load] {}  {}={:.3}  ({} nodes)",
+                load.name, dof_label, load.value, count
+            );
+            setup_entry_row(
+                list,
+                &label,
+                DeleteSetupEntry::LoadGroup(index),
+                &format!("Load_{}", load.name),
+            );
         }
 
         for (index, dload) in setup.distributed_loads.iter().enumerate() {
             let kind_label = match dload.kind {
                 fem_core::DistributedLoadKind::Pressure => "Pressure",
-                fem_core::DistributedLoadKind::Gravity  => "Gravity",
+                fem_core::DistributedLoadKind::Gravity => "Gravity",
             };
             let unit = match dload.kind {
                 fem_core::DistributedLoadKind::Pressure => "faces",
-                fem_core::DistributedLoadKind::Gravity  => "elems",
+                fem_core::DistributedLoadKind::Gravity => "elems",
             };
-            let label = format!("[DLoad] {}  {kind_label}={:.3}  ({} {unit})", dload.name, dload.value, dload.target.len());
-            setup_entry_row(list, &label, DeleteSetupEntry::DistributedLoad(index), &format!("DLoad_{}", dload.name));
+            let label = format!(
+                "[DLoad] {}  {kind_label}={:.3}  ({} {unit})",
+                dload.name,
+                dload.value,
+                dload.target.len()
+            );
+            setup_entry_row(
+                list,
+                &label,
+                DeleteSetupEntry::DistributedLoad(index),
+                &format!("DLoad_{}", dload.name),
+            );
         }
 
-        if setup.boundary_conditions.is_empty() && setup.nodal_loads.is_empty() && setup.distributed_loads.is_empty() {
+        if setup.boundary_conditions.is_empty()
+            && setup.nodal_loads.is_empty()
+            && setup.distributed_loads.is_empty()
+        {
             list.spawn((
                 Text::new("(none yet - select nodes and use buttons above)"),
-                TextFont { font_size: FontSize::Px(9.5), ..default() },
+                TextFont {
+                    font_size: FontSize::Px(9.5),
+                    ..default()
+                },
                 TextColor(TEXT_MUTED),
             ));
         }
@@ -2526,12 +2730,17 @@ pub(crate) fn rebuild_boundary_loads_list(
 /// Toggles the `PlanarSelectionSettings::enabled` flag and updates the
 /// button label to "Planar ON" / "Planar OFF".
 pub(crate) fn planar_selection_toggle_system(
-    mut planar:  ResMut<PlanarSelectionSettings>,
+    mut planar: ResMut<PlanarSelectionSettings>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &Children),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &Children,
+        ),
         With<PlanarSelectionToggle>,
     >,
-    mut labels:  Query<&mut Text>,
+    mut labels: Query<&mut Text>,
 ) {
     for (interaction, mut bg, mut border, children) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
@@ -2550,7 +2759,11 @@ pub(crate) fn planar_selection_toggle_system(
 
         for &child in children {
             if let Ok(mut text) = labels.get_mut(child) {
-                **text = if planar.enabled { "Planar  ON".to_string() } else { "Planar OFF".to_string() };
+                **text = if planar.enabled {
+                    "Planar  ON".to_string()
+                } else {
+                    "Planar OFF".to_string()
+                };
             }
         }
     }
@@ -2566,11 +2779,11 @@ pub(crate) fn planar_selection_toggle_system(
 /// (respecting Ctrl/Shift to add another group, or Alt to remove this one),
 /// so there's no separate click-time seed to track here.
 pub(crate) fn update_hover_preview_group(
-    hover:        Res<HoverResult>,
-    planar:       Res<PlanarSelectionSettings>,
-    model:        Option<Res<FemModel>>,
+    hover: Res<HoverResult>,
+    planar: Res<PlanarSelectionSettings>,
+    model: Option<Res<FemModel>>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
-    mut preview:  ResMut<fem_core::HoverPreviewTargets>,
+    mut preview: ResMut<fem_core::HoverPreviewTargets>,
 ) {
     let new_targets: Vec<fem_core::FemEntityId> = match hover.target {
         None => Vec::new(),
@@ -2578,7 +2791,8 @@ pub(crate) fn update_hover_preview_group(
         Some(target) if !planar.enabled => vec![target],
 
         Some(target) => {
-            let threshold = slider_query.iter()
+            let threshold = slider_query
+                .iter()
                 .find(|s| s.id == SliderId::PlanarAngle)
                 .map(|s| s.value)
                 .unwrap_or(planar.angle_deg);
@@ -2598,18 +2812,26 @@ pub(crate) fn update_hover_preview_group(
                     // seed's own kind — never `Face`. `expand_coplanar_from_element`
                     // returns `faces` only as an internal detail of how it
                     // computed the group (it walks by face, since that's
-                    // where normals live); rendering already resolves an
-                    // `Element` target to one of its own boundary faces via
-                    // `find_boundary_face_for_target`, so there was never a
-                    // need to swap the *committed* target's kind to `Face`
-                    // for display purposes. Doing so was a real bug: in
-                    // Element selection mode, it silently mixed `Face`
-                    // targets into what should be a pure `Element`
-                    // selection, corrupting anything downstream that
-                    // switches on target kind (element-group export,
-                    // DLOAD/BC element counts, ...).
-                    let (_, elements) = fem_core::expand_coplanar_from_element(mesh, eid, threshold);
-                    elements.into_iter().map(fem_core::FemEntityId::Element).collect()
+                    // where normals live). The renderer draws the complete
+                    // geometry of every resulting element, while Face mode
+                    // draws only the surface patch. Keeping the committed
+                    // target kind pure is also required by element-group
+                    // export and element-based setup operations.
+                    let seed_face = hover.surface_face.filter(|face_id| {
+                        mesh.cached_boundary_faces()
+                            .iter()
+                            .any(|face| face.id == *face_id && face.element == Some(eid))
+                    });
+                    let (_, elements) = match seed_face {
+                        Some(face_id) => {
+                            fem_core::expand_coplanar_from_face(mesh, face_id, threshold)
+                        }
+                        None => fem_core::expand_coplanar_from_element(mesh, eid, threshold),
+                    };
+                    elements
+                        .into_iter()
+                        .map(fem_core::FemEntityId::Element)
+                        .collect()
                 }
                 other => vec![other],
             }
@@ -2623,6 +2845,34 @@ pub(crate) fn update_hover_preview_group(
     }
 }
 
+/// Explains the intentionally different meaning of Planar selection for
+/// Face and Element filters at the point of use.
+pub(crate) fn update_planar_selection_hint(
+    filter: Res<SelectionFilter>,
+    planar: Res<PlanarSelectionSettings>,
+    mut query: Query<&mut Text, With<PlanarSelectionHint>>,
+) {
+    if !filter.is_changed() && !planar.is_changed() {
+        return;
+    }
+
+    let Ok(mut text) = query.single_mut() else {
+        return;
+    };
+
+    **text = match (filter.level, planar.enabled) {
+        (SelectionLevel::Face, true) => "Face Planar = connected surface patch",
+        (SelectionLevel::Element, true) => {
+            "Element Planar = elements behind face patch"
+        }
+        (SelectionLevel::Face, false) => "Face = one boundary surface face",
+        (SelectionLevel::Element, false) => "Element = one whole FEM element",
+        (_, true) => "Planar ON applies to Face and Element",
+        (_, false) => "Face = surface  |  Element = whole element",
+    }
+    .to_string();
+}
+
 /// Updates the `SelectionInfoText` every frame with:
 ///   "37 nodes selected  ·  Hover: Node 412 (x=12.3, y=0.0, z=-5.1)"
 ///
@@ -2630,34 +2880,55 @@ pub(crate) fn update_hover_preview_group(
 /// pre-process workflow: a person must know *what is selected* before
 /// clicking a boundary-condition or load preset.
 pub(crate) fn update_selection_info_text(
-    selection:  Res<SelectionState>,
-    hover:      Res<HoverResult>,
-    model:      Option<Res<FemModel>>,
-    mut query:  Query<&mut Text, With<SelectionInfoText>>,
+    selection: Res<SelectionState>,
+    hover: Res<HoverResult>,
+    model: Option<Res<FemModel>>,
+    mut query: Query<&mut Text, With<SelectionInfoText>>,
 ) {
-    let Ok(mut text) = query.single_mut() else { return; };
+    let Ok(mut text) = query.single_mut() else {
+        return;
+    };
 
     // Count selected entities by type.
-    let node_count = selection.targets.iter().filter(|t| matches!(t, fem_core::FemEntityId::Node(_))).count();
-    let elem_count = selection.targets.iter().filter(|t| matches!(t, fem_core::FemEntityId::Element(_))).count();
+    let node_count = selection
+        .targets
+        .iter()
+        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .count();
+    let elem_count = selection
+        .targets
+        .iter()
+        .filter(|t| matches!(t, fem_core::FemEntityId::Element(_)))
+        .count();
 
     let sel_part = match (node_count, elem_count) {
         (0, 0) => "Nothing selected".to_string(),
         (n, 0) => format!("{n} node{} selected", if n == 1 { "" } else { "s" }),
         (0, e) => format!("{e} element{} selected", if e == 1 { "" } else { "s" }),
-        (n, e) => format!("{n} node{}, {e} elem{} selected",
-            if n==1{""} else {"s"}, if e==1{""} else {"s"}),
+        (n, e) => format!(
+            "{n} node{}, {e} elem{} selected",
+            if n == 1 { "" } else { "s" },
+            if e == 1 { "" } else { "s" }
+        ),
     };
 
     // Hover info: show node XYZ when hovering a node.
-    let hover_part = hover.target.and_then(|target| {
-        let fem_core::FemEntityId::Node(node_id) = target else { return None; };
-        model.as_deref()?.meshes.iter().find_map(|mesh| {
-            mesh.node_position(node_id).map(|pos| {
-                format!("  |  Node {} ({:.3}, {:.3}, {:.3})", node_id.0, pos.x, pos.y, pos.z)
+    let hover_part = hover
+        .target
+        .and_then(|target| {
+            let fem_core::FemEntityId::Node(node_id) = target else {
+                return None;
+            };
+            model.as_deref()?.meshes.iter().find_map(|mesh| {
+                mesh.node_position(node_id).map(|pos| {
+                    format!(
+                        "  |  Node {} ({:.3}, {:.3}, {:.3})",
+                        node_id.0, pos.x, pos.y, pos.z
+                    )
+                })
             })
         })
-    }).unwrap_or_default();
+        .unwrap_or_default();
 
     **text = format!("{sel_part}{hover_part}");
 }
@@ -2666,13 +2937,17 @@ pub(crate) fn update_selection_info_text(
 /// current selected-node count, e.g. "Fix XYZ (37)".
 /// When 0 nodes are selected, the button is dimmed.
 pub(crate) fn update_constraint_button_labels(
-    selection:  Res<SelectionState>,
-    buttons:    Query<(&ConstraintPresetButton, &Children), Without<ConstraintPresetLabel>>,
+    selection: Res<SelectionState>,
+    buttons: Query<(&ConstraintPresetButton, &Children), Without<ConstraintPresetLabel>>,
     mut labels: Query<&mut Text, With<ConstraintPresetLabel>>,
 ) {
-    if !selection.is_changed() { return; }
+    if !selection.is_changed() {
+        return;
+    }
 
-    let n = selection.targets.iter()
+    let n = selection
+        .targets
+        .iter()
         .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
         .count();
 
@@ -2691,29 +2966,42 @@ pub(crate) fn update_constraint_button_labels(
 
 /// Updates the "Apply Load" button label with the node count.
 pub(crate) fn update_apply_load_label(
-    selection:    Res<SelectionState>,
+    selection: Res<SelectionState>,
     selected_dir: Res<SelectedLoadDirection>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
-    mut labels:   Query<&mut Text, With<ApplyLoadLabel>>,
+    mut labels: Query<&mut Text, With<ApplyLoadLabel>>,
 ) {
-    if !selection.is_changed() && !selected_dir.is_changed() { return; }
+    if !selection.is_changed() && !selected_dir.is_changed() {
+        return;
+    }
 
-    let Ok(mut text) = labels.single_mut() else { return; };
+    let Ok(mut text) = labels.single_mut() else {
+        return;
+    };
 
-    let n = selection.targets.iter()
+    let n = selection
+        .targets
+        .iter()
         .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
         .count();
 
-    let mag = slider_query.iter()
+    let mag = slider_query
+        .iter()
         .find(|s| s.id == SliderId::LoadMagnitude)
         .map(|s| s.value)
         .unwrap_or(100.0);
 
-    let dir_label = selected_dir.0.map(|(dof, sign)| {
-        let axis = ["?","X","Y","Z"].get(dof as usize).copied().unwrap_or("?");
-        let sign_char = if sign >= 0.0 { "+" } else { "-" };
-        format!(" {sign_char}{axis} {mag:.0}")
-    }).unwrap_or_else(|| " (pick direction)".to_string());
+    let dir_label = selected_dir
+        .0
+        .map(|(dof, sign)| {
+            let axis = ["?", "X", "Y", "Z"]
+                .get(dof as usize)
+                .copied()
+                .unwrap_or("?");
+            let sign_char = if sign >= 0.0 { "+" } else { "-" };
+            format!(" {sign_char}{axis} {mag:.0}")
+        })
+        .unwrap_or_else(|| " (pick direction)".to_string());
 
     **text = if n > 0 {
         format!("Apply Load{dir_label}  ({n} nodes)")
@@ -2724,11 +3012,8 @@ pub(crate) fn update_apply_load_label(
 
 /// Clears all boundary conditions and nodal loads at once.
 pub(crate) fn clear_all_bc_loads_button_system(
-    mut setup:   ResMut<fem_core::AnalysisSetup>,
-    mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor),
-        With<ClearAllBcLoadsButton>,
-    >,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
+    mut buttons: Query<(Ref<Interaction>, &mut BackgroundColor), With<ClearAllBcLoadsButton>>,
 ) {
     for (interaction, mut bg) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
@@ -2739,10 +3024,8 @@ pub(crate) fn clear_all_bc_loads_button_system(
         }
 
         *bg = BackgroundColor(match *interaction {
-            Interaction::Pressed | Interaction::Hovered =>
-                Color::srgba(0.60, 0.15, 0.15, 0.95),
-            Interaction::None =>
-                Color::srgba(0.40, 0.12, 0.12, 0.80),
+            Interaction::Pressed | Interaction::Hovered => Color::srgba(0.60, 0.15, 0.15, 0.95),
+            Interaction::None => Color::srgba(0.40, 0.12, 0.12, 0.80),
         });
     }
 }
@@ -2752,23 +3035,48 @@ pub(crate) fn constraint_preset_button_system(
     model: Option<Res<FemModel>>,
     selection: Res<SelectionState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &ConstraintPresetButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &ConstraintPresetButton,
+        ),
         With<ConstraintPresetButton>,
     >,
 ) {
-    let Some(model) = model else { return; };
+    let Some(model) = model else {
+        return;
+    };
 
     for (interaction, mut bg, mut border, preset) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let nodes: Vec<fem_core::NodeId> = selection.targets.iter().filter_map(|target| {
-                if let fem_core::FemEntityId::Node(id) = target { Some(*id) } else { None }
-            }).collect();
+            let nodes: Vec<fem_core::NodeId> = selection
+                .targets
+                .iter()
+                .filter_map(|target| {
+                    if let fem_core::FemEntityId::Node(id) = target {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-            if nodes.is_empty() { continue; }
+            if nodes.is_empty() {
+                continue;
+            }
 
-            let mesh_index = model.meshes.iter().enumerate().find_map(|(i, mesh)| {
-                nodes.iter().all(|&node| mesh.node_position(node).is_some()).then_some(i)
-            }).unwrap_or(0);
+            let mesh_index = model
+                .meshes
+                .iter()
+                .enumerate()
+                .find_map(|(i, mesh)| {
+                    nodes
+                        .iter()
+                        .all(|&node| mesh.node_position(node).is_some())
+                        .then_some(i)
+                })
+                .unwrap_or(0);
 
             // Compute the name *before* the mutable push — Rust cannot hold
             // an immutable borrow (for the name lookup) and a mutable borrow
@@ -2803,7 +3111,12 @@ pub(crate) fn constraint_preset_button_system(
 pub(crate) fn load_direction_button_system(
     mut selected: ResMut<SelectedLoadDirection>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &LoadDirectionButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &LoadDirectionButton,
+        ),
         With<LoadDirectionButton>,
     >,
 ) {
@@ -2843,26 +3156,49 @@ pub(crate) fn apply_load_button_system(
         With<ApplyLoadButton>,
     >,
 ) {
-    let Some(model) = model else { return; };
+    let Some(model) = model else {
+        return;
+    };
 
-    let magnitude = slider_query.iter()
+    let magnitude = slider_query
+        .iter()
         .find(|s| s.id == SliderId::LoadMagnitude)
         .map(|s| s.value)
         .unwrap_or(100.0);
 
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let Some((dof, sign)) = selected_dir.0 else { continue; };
+            let Some((dof, sign)) = selected_dir.0 else {
+                continue;
+            };
 
-            let nodes: Vec<fem_core::NodeId> = selection.targets.iter().filter_map(|target| {
-                if let fem_core::FemEntityId::Node(id) = target { Some(*id) } else { None }
-            }).collect();
+            let nodes: Vec<fem_core::NodeId> = selection
+                .targets
+                .iter()
+                .filter_map(|target| {
+                    if let fem_core::FemEntityId::Node(id) = target {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-            if nodes.is_empty() { continue; }
+            if nodes.is_empty() {
+                continue;
+            }
 
-            let mesh_index = model.meshes.iter().enumerate().find_map(|(i, mesh)| {
-                nodes.iter().all(|&n| mesh.node_position(n).is_some()).then_some(i)
-            }).unwrap_or(0);
+            let mesh_index = model
+                .meshes
+                .iter()
+                .enumerate()
+                .find_map(|(i, mesh)| {
+                    nodes
+                        .iter()
+                        .all(|&n| mesh.node_position(n).is_some())
+                        .then_some(i)
+                })
+                .unwrap_or(0);
 
             let name = setup.next_auto_name_pub("LOAD");
             let value = magnitude * sign;
@@ -2897,7 +3233,12 @@ pub(crate) fn apply_load_button_system(
 pub(crate) fn dload_kind_button_system(
     mut selected: ResMut<SelectedDloadKind>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &DloadKindButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &DloadKindButton,
+        ),
         With<DloadKindButton>,
     >,
 ) {
@@ -2929,9 +3270,17 @@ fn selected_elements_from_faces_or_elements(
     selection: &SelectionState,
     model: &FemModel,
 ) -> Vec<fem_core::ElementId> {
-    let face_ids: Vec<fem_core::FaceId> = selection.targets.iter().filter_map(|t| {
-        if let fem_core::FemEntityId::Face(id) = t { Some(*id) } else { None }
-    }).collect();
+    let face_ids: Vec<fem_core::FaceId> = selection
+        .targets
+        .iter()
+        .filter_map(|t| {
+            if let fem_core::FemEntityId::Face(id) = t {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     if !face_ids.is_empty() {
         let mut elements = Vec::new();
@@ -2939,7 +3288,9 @@ fn selected_elements_from_faces_or_elements(
             for face in mesh.cached_boundary_faces() {
                 if face_ids.contains(&face.id) {
                     if let Some(eid) = face.element {
-                        if !elements.contains(&eid) { elements.push(eid); }
+                        if !elements.contains(&eid) {
+                            elements.push(eid);
+                        }
                     }
                 }
             }
@@ -2948,9 +3299,17 @@ fn selected_elements_from_faces_or_elements(
     }
 
     // Fallback: directly-selected elements.
-    selection.targets.iter().filter_map(|t| {
-        if let fem_core::FemEntityId::Element(id) = t { Some(*id) } else { None }
-    }).collect()
+    selection
+        .targets
+        .iter()
+        .filter_map(|t| {
+            if let fem_core::FemEntityId::Element(id) = t {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Resolves the current selection to boundary element-faces (element +
@@ -2985,15 +3344,21 @@ fn selected_faces_from_faces_or_elements(
 /// count, mirroring [`update_apply_load_label`]'s feedback pattern.
 pub(crate) fn update_apply_dload_label(
     selection: Res<SelectionState>,
-    model:     Option<Res<FemModel>>,
-    kind:      Res<SelectedDloadKind>,
+    model: Option<Res<FemModel>>,
+    kind: Res<SelectedDloadKind>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut labels: Query<&mut Text, With<ApplyDloadLabel>>,
 ) {
-    if !selection.is_changed() && !kind.is_changed() { return; }
+    if !selection.is_changed() && !kind.is_changed() {
+        return;
+    }
 
-    let Ok(mut text) = labels.single_mut() else { return; };
-    let Some(model) = model.as_deref() else { return; };
+    let Ok(mut text) = labels.single_mut() else {
+        return;
+    };
+    let Some(model) = model.as_deref() else {
+        return;
+    };
 
     // Pressure counts picked *faces* (what actually gets written to the
     // .cnt); gravity counts elements, since it has no face to speak of.
@@ -3008,12 +3373,16 @@ pub(crate) fn update_apply_dload_label(
         ),
     };
 
-    let mag = slider_query.iter()
+    let mag = slider_query
+        .iter()
         .find(|s| s.id == SliderId::DloadMagnitude)
         .map(|s| s.value)
         .unwrap_or(1.0);
 
-    let kind_label = match *kind { SelectedDloadKind::Pressure => "Pressure", SelectedDloadKind::Gravity => "Gravity" };
+    let kind_label = match *kind {
+        SelectedDloadKind::Pressure => "Pressure",
+        SelectedDloadKind::Gravity => "Gravity",
+    };
 
     **text = if n > 0 {
         format!("Apply {kind_label} {mag:.2}  ({n} {unit})")
@@ -3025,19 +3394,22 @@ pub(crate) fn update_apply_dload_label(
 /// Creates a [`fem_core::DistributedLoad`] from the currently selected faces
 /// (resolved to their parent elements) and the configured kind/magnitude.
 pub(crate) fn apply_dload_button_system(
-    mut setup:    ResMut<fem_core::AnalysisSetup>,
-    model:        Option<Res<FemModel>>,
-    selection:    Res<SelectionState>,
-    kind:         Res<SelectedDloadKind>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
+    model: Option<Res<FemModel>>,
+    selection: Res<SelectionState>,
+    kind: Res<SelectedDloadKind>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<ApplyDloadButton>,
     >,
 ) {
-    let Some(model) = model.as_deref() else { return; };
+    let Some(model) = model.as_deref() else {
+        return;
+    };
 
-    let magnitude = slider_query.iter()
+    let magnitude = slider_query
+        .iter()
         .find(|s| s.id == SliderId::DloadMagnitude)
         .map(|s| s.value)
         .unwrap_or(1.0);
@@ -3046,18 +3418,20 @@ pub(crate) fn apply_dload_button_system(
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             // Pressure needs which face was picked (P1..P6 in the exported
             // .cnt); gravity is a whole-element body force and has no face.
-            let (dload_kind, target) = match *kind {
+            let (dload_kind, target, direction) = match *kind {
                 SelectedDloadKind::Pressure => (
                     fem_core::DistributedLoadKind::Pressure,
-                    fem_core::DistributedLoadTarget::Faces(
-                        selected_faces_from_faces_or_elements(&selection, model),
-                    ),
+                    fem_core::DistributedLoadTarget::Faces(selected_faces_from_faces_or_elements(
+                        &selection, model,
+                    )),
+                    None,
                 ),
                 SelectedDloadKind::Gravity => (
                     fem_core::DistributedLoadKind::Gravity,
                     fem_core::DistributedLoadTarget::Elements(
                         selected_elements_from_faces_or_elements(&selection, model),
                     ),
+                    Some(Vec3::NEG_Y),
                 ),
             };
 
@@ -3070,6 +3444,7 @@ pub(crate) fn apply_dload_button_system(
                     target,
                     kind: dload_kind,
                     value: magnitude,
+                    direction,
                 });
                 setup.set_changed();
             }
@@ -3086,9 +3461,14 @@ pub(crate) fn apply_dload_button_system(
 }
 
 pub(crate) fn analysis_type_button_system(
-    mut setup:   ResMut<fem_core::AnalysisSetup>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &AnalysisTypeButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &AnalysisTypeButton,
+        ),
         With<AnalysisTypeButton>,
     >,
 ) {
@@ -3109,9 +3489,14 @@ pub(crate) fn analysis_type_button_system(
 }
 
 pub(crate) fn solver_method_button_system(
-    mut setup:   ResMut<fem_core::AnalysisSetup>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &SolverMethodButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &SolverMethodButton,
+        ),
         With<SolverMethodButton>,
     >,
 ) {
@@ -3134,7 +3519,12 @@ pub(crate) fn solver_method_button_system(
 pub(crate) fn material_preset_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &MaterialPresetButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &MaterialPresetButton,
+        ),
         With<MaterialPresetButton>,
     >,
 ) {
@@ -3244,40 +3634,52 @@ fn setup_entry_row(
     delete_entry: DeleteSetupEntry,
     name: &str,
 ) {
-    parent.spawn((
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(6.0),
-            ..default()
-        },
-        Name::new(name.to_string()),
-    )).with_children(|row| {
-        row.spawn((
-            Text::new(label.to_string()),
-            TextFont { font_size: FontSize::Px(10.0), ..default() },
-            TextColor(TEXT_MAIN),
-            Node { flex_grow: 1.0, ..default() },
-        ));
-        row.spawn((
-            Button,
+    parent
+        .spawn((
             Node {
-                width: px(16.0),
-                height: px(16.0),
-                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(px(3.0)),
+                column_gap: px(6.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.55, 0.18, 0.18, 0.85)),
-            delete_entry,
-            Name::new(format!("{name}_DeleteButton")),
-        )).with_child((
-            Text::new("x"),
-            TextFont { font_size: FontSize::Px(9.0), ..default() },
-            TextColor(Color::srgb(0.95, 0.85, 0.85)),
-        ));
-    });
+            Name::new(name.to_string()),
+        ))
+        .with_children(|row| {
+            row.spawn((
+                Text::new(label.to_string()),
+                TextFont {
+                    font_size: FontSize::Px(10.0),
+                    ..default()
+                },
+                TextColor(TEXT_MAIN),
+                Node {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+            ));
+            row.spawn((
+                Button,
+                Node {
+                    width: px(16.0),
+                    height: px(16.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border_radius: BorderRadius::all(px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.55, 0.18, 0.18, 0.85)),
+                delete_entry,
+                Name::new(format!("{name}_DeleteButton")),
+            ))
+            .with_child((
+                Text::new("x"),
+                TextFont {
+                    font_size: FontSize::Px(9.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.95, 0.85, 0.85)),
+            ));
+        });
 }
 
 /// Formats one [`fem_core::FemMaterial`] as `"[Mat] name  E=.. nu=.. rho=.."`,
@@ -3343,7 +3745,10 @@ fn set_list_button(parent: &mut ChildSpawnerCommands, set_button: SetButton, lab
         ))
         .with_child((
             Text::new(label.to_string()),
-            TextFont { font_size: FontSize::Px(10.5), ..default() },
+            TextFont {
+                font_size: FontSize::Px(10.5),
+                ..default()
+            },
             TextColor(TEXT_MAIN),
         ));
 }
@@ -3364,7 +3769,12 @@ pub(crate) fn set_button_system(
     selectable_query: Query<(Entity, &Selectable)>,
     selected_query: Query<Entity, With<Selected>>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &SetButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &SetButton,
+        ),
         With<SetButton>,
     >,
 ) {
@@ -3598,7 +4008,12 @@ fn contact_candidate_summary(state: &ContactCandidateState, model: Option<&FemMo
 
 fn mesh_label(model: Option<&FemModel>, mesh_index: usize) -> String {
     model
-        .and_then(|model| model.parts.iter().find(|part| part.mesh_index == mesh_index))
+        .and_then(|model| {
+            model
+                .parts
+                .iter()
+                .find(|part| part.mesh_index == mesh_index)
+        })
         .map(|part| part.name.clone())
         .unwrap_or_else(|| format!("Mesh {mesh_index}"))
 }
@@ -3636,18 +4051,22 @@ pub(crate) fn open_result_button_system(
         let color = match *interaction {
             Interaction::Pressed => BUTTON_PRESSED,
             Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None    => BUTTON_NORMAL,
+            Interaction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
-        *border     = BorderColor::all(PANEL_BORDER);
+        *border = BorderColor::all(PANEL_BORDER);
     }
 
     // Load on a separate branch to avoid holding rfd dialog open
     // while mutating FemResultSet.
     if let Some(path) = pending_path.take() {
-        let Some(model)    = model.as_deref()       else { return; };
-        let Some(fem_mesh) = model.meshes.first()   else { return; };
+        let Some(model) = model.as_deref() else {
+            return;
+        };
+        let Some(fem_mesh) = model.meshes.first() else {
+            return;
+        };
 
         let node_ids: Vec<fem_core::NodeId> = fem_mesh.nodes.iter().map(|n| n.id).collect();
 
@@ -3663,23 +4082,28 @@ pub(crate) fn open_result_button_system(
         }
 
         let loaded_steps: Vec<fem_core::StepResult> = match ext.as_str() {
-            "frd" => {
-                match hecmw::load_frd_file(&path, &node_ids) {
-                    Ok(steps) => steps,
-                    Err(err)  => { bevy::log::warn!("FRD load failed: {err}"); return; }
+            "frd" => match hecmw::load_frd_file(&path, &node_ids) {
+                Ok(steps) => steps,
+                Err(err) => {
+                    bevy::log::warn!("FRD load failed: {err}");
+                    return;
                 }
-            }
-            "vtu" | "pvtu" => {
-                match hecmw::load_vtu_file(&path, &node_ids) {
-                    Ok(step)  => vec![step],
-                    Err(err)  => { bevy::log::warn!("VTU load failed: {err}"); return; }
+            },
+            "vtu" | "pvtu" => match hecmw::load_vtu_file(&path, &node_ids) {
+                Ok(step) => vec![step],
+                Err(err) => {
+                    bevy::log::warn!("VTU load failed: {err}");
+                    return;
                 }
-            }
+            },
             _ => {
                 // .res.0.N — auto-detect series siblings and load all steps.
                 match hecmw::load_series(&path, &node_ids) {
                     Ok(steps) => steps,
-                    Err(err)  => { bevy::log::warn!("Result series load failed: {err}"); return; }
+                    Err(err) => {
+                        bevy::log::warn!("Result series load failed: {err}");
+                        return;
+                    }
                 }
             }
         };
@@ -3703,16 +4127,19 @@ pub(crate) fn open_result_button_system(
                 .unwrap_or(false);
 
             settings.contour = Some(ContourSettings {
-                mesh_index:          active.mesh_index,
-                step_index:          active.step_index,
-                field_name:          active.field_name.clone(),
-                show_deformation:    has_disp,
-                displacement_field:  "Displacement".to_string(),
-                deformation_scale:   1.0,
+                mesh_index: active.mesh_index,
+                step_index: active.step_index,
+                field_name: active.field_name.clone(),
+                show_deformation: has_disp,
+                displacement_field: "Displacement".to_string(),
+                deformation_scale: 1.0,
             });
         }
 
-        bevy::log::info!("Loaded {step_count} result step(s) from {:?}", path.file_name());
+        bevy::log::info!(
+            "Loaded {step_count} result step(s) from {:?}",
+            path.file_name()
+        );
         // A newly loaded result is immediately visible without another
         // navigation click.
         *page = SidebarPage::Results;
@@ -3729,10 +4156,10 @@ pub(crate) fn open_result_button_system(
 /// one click — so a person with an existing FrontISTR job folder can start
 /// working in under two seconds.
 pub(crate) fn open_project_button_system(
-    mut request:        ResMut<MeshLoadRequest>,
-    mut load_status:    ResMut<MeshLoadStatus>,
-    mut pending_cnt:    ResMut<fem_core::PendingCntLoad>,
-    version:            Res<FemModelVersion>,
+    mut request: ResMut<MeshLoadRequest>,
+    mut load_status: ResMut<MeshLoadStatus>,
+    mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
+    version: Res<FemModelVersion>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenProjectButton>,
@@ -3780,7 +4207,7 @@ pub(crate) fn open_project_button_system(
         let color = match *interaction {
             Interaction::Pressed => Color::srgb(0.12, 0.44, 0.22),
             Interaction::Hovered => Color::srgb(0.14, 0.52, 0.26),
-            Interaction::None    => Color::srgb(0.10, 0.30, 0.18),
+            Interaction::None => Color::srgb(0.10, 0.30, 0.18),
         };
 
         *bg = BackgroundColor(color);
@@ -3793,18 +4220,24 @@ pub(crate) fn open_project_button_system(
 /// so a mesh that finishes loading this same frame is picked up on the very
 /// next frame rather than waiting an extra one.
 pub(crate) fn apply_pending_cnt_system(
-    model:           Option<Res<FemModel>>,
-    version:         Res<FemModelVersion>,
+    model: Option<Res<FemModel>>,
+    version: Res<FemModelVersion>,
     mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
-    mut setup:       ResMut<fem_core::AnalysisSetup>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
 ) {
     if pending_cnt.path.is_none() {
         return;
     }
 
-    let Some((path, mesh_index)) = pending_cnt.take_if_ready(version.value) else { return; };
-    let Some(model) = model.as_deref() else { return; };
-    let Some(mesh) = model.meshes.get(mesh_index) else { return; };
+    let Some((path, mesh_index)) = pending_cnt.take_if_ready(version.value) else {
+        return;
+    };
+    let Some(model) = model.as_deref() else {
+        return;
+    };
+    let Some(mesh) = model.meshes.get(mesh_index) else {
+        return;
+    };
 
     match hecmw::load_cnt_file(&path, mesh, mesh_index) {
         Ok(data) => {
@@ -3819,11 +4252,7 @@ pub(crate) fn apply_pending_cnt_system(
                 data.materials.len(),
                 data.sections.len(),
             );
-            setup.boundary_conditions.extend(data.boundary_conditions);
-            setup.nodal_loads.extend(data.nodal_loads);
-            setup.distributed_loads.extend(data.distributed_loads);
-            setup.materials.extend(data.materials);
-            setup.sections.extend(data.sections);
+            data.merge_into(&mut setup);
             setup.set_changed();
             bevy::log::info!(
                 "Loaded analysis setup from {:?}: {} BCs / {} constrained nodes, {} nodal loads, {} distributed loads, {} materials, {} sections",
@@ -3848,8 +4277,8 @@ pub(crate) fn apply_pending_cnt_system(
 /// Uses `ResMut<FemModel>` so that Bevy's change detection fires and
 /// [`rebuild_sets_list`] rebuilds the SETS panel automatically.
 pub(crate) fn make_node_group_button_system(
-    mut model:     ResMut<FemModel>,
-    selection:     Res<SelectionState>,
+    mut model: ResMut<FemModel>,
+    selection: Res<SelectionState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<MakeNodeGroupButton>,
@@ -3857,9 +4286,17 @@ pub(crate) fn make_node_group_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let nodes: Vec<fem_core::NodeId> = selection.targets.iter().filter_map(|t| {
-                if let fem_core::FemEntityId::Node(id) = t { Some(*id) } else { None }
-            }).collect();
+            let nodes: Vec<fem_core::NodeId> = selection
+                .targets
+                .iter()
+                .filter_map(|t| {
+                    if let fem_core::FemEntityId::Node(id) = t {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             if !nodes.is_empty() {
                 let mesh = model.meshes.first_mut().unwrap();
@@ -3882,8 +4319,8 @@ pub(crate) fn make_node_group_button_system(
 /// Saves the currently selected elements as a new [`fem_core::FemElementSet`]
 /// (EGRP) named `EGRP1`, `EGRP2`, … .
 pub(crate) fn make_element_group_button_system(
-    mut model:     ResMut<FemModel>,
-    selection:     Res<SelectionState>,
+    mut model: ResMut<FemModel>,
+    selection: Res<SelectionState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<MakeElementGroupButton>,
@@ -3891,15 +4328,24 @@ pub(crate) fn make_element_group_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let elements: Vec<fem_core::ElementId> = selection.targets.iter().filter_map(|t| {
-                if let fem_core::FemEntityId::Element(id) = t { Some(*id) } else { None }
-            }).collect();
+            let elements: Vec<fem_core::ElementId> = selection
+                .targets
+                .iter()
+                .filter_map(|t| {
+                    if let fem_core::FemEntityId::Element(id) = t {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             if !elements.is_empty() {
                 let mesh = model.meshes.first_mut().unwrap();
                 let n = mesh.element_sets.len() + 1;
                 let name = format!("EGRP{n}");
-                mesh.element_sets.push(fem_core::FemElementSet { name, elements });
+                mesh.element_sets
+                    .push(fem_core::FemElementSet { name, elements });
             }
         }
 
@@ -3918,9 +4364,14 @@ pub(crate) fn make_element_group_button_system(
 /// Toggles the active section type when a [Solid]/[Shell]/[Beam] button
 /// is clicked.
 pub(crate) fn section_type_button_system(
-    mut selected:  ResMut<SelectedSectionType>,
+    mut selected: ResMut<SelectedSectionType>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &SectionTypeButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &SectionTypeButton,
+        ),
         With<SectionTypeButton>,
     >,
 ) {
@@ -3943,9 +4394,14 @@ pub(crate) fn section_type_button_system(
 
 /// Selects an EGRP for the section definition panel.
 pub(crate) fn egrp_select_button_system(
-    mut selected:  ResMut<SelectedEgrp>,
+    mut selected: ResMut<SelectedEgrp>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &EgrpSelectButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &EgrpSelectButton,
+        ),
         With<EgrpSelectButton>,
     >,
 ) {
@@ -3968,9 +4424,14 @@ pub(crate) fn egrp_select_button_system(
 
 /// Selects a material for the section definition panel.
 pub(crate) fn material_select_button_system(
-    mut selected:  ResMut<SelectedMaterialForSection>,
+    mut selected: ResMut<SelectedMaterialForSection>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &MaterialSelectButton),
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &MaterialSelectButton,
+        ),
         With<MaterialSelectButton>,
     >,
 ) {
@@ -3993,11 +4454,11 @@ pub(crate) fn material_select_button_system(
 
 /// Applies the configured section to [`fem_core::AnalysisSetup`].
 pub(crate) fn add_section_button_system(
-    mut setup:        ResMut<fem_core::AnalysisSetup>,
-    section_type:     Res<SelectedSectionType>,
-    egrp:             Res<SelectedEgrp>,
-    material_sel:     Res<SelectedMaterialForSection>,
-    slider_query:     Query<&SliderState, With<SliderTrack>>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
+    section_type: Res<SelectedSectionType>,
+    egrp: Res<SelectedEgrp>,
+    material_sel: Res<SelectedMaterialForSection>,
+    slider_query: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<AddSectionButton>,
@@ -4005,9 +4466,12 @@ pub(crate) fn add_section_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let Some(mat_name) = &material_sel.0 else { continue; };
+            let Some(mat_name) = &material_sel.0 else {
+                continue;
+            };
 
-            let thickness = slider_query.iter()
+            let thickness = slider_query
+                .iter()
                 .find(|s| s.id == SliderId::SectionThickness)
                 .map(|s| s.value)
                 .unwrap_or(2.0);
@@ -4015,7 +4479,7 @@ pub(crate) fn add_section_button_system(
             let kind = match *section_type {
                 SelectedSectionType::Solid => fem_core::SectionKind::Solid,
                 SelectedSectionType::Shell => fem_core::SectionKind::Shell { thickness },
-                SelectedSectionType::Beam  => fem_core::SectionKind::Beam  { area: thickness },
+                SelectedSectionType::Beam => fem_core::SectionKind::Beam { area: thickness },
             };
 
             setup.add_section(0, mat_name.clone(), egrp.0.clone(), kind);
@@ -4034,14 +4498,14 @@ pub(crate) fn add_section_button_system(
 /// Rebuilds the dynamic EGRP and material selector rows in the section
 /// definition panel whenever the model or setup changes.
 pub(crate) fn rebuild_section_def_panel(
-    mut commands:  Commands,
-    model:         Option<Res<FemModel>>,
-    setup:         Res<fem_core::AnalysisSetup>,
-    version:       Res<FemModelVersion>,
-    mut last_ver:  Local<Option<u64>>,
-    egrp_row_q:    Query<Entity, With<SectionDefEgrpRow>>,
-    mat_row_q:     Query<Entity, With<SectionDefMatRow>>,
-    children_q:    Query<&Children>,
+    mut commands: Commands,
+    model: Option<Res<FemModel>>,
+    setup: Res<fem_core::AnalysisSetup>,
+    version: Res<FemModelVersion>,
+    mut last_ver: Local<Option<u64>>,
+    egrp_row_q: Query<Entity, With<SectionDefEgrpRow>>,
+    mat_row_q: Query<Entity, With<SectionDefMatRow>>,
+    children_q: Query<&Children>,
 ) {
     let ver_changed = *last_ver != Some(version.value);
     *last_ver = Some(version.value);
@@ -4053,18 +4517,34 @@ pub(crate) fn rebuild_section_def_panel(
     // ── EGRP buttons ──
     if let Ok(egrp_row) = egrp_row_q.single() {
         if let Ok(children) = children_q.get(egrp_row) {
-            for &c in children { commands.entity(c).despawn(); }
+            for &c in children {
+                commands.entity(c).despawn();
+            }
         }
 
         commands.entity(egrp_row).with_children(|row| {
             // "ALL" option
             row.spawn((
                 Button,
-                Node { padding: UiRect::axes(px(8.0), px(3.0)), border: UiRect::all(px(1.0)), border_radius: BorderRadius::all(px(4.0)), ..default() },
-                BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
+                Node {
+                    padding: UiRect::axes(px(8.0), px(3.0)),
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::all(PANEL_BORDER),
                 EgrpSelectButton(None),
                 Name::new("Egrp_ALL"),
-            )).with_child((Text::new("ALL"), TextFont { font_size: FontSize::Px(9.0), ..default() }, TextColor(TEXT_MAIN)));
+            ))
+            .with_child((
+                Text::new("ALL"),
+                TextFont {
+                    font_size: FontSize::Px(9.0),
+                    ..default()
+                },
+                TextColor(TEXT_MAIN),
+            ));
 
             if let Some(model) = model.as_deref() {
                 for mesh in &model.meshes {
@@ -4072,11 +4552,25 @@ pub(crate) fn rebuild_section_def_panel(
                         let name = eset.name.clone();
                         row.spawn((
                             Button,
-                            Node { padding: UiRect::axes(px(8.0), px(3.0)), border: UiRect::all(px(1.0)), border_radius: BorderRadius::all(px(4.0)), ..default() },
-                            BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
+                            Node {
+                                padding: UiRect::axes(px(8.0), px(3.0)),
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
                             EgrpSelectButton(Some(name.clone())),
                             Name::new(format!("Egrp_{name}")),
-                        )).with_child((Text::new(name), TextFont { font_size: FontSize::Px(9.0), ..default() }, TextColor(TEXT_MAIN)));
+                        ))
+                        .with_child((
+                            Text::new(name),
+                            TextFont {
+                                font_size: FontSize::Px(9.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
                     }
                 }
             }
@@ -4086,7 +4580,9 @@ pub(crate) fn rebuild_section_def_panel(
     // ── Material buttons ──
     if let Ok(mat_row) = mat_row_q.single() {
         if let Ok(children) = children_q.get(mat_row) {
-            for &c in children { commands.entity(c).despawn(); }
+            for &c in children {
+                commands.entity(c).despawn();
+            }
         }
 
         commands.entity(mat_row).with_children(|row| {
@@ -4094,11 +4590,25 @@ pub(crate) fn rebuild_section_def_panel(
                 let name = mat.name.clone();
                 row.spawn((
                     Button,
-                    Node { padding: UiRect::axes(px(8.0), px(3.0)), border: UiRect::all(px(1.0)), border_radius: BorderRadius::all(px(4.0)), ..default() },
-                    BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
+                    Node {
+                        padding: UiRect::axes(px(8.0), px(3.0)),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
                     MaterialSelectButton(name.clone()),
                     Name::new(format!("MatSel_{name}")),
-                )).with_child((Text::new(name), TextFont { font_size: FontSize::Px(9.0), ..default() }, TextColor(TEXT_MAIN)));
+                ))
+                .with_child((
+                    Text::new(name),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
             }
         });
     }
@@ -4121,7 +4631,9 @@ pub(crate) fn export_button_system(
                 continue;
             };
 
-            let stem = status.last_path.as_deref()
+            let stem = status
+                .last_path
+                .as_deref()
                 .and_then(|p| p.file_stem())
                 .and_then(|s| s.to_str())
                 .unwrap_or("mesh")
@@ -4153,14 +4665,14 @@ pub(crate) fn export_button_system(
                     );
                     set_export_status(&mut status_query, &message);
                 }
-                Err(e)  => set_export_status(&mut status_query, &format!("Error: {e}")),
+                Err(e) => set_export_status(&mut status_query, &format!("Error: {e}")),
             }
         }
 
         let color = match *interaction {
             Interaction::Pressed => Color::srgb(0.12, 0.44, 0.22),
             Interaction::Hovered => Color::srgb(0.14, 0.52, 0.26),
-            Interaction::None    => Color::srgb(0.10, 0.32, 0.18),
+            Interaction::None => Color::srgb(0.10, 0.32, 0.18),
         };
 
         *bg = BackgroundColor(color);
@@ -4207,24 +4719,24 @@ pub(crate) fn open_setup_button_system(
         let color = match *interaction {
             Interaction::Pressed => BUTTON_PRESSED,
             Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None    => BUTTON_NORMAL,
+            Interaction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
-        *border     = BorderColor::all(PANEL_BORDER);
+        *border = BorderColor::all(PANEL_BORDER);
     }
 
     if let Some(path) = pending_path.take() {
-        let Some(model) = model.as_deref() else { return; };
-        let Some(mesh) = model.meshes.first() else { return; };
+        let Some(model) = model.as_deref() else {
+            return;
+        };
+        let Some(mesh) = model.meshes.first() else {
+            return;
+        };
 
         match hecmw::load_cnt_file(&path, mesh, 0) {
             Ok(data) => {
-                setup.boundary_conditions.extend(data.boundary_conditions);
-                setup.nodal_loads.extend(data.nodal_loads);
-                setup.distributed_loads.extend(data.distributed_loads);
-                setup.materials.extend(data.materials);
-                setup.sections.extend(data.sections);
+                data.merge_into(&mut setup);
 
                 // Touch the resource so `is_changed()` consumers (e.g.
                 // `update_analysis_setup_stats_text`) fire even if every
@@ -4350,7 +4862,12 @@ pub(crate) fn update_result_stats_text(
             fem_core::ResultField::NodeScalar { name, min, max, .. } => {
                 format!("Result: {name}\nMin: {min:.4e}  Max: {max:.4e}")
             }
-            fem_core::ResultField::NodeVector { name, min_mag, max_mag, .. } => {
+            fem_core::ResultField::NodeVector {
+                name,
+                min_mag,
+                max_mag,
+                ..
+            } => {
                 format!("Result: {name} (magnitude)\nMin: {min_mag:.4e}  Max: {max_mag:.4e}")
             }
             fem_core::ResultField::ElementScalar { name, min, max, .. } => {
@@ -4375,29 +4892,49 @@ pub(crate) fn update_result_stats_text(
 // ── animation playback ────────────────────────────────────────────────────────
 
 pub(crate) fn playback_button_system(
-    mut playback:    ResMut<PlaybackState>,
-    results:         Option<Res<FemResultSet>>,
-    mut play_btns:   Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &Children),
-        (With<PlaybackPlayPauseButton>, Without<PlaybackRewindButton>, Without<PlaybackEndButton>),
+    mut playback: ResMut<PlaybackState>,
+    results: Option<Res<FemResultSet>>,
+    mut play_btns: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &Children,
+        ),
+        (
+            With<PlaybackPlayPauseButton>,
+            Without<PlaybackRewindButton>,
+            Without<PlaybackEndButton>,
+        ),
     >,
     mut rewind_btns: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        (With<PlaybackRewindButton>, Without<PlaybackPlayPauseButton>, Without<PlaybackEndButton>),
+        (
+            With<PlaybackRewindButton>,
+            Without<PlaybackPlayPauseButton>,
+            Without<PlaybackEndButton>,
+        ),
     >,
-    mut end_btns:    Query<
+    mut end_btns: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        (With<PlaybackEndButton>, Without<PlaybackPlayPauseButton>, Without<PlaybackRewindButton>),
+        (
+            With<PlaybackEndButton>,
+            Without<PlaybackPlayPauseButton>,
+            Without<PlaybackRewindButton>,
+        ),
     >,
-    mut labels:      Query<&mut Text, With<PlaybackPlayPauseLabel>>,
-    mut sliders:     Query<&mut SliderState, With<SliderTrack>>,
+    mut labels: Query<&mut Text, With<PlaybackPlayPauseLabel>>,
+    mut sliders: Query<&mut SliderState, With<SliderTrack>>,
 ) {
-    let step_count = results.as_deref().map(|r| r.by_mesh.iter().map(|s| s.len()).max().unwrap_or(0)).unwrap_or(0);
+    let step_count = results
+        .as_deref()
+        .map(|r| r.by_mesh.iter().map(|s| s.len()).max().unwrap_or(0))
+        .unwrap_or(0);
 
     for (interaction, mut bg, mut border, children) in &mut play_btns {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             playback.playing = !playback.playing;
-            playback.elapsed  = 0.0;
+            playback.elapsed = 0.0;
         }
         let active = playback.playing;
         let color = match (*interaction, active) {
@@ -4424,10 +4961,17 @@ pub(crate) fn playback_button_system(
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             playback.playing = false;
             for mut s in &mut sliders {
-                if s.id == SliderId::ResultStep { s.value = 0.0; s.clamp_value(); }
+                if s.id == SliderId::ResultStep {
+                    s.value = 0.0;
+                    s.clamp_value();
+                }
             }
         }
-        *bg = BackgroundColor(if *interaction != Interaction::None { BUTTON_HOVERED } else { BUTTON_NORMAL });
+        *bg = BackgroundColor(if *interaction != Interaction::None {
+            BUTTON_HOVERED
+        } else {
+            BUTTON_NORMAL
+        });
         *border = BorderColor::all(PANEL_BORDER);
     }
 
@@ -4436,10 +4980,17 @@ pub(crate) fn playback_button_system(
             playback.playing = false;
             let last = (step_count.saturating_sub(1)) as f32;
             for mut s in &mut sliders {
-                if s.id == SliderId::ResultStep { s.value = last; s.clamp_value(); }
+                if s.id == SliderId::ResultStep {
+                    s.value = last;
+                    s.clamp_value();
+                }
             }
         }
-        *bg = BackgroundColor(if *interaction != Interaction::None { BUTTON_HOVERED } else { BUTTON_NORMAL });
+        *bg = BackgroundColor(if *interaction != Interaction::None {
+            BUTTON_HOVERED
+        } else {
+            BUTTON_NORMAL
+        });
         *border = BorderColor::all(PANEL_BORDER);
     }
 }
@@ -4448,27 +4999,42 @@ pub(crate) fn playback_button_system(
 /// is true, using [`PlaybackState::interval`] as the seconds-per-step.
 /// Wraps back to step 0 when the last step is reached (loop mode).
 pub(crate) fn playback_advance_system(
-    time:           Res<Time>,
-    mut playback:   ResMut<PlaybackState>,
-    results:        Option<Res<FemResultSet>>,
-    mut sliders:    Query<&mut SliderState, With<SliderTrack>>,
+    time: Res<Time>,
+    mut playback: ResMut<PlaybackState>,
+    results: Option<Res<FemResultSet>>,
+    mut sliders: Query<&mut SliderState, With<SliderTrack>>,
 ) {
-    if !playback.playing { return; }
+    if !playback.playing {
+        return;
+    }
 
-    let step_count = results.as_deref().map(|r| r.by_mesh.iter().map(|s| s.len()).max().unwrap_or(0)).unwrap_or(0);
-    if step_count == 0 { playback.playing = false; return; }
+    let step_count = results
+        .as_deref()
+        .map(|r| r.by_mesh.iter().map(|s| s.len()).max().unwrap_or(0))
+        .unwrap_or(0);
+    if step_count == 0 {
+        playback.playing = false;
+        return;
+    }
 
     // Read speed from slider
-    let speed = sliders.iter().find(|s| s.id == SliderId::PlaybackSpeed)
-        .map(|s| s.value).unwrap_or(2.0);
+    let speed = sliders
+        .iter()
+        .find(|s| s.id == SliderId::PlaybackSpeed)
+        .map(|s| s.value)
+        .unwrap_or(2.0);
     playback.interval = 1.0 / speed.max(0.1);
 
     playback.elapsed += time.delta_secs();
-    if playback.elapsed < playback.interval { return; }
+    if playback.elapsed < playback.interval {
+        return;
+    }
     playback.elapsed = 0.0;
 
     for mut s in &mut sliders {
-        if s.id != SliderId::ResultStep { continue; }
+        if s.id != SliderId::ResultStep {
+            continue;
+        }
         let next = (s.value + 1.0) % step_count as f32;
         s.value = next;
         s.clamp_value();
@@ -4483,13 +5049,13 @@ pub(crate) fn playback_advance_system(
 /// [`fem_core::AnalysisSetup`]; those systems call
 /// [`UndoStack::push(setup.clone())`] *before* making their change.
 pub(crate) fn undo_redo_system(
-    keys:           Res<ButtonInput<KeyCode>>,
-    mut setup:      ResMut<fem_core::AnalysisSetup>,
-    mut stack:      ResMut<UndoStack>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
+    mut stack: ResMut<UndoStack>,
     mut in_progress: ResMut<UndoInProgress>,
 ) {
-    let ctrl  = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    let shift = keys.any_pressed([KeyCode::ShiftLeft,   KeyCode::ShiftRight]);
+    let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
     if ctrl && keys.just_pressed(KeyCode::KeyZ) && !shift {
         if let Some(prev) = stack.undo.pop() {
@@ -4499,9 +5065,7 @@ pub(crate) fn undo_redo_system(
         }
     }
 
-    if ctrl && (keys.just_pressed(KeyCode::KeyY)
-        || (shift && keys.just_pressed(KeyCode::KeyZ)))
-    {
+    if ctrl && (keys.just_pressed(KeyCode::KeyY) || (shift && keys.just_pressed(KeyCode::KeyZ))) {
         if let Some(next) = stack.redo.pop() {
             let current = std::mem::replace(&mut *setup, next);
             stack.undo.push(current);
@@ -4518,10 +5082,10 @@ pub(crate) fn undo_redo_system(
 /// When an undo/redo itself caused the change (`UndoInProgress`), no
 /// snapshot is pushed and the flag is cleared.
 pub(crate) fn push_undo_before_setup_change(
-    setup:           Res<fem_core::AnalysisSetup>,
-    mut stack:       ResMut<UndoStack>,
+    setup: Res<fem_core::AnalysisSetup>,
+    mut stack: ResMut<UndoStack>,
     mut in_progress: ResMut<UndoInProgress>,
-    mut prev:        Local<Option<fem_core::AnalysisSetup>>,
+    mut prev: Local<Option<fem_core::AnalysisSetup>>,
 ) {
     if setup.is_changed() {
         if in_progress.0 {
@@ -4593,7 +5157,7 @@ pub(crate) fn apply_slider_to_results(
     let step_count = results.by_mesh.get(mesh_index).map_or(0, |s| s.len());
 
     // Read slider values.
-    let mut step_value: Option<f32>  = None;
+    let mut step_value: Option<f32> = None;
     let mut scale_value: Option<f32> = None;
 
     for mut state in &mut slider_query {
@@ -4611,8 +5175,11 @@ pub(crate) fn apply_slider_to_results(
                 scale_value = Some(state.value);
             }
             // These sliders are read by dedicated systems; result display doesn't need them.
-            SliderId::LoadMagnitude | SliderId::SectionThickness | SliderId::PlanarAngle
-                | SliderId::DloadMagnitude | SliderId::PlaybackSpeed => {}
+            SliderId::LoadMagnitude
+            | SliderId::SectionThickness
+            | SliderId::PlanarAngle
+            | SliderId::DloadMagnitude
+            | SliderId::PlaybackSpeed => {}
         }
     }
 
@@ -4632,7 +5199,7 @@ pub(crate) fn apply_slider_to_results(
         if let Some(contour) = settings.contour.as_mut() {
             if (contour.deformation_scale - scale).abs() > 1.0e-4 {
                 contour.deformation_scale = scale;
-                contour.step_index        = step_index;
+                contour.step_index = step_index;
             }
         }
     }
@@ -4661,10 +5228,14 @@ fn entity_label(target: FemEntityId, model: Option<&FemModel>) -> String {
         FemEntityId::Edge(id) => format!("Edge {}", id.0),
         FemEntityId::Face(id) => format!("Face {}", id.0),
         FemEntityId::Element(id) => {
-            let type_label = model
-                .and_then(|model| model.meshes.iter().find_map(|mesh| {
-                    mesh.elements.iter().find(|e| e.id == id).map(|e| element_type_label(&e.element_type))
-                }));
+            let type_label = model.and_then(|model| {
+                model.meshes.iter().find_map(|mesh| {
+                    mesh.elements
+                        .iter()
+                        .find(|e| e.id == id)
+                        .map(|e| element_type_label(&e.element_type))
+                })
+            });
 
             match type_label {
                 Some(label) => format!("Element {} ({label})", id.0),
@@ -4733,9 +5304,7 @@ mod sidebar_page_tests {
     use std::path::PathBuf;
 
     use super::{SidebarPage, SidebarPageContent, apply_mesh};
-    use fem_core::{
-        AnalysisSetup, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId,
-    };
+    use fem_core::{AnalysisSetup, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId};
 
     #[test]
     fn analysis_shell_is_limited_to_analysis_pages() {
