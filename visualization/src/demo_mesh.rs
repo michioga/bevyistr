@@ -771,7 +771,7 @@ pub(crate) fn respawn_visuals_on_reload(
     mut hover: ResMut<HoverResult>,
     mut selection: ResMut<SelectionState>,
     mut contact_candidates: ResMut<ContactCandidateState>,
-    mut analysis_setup: ResMut<fem_core::AnalysisSetup>,
+    analysis_setup: Res<fem_core::AnalysisSetup>,
 ) {
     let current = version.value;
 
@@ -808,34 +808,25 @@ pub(crate) fn respawn_visuals_on_reload(
     contact_candidates.candidates.clear();
     contact_candidates.selected = None;
 
-    // Boundary conditions / loads / materials reference node and element
-    // ids from the *previous* mesh, which a reload invalidates wholesale
-    // (ids aren't guaranteed stable across an unrelated file), so this data
-    // must be cleared rather than carried over. A subsequent `.cnt` import
-    // can repopulate it for the new mesh.
-    analysis_setup.clear();
-
     spawn_model_visuals(
         &mut commands, &mut meshes, &mut materials, &model, Some(&analysis_setup),
     );
 }
 
-/// Rebuilds element visuals when [`fem_core::AnalysisSetup`] changes outside
-/// of a mesh reload — typically after loading a `.cnt` file — so shell/beam
-/// elements switch from the generic cuboid approximation to their
-/// shape-specific rendering ([`spawn_shell_element_visual`] /
-/// [`spawn_beam_element_visual`]) once section data becomes available.
+/// Rebuilds element visuals when section assignments change outside of a
+/// mesh reload, so shell/beam elements switch to their shape-specific
+/// rendering once thickness/profile data becomes available.
 ///
-/// Guards against double-spawning on a reload frame: [`respawn_visuals_on_reload`]
-/// already calls [`fem_core::AnalysisSetup::clear`] (which also flips its
-/// change flag) as part of its own full respawn, so this system skips any
-/// frame where [`fem_core::FemModelVersion`] just changed too.
+/// Boundary conditions, loads, materials, and solver settings do not change
+/// element geometry. Ignoring those changes avoids rebuilding a large
+/// aggregate surface after every `.cnt` load.
 pub(crate) fn respawn_elements_on_setup_change(
     mut commands: Commands,
     model: Option<Res<FemModel>>,
     setup: Res<fem_core::AnalysisSetup>,
     version: Res<fem_core::FemModelVersion>,
     mut last_version: Local<Option<u64>>,
+    mut last_sections: Local<Option<Vec<fem_core::Section>>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     visual_query: Query<Entity, With<FemMeshVisual>>,
@@ -843,7 +834,16 @@ pub(crate) fn respawn_elements_on_setup_change(
     let version_changed = *last_version != Some(version.value);
     *last_version = Some(version.value);
 
-    if !setup.is_changed() || setup.is_added() || version_changed {
+    if !setup.is_changed() {
+        return;
+    }
+
+    let sections_changed = last_sections
+        .as_deref()
+        .is_some_and(|previous| previous != setup.sections.as_slice());
+    *last_sections = Some(setup.sections.clone());
+
+    if setup.is_added() || version_changed || !sections_changed {
         return;
     }
 

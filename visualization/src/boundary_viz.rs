@@ -6,8 +6,9 @@
 //! to analysis setup — a `.cnt` file's `!BOUNDARY`/`!CLOAD` blocks are just
 //! numbers until you can see where they land on the model.
 
+use bevy::asset::RenderAssetUsages;
 use bevy::math::primitives::{Cone, Cylinder};
-use bevy::mesh::Mesh3d;
+use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 
@@ -77,12 +78,12 @@ pub fn spawn_boundary_visuals(
         return;
     }
 
-    let scale = model_visual_scale(model);
-    let symbol_size = (scale * 0.02).max(1.0e-3);
+    let symbol_size = boundary_symbol_size(model);
 
     let constraint_material = materials.add(StandardMaterial {
         base_color: CONSTRAINT_COLOR,
         unlit: true,
+        cull_mode: None,
         ..default()
     });
     let load_material = materials.add(StandardMaterial {
@@ -132,7 +133,42 @@ fn spawn_constraint_symbols(
     size: f32,
     material: Handle<StandardMaterial>,
 ) {
-    let cone_mesh = meshes.add(Cone { radius: size * 0.5, height: size });
+    let Some(mesh) = build_constraint_mesh(model, setup, size) else {
+        return;
+    };
+
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(material),
+        Transform::default(),
+        BoundaryVisual,
+        Name::new("Boundary constraint symbols"),
+    ));
+}
+
+/// Builds every translational constraint marker into one low-poly mesh.
+///
+/// A large FrontISTR node group can contain several thousand nodes. Spawning
+/// one Bevy entity per node and constrained axis made opening `conrod` create
+/// more than 21,000 entities just for the red cones. One triangle mesh keeps
+/// the same complete visual coverage while reducing that to a single entity.
+fn build_constraint_mesh(model: &FemModel, setup: &AnalysisSetup, size: f32) -> Option<Mesh> {
+    const CONE_SIDES: usize = 6;
+
+    let estimated_symbols: usize = setup
+        .boundary_conditions
+        .iter()
+        .map(|bc| {
+            let axis_count = (1u8..=3)
+                .filter(|dof| *dof >= bc.dof_start && *dof <= bc.dof_end)
+                .count();
+            bc.nodes.len() * axis_count
+        })
+        .sum();
+
+    let vertices_per_symbol = CONE_SIDES * 6;
+    let mut positions = Vec::with_capacity(estimated_symbols * vertices_per_symbol);
+    let mut normals = Vec::with_capacity(estimated_symbols * vertices_per_symbol);
 
     for bc in &setup.boundary_conditions {
         if !bc.constrains_translation() {
@@ -141,37 +177,112 @@ fn spawn_constraint_symbols(
 
         let Some(mesh) = model.meshes.get(bc.mesh_index) else { continue; };
 
-        // Which translational axes (1=X, 2=Y, 3=Z) fall in [dof_start, dof_end].
-        let axes: Vec<Vec3> = [(1u8, Vec3::X), (2, Vec3::Y), (3, Vec3::Z)]
-            .into_iter()
-            .filter(|(dof, _)| *dof >= bc.dof_start && *dof <= bc.dof_end)
-            .map(|(_, axis)| axis)
-            .collect();
-
         for &node_id in &bc.nodes {
             let Some(position) = mesh.node_position(node_id) else { continue; };
 
-            for axis in &axes {
-                // Cone tip touches the node, base sits one symbol-length
-                // below along the constrained axis (pointing "into" the
-                // node from outside, like a support symbol).
-                let base_center = position - *axis * (size * 0.5);
-                let rotation = Quat::from_rotation_arc(Vec3::Y, -*axis);
+            for (dof, axis) in [(1u8, Vec3::X), (2, Vec3::Y), (3, Vec3::Z)] {
+                if dof < bc.dof_start || dof > bc.dof_end {
+                    continue;
+                }
 
-                commands.spawn((
-                    Mesh3d(cone_mesh.clone()),
-                    MeshMaterial3d(material.clone()),
-                    Transform {
-                        translation: base_center,
-                        rotation,
-                        ..default()
-                    },
-                    BoundaryVisual,
-                    Name::new(format!("BC {} @ node {}", bc.name, node_id.0)),
-                ));
+                append_constraint_cone(
+                    &mut positions,
+                    &mut normals,
+                    position,
+                    axis,
+                    size,
+                    CONE_SIDES,
+                );
             }
         }
     }
+
+    (!positions.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    })
+}
+
+fn append_constraint_cone(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    node_position: Vec3,
+    axis: Vec3,
+    size: f32,
+    sides: usize,
+) {
+    let direction = axis.normalize();
+    let helper = if direction.dot(Vec3::Y).abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let tangent = direction.cross(helper).normalize();
+    let bitangent = direction.cross(tangent).normalize();
+    // Match Bevy's original midpoint-anchored Cone transform: the circular
+    // base is anchored exactly at the constrained node and the tip extends
+    // one symbol length in the negative constrained-axis direction.
+    let base_center = node_position;
+    let tip = node_position - direction * size;
+    let radius = size * 0.5;
+
+    for side in 0..sides {
+        let angle0 = std::f32::consts::TAU * side as f32 / sides as f32;
+        let angle1 = std::f32::consts::TAU * (side + 1) as f32 / sides as f32;
+        let ring0 = base_center + radius * (tangent * angle0.cos() + bitangent * angle0.sin());
+        let ring1 = base_center + radius * (tangent * angle1.cos() + bitangent * angle1.sin());
+
+        append_triangle(positions, normals, tip, ring0, ring1);
+        append_triangle(positions, normals, base_center, ring1, ring0);
+    }
+}
+
+fn append_triangle(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+) {
+    let normal = (b - a).cross(c - a).normalize_or_zero().to_array();
+
+    positions.extend([a.to_array(), b.to_array(), c.to_array()]);
+    normals.extend([normal; 3]);
+}
+
+/// Chooses a glyph size from the local mesh resolution instead of only the
+/// model's overall diagonal. Long, finely meshed parts such as `conrod`
+/// otherwise receive cones several edge lengths wide, which overlap into a
+/// displaced-looking solid annulus.
+fn boundary_symbol_size(model: &FemModel) -> f32 {
+    let model_scale = model_visual_scale(model);
+    let mut edge_lengths: Vec<f32> = model
+        .meshes
+        .iter()
+        .flat_map(|mesh| {
+            mesh.cached_boundary_edges().iter().filter_map(|edge| {
+                let a = mesh.node_position(edge.nodes[0])?;
+                let b = mesh.node_position(edge.nodes[1])?;
+                let length = a.distance(b);
+                (length.is_finite() && length > 1.0e-6).then_some(length)
+            })
+        })
+        .collect();
+
+    if edge_lengths.is_empty() {
+        return (model_scale * 0.02).max(1.0e-3);
+    }
+
+    let middle = edge_lengths.len() / 2;
+    let (_, median, _) = edge_lengths.select_nth_unstable_by(middle, f32::total_cmp);
+
+    (*median * 0.45)
+        .clamp(model_scale * 0.002, model_scale * 0.02)
+        .max(1.0e-3)
 }
 
 /// One arrow (cylinder shaft + cone head) per nodal load, scaled by its
@@ -391,4 +502,58 @@ fn spawn_dload_arrows(
             (fem_core::DistributedLoadKind::Pressure, fem_core::DistributedLoadTarget::Elements(_)) => {}
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fem_core::{BoundaryCondition, FemMesh, FemNode, NodeId};
+
+    #[test]
+    fn constraint_markers_are_combined_into_one_mesh() {
+        let mesh = FemMesh::new(
+            vec![
+                FemNode::new(NodeId(1), Vec3::ZERO),
+                FemNode::new(NodeId(2), Vec3::ONE),
+            ],
+            Vec::new(),
+        );
+        let model = FemModel::single_mesh("test", mesh);
+        let mut setup = AnalysisSetup::default();
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "FIX".to_string(),
+            mesh_index: 0,
+            nodes: vec![NodeId(1), NodeId(2)],
+            ngrp_name: Some("FIX".to_string()),
+            dof_start: 1,
+            dof_end: 3,
+            value: 0.0,
+        });
+
+        let mesh = build_constraint_mesh(&model, &setup, 0.1).unwrap();
+
+        // 2 nodes * 3 axes * 6 cone sides * (side + base) * 3 vertices.
+        assert_eq!(mesh.count_vertices(), 2 * 3 * 6 * 2 * 3);
+    }
+
+    #[test]
+    fn constraint_cone_base_is_anchored_at_the_node() {
+        let mut positions = Vec::new();
+        let mut normals = Vec::new();
+
+        append_constraint_cone(
+            &mut positions,
+            &mut normals,
+            Vec3::ZERO,
+            Vec3::X,
+            2.0,
+            4,
+        );
+
+        // The first side triangle is [tip, base ring 0, base ring 1].
+        assert_eq!(positions[0][0], -2.0);
+        assert_eq!(positions[1][0], 0.0);
+        assert_eq!(positions[2][0], 0.0);
+    }
+
 }

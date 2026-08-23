@@ -21,17 +21,18 @@ use layout::{
     playback_advance_system, playback_button_system, push_undo_before_setup_change,
     rebuild_boundary_loads_list, rebuild_materials_sections_list, rebuild_section_def_panel,
     rebuild_sets_list, render_mode_button_system, section_type_button_system,
-    selection_level_button_system, set_button_system, solver_method_button_system,
+    selection_level_button_system, set_button_system, sidebar_page_button_system,
+    solver_method_button_system,
     spawn_ui, step_keyboard_navigation, toggle_constraints_button_system,
     toggle_loads_button_system, undo_redo_system,
     update_analysis_setup_stats_text, update_apply_dload_label, update_apply_load_label,
     update_constraint_button_labels, update_contact_candidate_text, update_mesh_stats_text,
     update_hover_preview_group,
     update_parts_list_text, update_result_stats_text, update_selection_info_text,
-    update_selection_stats_text, update_ui_pointer_state, update_workflow_visibility,
-    workflow_tab_button_system, PlanarSelectionSettings, PlaybackState, SelectedDloadKind,
+    update_selection_stats_text, update_sidebar_page_visibility, update_ui_pointer_state,
+    PlanarSelectionSettings, PlaybackState, SelectedDloadKind,
     SelectedEgrp, SelectedLoadDirection, SelectedMaterialForSection, SelectedSectionType,
-    UndoInProgress, UndoStack, WorkflowTab,
+    SidebarPage, UndoInProgress, UndoStack,
 };
 
 pub use slider::{SliderConfig, SliderId, SliderState, SliderTrack, SliderThumb, spawn_slider};
@@ -51,7 +52,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::HoverPreviewTargets>();
         app.init_resource::<visualization::VisualizationSettings>();
         app.init_resource::<visualization::BoundaryVisualSettings>();
-        app.init_resource::<WorkflowTab>();
+        app.init_resource::<SidebarPage>();
         app.init_resource::<SelectedLoadDirection>();
         app.init_resource::<SelectedSectionType>();
         app.init_resource::<SelectedEgrp>();
@@ -66,10 +67,10 @@ impl Plugin for UiPlugin {
         // Group 1: pointer, navigation, mesh loading (≤16 systems)
         app.add_systems(Update, (
             update_ui_pointer_state.in_set(InteractionSystems::UiInput),
-            handle_scrollable_list_wheel,
-            handle_panel_wheel,
-            workflow_tab_button_system,
-            update_workflow_visibility.after(workflow_tab_button_system),
+            handle_scrollable_list_wheel.in_set(InteractionSystems::UiInput),
+            handle_panel_wheel.in_set(InteractionSystems::UiInput),
+            sidebar_page_button_system,
+            update_sidebar_page_visibility.after(sidebar_page_button_system),
             open_project_button_system,
             open_mesh_button_system,
             import_mesh_button_system,

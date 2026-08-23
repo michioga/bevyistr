@@ -384,34 +384,61 @@ pub(crate) struct ScrollableList;
 #[derive(Component)]
 pub(crate) struct PanelScrollArea;
 
-/// Which top-level workflow view the panel is currently showing.
+/// Marks a UI region that blocks pointer gestures from reaching the 3-D
+/// viewport. This covers the whole sidebar, including non-button areas.
+#[derive(Component)]
+pub(crate) struct UiInputCapture;
+
+/// The task currently shown in the left sidebar.
 ///
-/// `Pre` groups everything involved in *setting up* a model (sets,
-/// contact pairs, boundary conditions/loads); `Post` groups everything
-/// involved in *reading results* off an already-solved model. FILE / VIEW /
-/// SELECTION stay outside this split since they're needed in both phases.
+/// Keeping one task visible at a time prevents the sidebar from becoming a
+/// single, ever-growing form as FrontISTR features are added.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum WorkflowTab {
+pub(crate) enum SidebarPage {
     #[default]
-    Pre,
-    Post,
+    Model,
+    Contact,
+    Loads,
+    Materials,
+    Solve,
+    Results,
 }
 
-/// Marks the container holding every pre-process section (SETS, CONTACT
-/// SETUP, ANALYSIS SETUP). Hidden when [`WorkflowTab::Post`] is active.
 #[derive(Component)]
-pub(crate) struct PreProcessGroup;
+pub(crate) struct SidebarPageButton {
+    pub page: SidebarPage,
+}
 
-/// Marks the container holding the POST-PROCESS section. Hidden when
-/// [`WorkflowTab::Pre`] is active.
-#[derive(Component)]
-pub(crate) struct PostProcessGroup;
+/// Visibility mask for a sidebar section or subsection.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct SidebarPageContent(u8);
 
-/// One of the two top-level tab buttons; `tab` is which [`WorkflowTab`] it
-/// switches to when clicked.
-#[derive(Component)]
-pub(crate) struct WorkflowTabButton {
-    pub tab: WorkflowTab,
+impl SidebarPageContent {
+    const MODEL: u8 = 1 << 0;
+    const CONTACT: u8 = 1 << 1;
+    const LOADS: u8 = 1 << 2;
+    const MATERIALS: u8 = 1 << 3;
+    const SOLVE: u8 = 1 << 4;
+    const RESULTS: u8 = 1 << 5;
+
+    const fn page(page: SidebarPage) -> Self {
+        Self(match page {
+            SidebarPage::Model => Self::MODEL,
+            SidebarPage::Contact => Self::CONTACT,
+            SidebarPage::Loads => Self::LOADS,
+            SidebarPage::Materials => Self::MATERIALS,
+            SidebarPage::Solve => Self::SOLVE,
+            SidebarPage::Results => Self::RESULTS,
+        })
+    }
+
+    const fn analysis() -> Self {
+        Self(Self::LOADS | Self::MATERIALS | Self::SOLVE)
+    }
+
+    const fn contains(self, page: SidebarPage) -> bool {
+        self.0 & Self::page(page).0 != 0
+    }
 }
 
 /// Which kind of [`fem_core::FemMesh`] set a [`SetButton`] refers to.
@@ -444,10 +471,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 left: px(12.0),
                 top: px(12.0),
-                width: px(296.0),
-                // Clamp the panel to viewport height so it never overflows
-                // the screen.  The inner scroll container handles the rest.
-                max_height: Val::Vh(97.0),
+                width: px(320.0),
+                // A definite height lets the flex child below shrink and
+                // scroll instead of growing the panel beyond the viewport.
+                height: Val::Vh(96.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(0.0),
                 padding: UiRect::all(px(0.0)),
@@ -458,6 +485,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             },
             BackgroundColor(PANEL_BG),
             BorderColor::all(PANEL_BORDER),
+            UiInputCapture,
             Name::new("FemUiPanel"),
         ))
         .with_children(|panel| {
@@ -477,6 +505,11 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             });
             divider(panel);
 
+            // Task navigation stays visible while the active page scrolls.
+            spawn_sidebar_navigation(panel);
+            spawn_selection_level_bar(panel);
+            divider(panel);
+
             // ── Scrollable content area ──────────────────────────────────
             panel.spawn((
                 Node {
@@ -490,6 +523,8 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 Name::new("PanelScrollArea"),
             ))
             .with_children(|panel| {
+
+            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Model), "ModelPage", |panel| {
 
             // ── § File ──────────────────────────────────────────────────
             section(panel, "FILE", |sec| {
@@ -577,7 +612,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         OpenProjectButton,
                         Name::new("OpenProjectButton"),
                     )).with_child((
-                        Text::new("📂 Open Project (hecmw_ctrl.dat)"),
+                        Text::new("Open Project (hecmw_ctrl.dat)"),
                         TextFont { font_size: FontSize::Px(10.5), ..default() },
                         TextColor(Color::srgb(0.75, 0.97, 0.80)),
                     ));
@@ -622,40 +657,6 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
 
             // ── § Selection ─────────────────────────────────────────────
             section(panel, "SELECTION", |sec| {
-                let levels = [
-                    (SelectionLevel::Node,    "Node"),
-                    (SelectionLevel::Edge,    "Edge"),
-                    (SelectionLevel::Face,    "Face"),
-                    (SelectionLevel::Element, "Element"),
-                ];
-                sec.spawn((
-                    Node { flex_direction: FlexDirection::Row, ..default() },
-                )).with_children(|row| {
-                    let n = levels.len();
-                    for (i, (level, label)) in levels.iter().enumerate() {
-                        let (radius, border) = segment_style(i == 0, i == n - 1);
-                        row.spawn((
-                            Button,
-                            Node {
-                                flex_grow: 1.0,
-                                height: px(28.0),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                border,
-                                border_radius: radius,
-                                ..default()
-                            },
-                            BackgroundColor(BUTTON_NORMAL),
-                            BorderColor::all(PANEL_BORDER),
-                            SelectionLevelButton { level: *level },
-                            Name::new(format!("SelectionLevel_{label}")),
-                        )).with_child((
-                            Text::new(*label),
-                            TextFont { font_size: FontSize::Px(11.5), ..default() },
-                            TextColor(TEXT_MAIN),
-                        ));
-                    }
-                });
                 sec.spawn((
                     Text::new("Filter: Element   Selected: 0   Hover: none"),
                     TextFont { font_size: FontSize::Px(11.5), ..default() },
@@ -665,7 +666,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 hint_text(sec, "Click = select   Ctrl/Shift+Click = add   Alt+Click = remove   Drag = box select");
                 // Dynamic info: count + hover coords — updated every frame.
                 sec.spawn((
-                    Text::new("Selected: 0  |  Hover: —"),
+                    Text::new("Selected: 0  |  Hover: -"),
                     TextFont { font_size: FontSize::Px(11.0), ..default() },
                     TextColor(Color::srgba(0.50, 0.78, 0.95, 0.90)),
                     SelectionInfoText,
@@ -704,10 +705,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 spawn_slider(sec, SliderConfig {
                     width: 272.0,
                     min: 0.0, max: 90.0, value: 15.0,
-                    label: "Angle threshold (°)",
+                    label: "Angle threshold (deg)",
                     id: SliderId::PlanarAngle,
                 });
-                hint_text(sec, "Click face/element → auto-selects coplanar neighbours");
+                hint_text(sec, "Click face/element to select coplanar neighbours");
 
                 sec.spawn((
                     Node { flex_direction: FlexDirection::Row, column_gap: px(6.0), ..default() },
@@ -719,31 +720,9 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             });
             divider(panel);
 
-            // ── Workflow tabs: Pre-Process / Post-Process ──────────────────
-            panel.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    padding: UiRect::axes(px(12.0), px(8.0)),
-                    ..default()
-                },
-                Name::new("WorkflowTabs"),
-            )).with_children(|row| {
-                workflow_tab_button(row, WorkflowTab::Pre, "Pre-Process", true, false);
-                workflow_tab_button(row, WorkflowTab::Post, "Post-Process", false, true);
-            });
-            divider(panel);
+            }); // end ModelPage
 
-            // ── PRE-PROCESS group: sets, contact setup, analysis setup ──────
-            // The `panel` name is reused for the inner closure parameter so
-            // every `section(panel, ...)` call below stays unchanged.
-            panel.spawn((
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                PreProcessGroup,
-                Name::new("PreProcessGroup"),
-            )).with_children(|panel| {
+            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Model), "ModelSetsPage", |panel| {
 
             // ── § Sets / Groups ──────────────────────────────────────────
             section(panel, "SETS", |sec| {
@@ -763,6 +742,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 hint_text(sec, "Click a set to select its members   Scroll to see more");
             });
             divider(panel);
+
+            }); // end ModelSetsPage
+
+            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Contact), "ContactPage", |panel| {
 
             // ── § Contact Setup ──────────────────────────────────────────
             section(panel, "CONTACT SETUP", |sec| {
@@ -784,7 +767,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     },
                 )).with_children(|row| {
                     action_button(row, "Detect Contacts", DetectContactsButton, "DetectContactsButton");
-                    action_button(row, "✓ Accept",        AcceptContactButton,  "AcceptContactButton");
+                    action_button(row, "Accept",          AcceptContactButton,  "AcceptContactButton");
                 });
                 sec.spawn((
                     Text::new("Contacts: no candidates (press Detect)"),
@@ -795,6 +778,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             });
             divider(panel);
 
+            }); // end ContactPage
+
+            sidebar_page_group(panel, SidebarPageContent::analysis(), "AnalysisPages", |panel| {
+
             // ── § Analysis Setup (boundary conditions / loads / materials) ──
             section(panel, "ANALYSIS SETUP", |sec| {
                 // Export row: Open Setup + Export to FrontISTR on the same row
@@ -804,6 +791,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         column_gap: px(6.0),
                         ..default()
                     },
+                    SidebarPageContent::page(SidebarPage::Solve),
                 )).with_children(|row| {
                     row.spawn((
                         Button,
@@ -842,7 +830,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         ExportButton,
                         Name::new("ExportButton"),
                     )).with_child((
-                        Text::new("▶ Export"),
+                        Text::new("Export"),
                         TextFont { font_size: FontSize::Px(11.0), ..default() },
                         TextColor(Color::srgb(0.75, 0.97, 0.80)),
                     ));
@@ -852,12 +840,14 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextFont { font_size: FontSize::Px(10.5), ..default() },
                     TextColor(TEXT_MUTED),
                     ExportStatusText,
+                    SidebarPageContent::page(SidebarPage::Solve),
                 ));
                 sec.spawn((
                     Text::new("Setup: none loaded"),
                     TextFont { font_size: FontSize::Px(11.5), ..default() },
                     TextColor(TEXT_MUTED),
                     AnalysisSetupStatsText,
+                    SidebarPageContent::page(SidebarPage::Solve),
                 ));
                 sec.spawn((
                     Node {
@@ -865,11 +855,16 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         column_gap: px(6.0),
                         ..default()
                     },
+                    SidebarPageContent::page(SidebarPage::Loads),
                 )).with_children(|row| {
                     action_button(row, "Constraints", ToggleConstraintsButton, "ToggleConstraintsButton");
                     action_button(row, "Loads",       ToggleLoadsButton,       "ToggleLoadsButton");
                 });
-                hint_text(sec, "Red cone = fixed DOF    Orange arrow = nodal load");
+                page_hint_text(
+                    sec,
+                    SidebarPage::Loads,
+                    "Red cone = fixed DOF    Orange arrow = nodal load",
+                );
 
                 // ── Create from current node selection ──────────────────
                 sec.spawn((
@@ -883,6 +878,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         ..default()
                     },
                     BorderColor::all(Color::srgba(0.30, 0.36, 0.40, 0.50)),
+                    SidebarPageContent::page(SidebarPage::Loads),
                     Name::new("CreateFromSelectionPanel"),
                 )).with_children(|panel| {
                     panel.spawn((
@@ -1038,11 +1034,27 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         ClearAllBcLoadsButton,
                         Name::new("ClearAllBcLoadsButton"),
                     )).with_child((
-                        Text::new("✕ Clear All BCs & Loads"),
+                        Text::new("Clear All BCs & Loads"),
                         TextFont { font_size: FontSize::Px(9.5), ..default() },
                         TextColor(Color::srgb(0.95, 0.80, 0.80)),
                     ));
-                    hint_text(panel, "Select nodes first · buttons show count");
+                    hint_text(panel, "Select nodes first - buttons show count");
+
+                });
+
+                sec.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(5.0),
+                        padding: UiRect::all(px(6.0)),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(5.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(0.30, 0.50, 0.36, 0.50)),
+                    SidebarPageContent::page(SidebarPage::Materials),
+                    Name::new("MaterialsEditorPanel"),
+                )).with_children(|panel| {
 
                     // Material presets
                     panel.spawn((
@@ -1158,6 +1170,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextFont { font_size: FontSize::Px(9.5), ..default() },
                     TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
                     Node { margin: UiRect::top(px(4.0)), ..default() },
+                    SidebarPageContent::page(SidebarPage::Loads),
                 ));
                 sec.spawn((
                     Node {
@@ -1170,6 +1183,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     ScrollPosition::default(),
                     ScrollableList,
                     BoundaryLoadsListContainer,
+                    SidebarPageContent::page(SidebarPage::Loads),
                     Name::new("BoundaryLoadsListContainer"),
                 ));
 
@@ -1178,6 +1192,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextFont { font_size: FontSize::Px(9.5), ..default() },
                     TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
                     Node { margin: UiRect::top(px(4.0)), ..default() },
+                    SidebarPageContent::page(SidebarPage::Materials),
                 ));
                 sec.spawn((
                     Node {
@@ -1191,6 +1206,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     ScrollPosition::default(),
                     ScrollableList,
                     MaterialsSectionsListContainer,
+                    SidebarPageContent::page(SidebarPage::Materials),
                     Name::new("MaterialsSectionsListContainer"),
                 ));
 
@@ -1206,6 +1222,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         ..default()
                     },
                     BorderColor::all(Color::srgba(0.30, 0.36, 0.55, 0.50)),
+                    SidebarPageContent::page(SidebarPage::Solve),
                     Name::new("SolverPanel"),
                 )).with_children(|sp| {
                     sp.spawn((
@@ -1280,19 +1297,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 });
             });
 
-            }); // end PreProcessGroup
-            divider(panel);
+            }); // end AnalysisPages
 
             // ── POST-PROCESS group ──────────────────────────────────────────
-            panel.spawn((
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                PostProcessGroup,
-                Visibility::Hidden,
-                Name::new("PostProcessGroup"),
-            )).with_children(|panel| {
+            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Results), "ResultsPage", |panel| {
 
             // ── § Post-process ───────────────────────────────────────────
             section(panel, "POST-PROCESS", |sec| {
@@ -1356,7 +1364,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         label: "Deform scale",
                         id: SliderId::DeformScale,
                     });
-                    hint_text(sliders, "←  →  step through results");
+                    hint_text(sliders, "Left / Right: step through results");
 
                     // ── Animation playback controls ──────────────────────
                     sliders.spawn((
@@ -1368,7 +1376,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             Node { width: px(36.0), height: px(28.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1.0)), border_radius: BorderRadius::all(px(5.0)), ..default() },
                             BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
                             PlaybackRewindButton,
-                        )).with_child((Text::new("◀◀"), TextFont { font_size: FontSize::Px(10.0), ..default() }, TextColor(TEXT_MAIN)));
+                        )).with_child((Text::new("|<"), TextFont { font_size: FontSize::Px(10.0), ..default() }, TextColor(TEXT_MAIN)));
 
                         // ▶ / ‖
                         row.spawn((
@@ -1377,7 +1385,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
                             PlaybackPlayPauseButton,
                         )).with_child((
-                            Text::new("▶  Play"),
+                            Text::new("Play"),
                             TextFont { font_size: FontSize::Px(11.0), ..default() },
                             TextColor(TEXT_MAIN),
                             PlaybackPlayPauseLabel,
@@ -1389,7 +1397,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             Node { width: px(36.0), height: px(28.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1.0)), border_radius: BorderRadius::all(px(5.0)), ..default() },
                             BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
                             PlaybackEndButton,
-                        )).with_child((Text::new("▶▶"), TextFont { font_size: FontSize::Px(10.0), ..default() }, TextColor(TEXT_MAIN)));
+                        )).with_child((Text::new(">|"), TextFont { font_size: FontSize::Px(10.0), ..default() }, TextColor(TEXT_MAIN)));
                     });
 
                     spawn_slider(sliders, SliderConfig {
@@ -1400,13 +1408,170 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 });
             });
 
-            }); // end PostProcessGroup
+            }); // end ResultsPage
 
             }); // end scrollable content area
         });
 }
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
+
+fn spawn_sidebar_navigation(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                padding: UiRect::axes(px(10.0), px(7.0)),
+                ..default()
+            },
+            Name::new("SidebarNavigation"),
+        ))
+        .with_children(|nav| {
+            nav.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(4.0),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                sidebar_page_button(row, SidebarPage::Model, "Model");
+                sidebar_page_button(row, SidebarPage::Contact, "Contact");
+                sidebar_page_button(row, SidebarPage::Loads, "BC / Loads");
+            });
+            nav.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(4.0),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                sidebar_page_button(row, SidebarPage::Materials, "Materials");
+                sidebar_page_button(row, SidebarPage::Solve, "Solve");
+                sidebar_page_button(row, SidebarPage::Results, "Results");
+            });
+        });
+}
+
+fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
+    let levels = [
+        (SelectionLevel::Node, "Node"),
+        (SelectionLevel::Edge, "Edge"),
+        (SelectionLevel::Face, "Face"),
+        (SelectionLevel::Element, "Element"),
+    ];
+
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                padding: UiRect::axes(px(10.0), px(0.0)),
+                ..default()
+            },
+            Name::new("SelectionLevelBar"),
+        ))
+        .with_children(|row| {
+            let count = levels.len();
+            for (index, (level, label)) in levels.iter().enumerate() {
+                let (radius, border) = segment_style(index == 0, index == count - 1);
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: 1.0,
+                        height: px(26.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border,
+                        border_radius: radius,
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    SelectionLevelButton { level: *level },
+                    Name::new(format!("SelectionLevel_{label}")),
+                ))
+                .with_child((
+                    Text::new(*label),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
+            }
+        });
+}
+
+fn sidebar_page_button(
+    parent: &mut ChildSpawnerCommands,
+    page: SidebarPage,
+    label: &'static str,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(26.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            SidebarPageButton { page },
+            Name::new(format!("SidebarPage_{label}")),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(10.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
+}
+
+fn sidebar_page_group(
+    parent: &mut ChildSpawnerCommands,
+    pages: SidebarPageContent,
+    name: &'static str,
+    children_fn: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    let initial_visibility = if pages.contains(SidebarPage::Model) {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            pages,
+            initial_visibility,
+            Name::new(name),
+        ))
+        .with_children(children_fn);
+}
+
+fn page_hint_text(parent: &mut ChildSpawnerCommands, page: SidebarPage, text: &'static str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+        SidebarPageContent::page(page),
+    ));
+}
 
 fn divider(parent: &mut ChildSpawnerCommands) {
     parent.spawn((
@@ -1587,59 +1752,30 @@ fn segment_style(is_first: bool, is_last: bool) -> (BorderRadius, UiRect) {
     (BorderRadius::new(px(tl), px(tr), px(br), px(bl)), border)
 }
 
-/// Spawns one half of the Pre-Process / Post-Process segmented tab control.
-///
-/// The active tab's background is set by [`workflow_tab_button_system`]
-/// each frame (via `BUTTON_ACTIVE`), not baked in here, so this only needs
-/// to set up the segment geometry and the `WorkflowTabButton` marker that
-/// identifies which tab this button switches to.
-fn workflow_tab_button(
-    parent: &mut ChildSpawnerCommands,
-    tab: WorkflowTab,
-    label: &'static str,
-    is_first: bool,
-    is_last: bool,
-) {
-    let (radius, border) = segment_style(is_first, is_last);
-
-    parent.spawn((
-        Button,
-        Node {
-            flex_grow: 1.0,
-            height: px(30.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border,
-            border_radius: radius,
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::all(PANEL_BORDER),
-        WorkflowTabButton { tab },
-        Name::new(format!("WorkflowTab_{label}")),
-    )).with_child((
-        Text::new(label),
-        TextFont { font_size: FontSize::Px(12.5), ..default() },
-        TextColor(TEXT_MAIN),
-    ));
-}
-
-
-/// Handles clicks on the Pre-Process / Post-Process tab buttons and paints
-/// the active tab with [`BUTTON_ACTIVE`].
-pub(crate) fn workflow_tab_button_system(
-    mut tab: ResMut<WorkflowTab>,
+/// Handles sidebar page selection, paints the active page button, and resets
+/// the content scroll position whenever the task changes.
+pub(crate) fn sidebar_page_button_system(
+    mut page: ResMut<SidebarPage>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &WorkflowTabButton),
-        With<WorkflowTabButton>,
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &SidebarPageButton,
+        ),
+        With<SidebarPageButton>,
     >,
+    mut scroll_areas: Query<&mut ScrollPosition, With<PanelScrollArea>>,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            *tab = button.tab;
+            *page = button.page;
+            for mut scroll in &mut scroll_areas {
+                scroll.0.y = 0.0;
+            }
         }
 
-        let active = *tab == button.tab;
+        let active = *page == button.page;
 
         let color = match (*interaction, active) {
             (Interaction::Pressed, _) => BUTTON_PRESSED,
@@ -1654,29 +1790,23 @@ pub(crate) fn workflow_tab_button_system(
     }
 }
 
-/// Shows the [`PreProcessGroup`] or [`PostProcessGroup`] container
-/// according to the active [`WorkflowTab`], hiding the other.
-///
-/// Also auto-switches to the Post-Process tab the first time a result is
-/// loaded: a person who just clicked "Open Result" almost certainly wants
-/// to see the contour/step controls immediately rather than having to find
-/// and click the tab themselves. It never switches back to Pre-Process
-/// automatically — that would be surprising mid-task.
-pub(crate) fn update_workflow_visibility(
-    tab:        Res<WorkflowTab>,
-    mut pre_query:  Query<&mut Visibility, (With<PreProcessGroup>, Without<PostProcessGroup>)>,
-    mut post_query: Query<&mut Visibility, (With<PostProcessGroup>, Without<PreProcessGroup>)>,
+/// Shows only content associated with the current sidebar task. Nested
+/// masks are supported: the analysis shell is visible for Loads, Materials,
+/// and Solve while its children select one of those pages.
+pub(crate) fn update_sidebar_page_visibility(
+    page: Res<SidebarPage>,
+    mut content: Query<(&SidebarPageContent, &mut Visibility)>,
 ) {
-    if !tab.is_changed() {
+    if !page.is_changed() {
         return;
     }
 
-    if let Ok(mut vis) = pre_query.single_mut() {
-        *vis = if *tab == WorkflowTab::Pre { Visibility::Visible } else { Visibility::Hidden };
-    }
-
-    if let Ok(mut vis) = post_query.single_mut() {
-        *vis = if *tab == WorkflowTab::Post { Visibility::Visible } else { Visibility::Hidden };
+    for (pages, mut visibility) in &mut content {
+        *visibility = if pages.contains(*page) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -1788,11 +1918,32 @@ pub(crate) fn handle_panel_wheel(
 
 pub(crate) fn update_ui_pointer_state(
     mut state: ResMut<UiPointerState>,
+    windows: Query<&Window>,
+    capture_regions: Query<(&ComputedNode, &UiGlobalTransform), With<UiInputCapture>>,
     interactions: Query<&Interaction, With<Button>>,
 ) {
-    state.over_ui = interactions
+    let over_capture_region = windows
+        .single()
+        .ok()
+        .and_then(Window::cursor_position)
+        .is_some_and(|cursor| {
+            capture_regions.iter().any(|(node, transform)| {
+                let scale = node.inverse_scale_factor;
+                let size = node.size() * scale;
+                let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
+
+                cursor.x >= origin.x
+                    && cursor.x <= origin.x + size.x
+                    && cursor.y >= origin.y
+                    && cursor.y <= origin.y + size.y
+            })
+        });
+
+    let over_interactive_widget = interactions
         .iter()
         .any(|interaction| *interaction != Interaction::None);
+
+    state.over_ui = over_capture_region || over_interactive_widget;
 }
 
 pub(crate) fn selection_level_button_system(
@@ -1989,13 +2140,13 @@ pub(crate) fn mesh_load_system(
     match ext.as_str() {
         "geo" => {
             match gmsh::run_gmsh(&path, None) {
-                Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version); }
+                Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup); }
                 Err(e)   => { status.failed(path, e.to_string()); }
             }
         }
         "inp" => {
             match hecmw::load_inp_file(&path) {
-                Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version); }
+                Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup); }
                 Err(e)   => { status.failed(path, e.to_string()); }
             }
         }
@@ -2003,7 +2154,7 @@ pub(crate) fn mesh_load_system(
             // .msh: HECMW extended loader captures !MATERIAL/!SECTION, then Gmsh fallback.
             match hecmw::load_mesh_file_with_setup(&path) {
                 Ok((mesh, materials, sections)) => {
-                    apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version);
+                    apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup);
                     // Merge embedded material/section blocks into AnalysisSetup,
                     // skipping duplicates by name.
                     let mut changed = false;
@@ -2021,7 +2172,7 @@ pub(crate) fn mesh_load_system(
                 }
                 Err(_) => {
                     match gmsh::load_msh_file(&path) {
-                        Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version); }
+                        Ok(mesh) => { apply_mesh(mesh, &path, import, &mut model, &mut status, &mut version, &mut setup); }
                         Err(e)   => { status.failed(path, e.to_string()); }
                     }
                 }
@@ -2037,9 +2188,19 @@ fn apply_mesh(
     model:   &mut FemModel,
     status:  &mut MeshLoadStatus,
     version: &mut FemModelVersion,
+    setup:   &mut fem_core::AnalysisSetup,
 ) {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("mesh").to_string();
-    if import { model.add_mesh(name, mesh); } else { *model = FemModel::single_mesh(name, mesh); }
+    if import {
+        model.add_mesh(name, mesh);
+    } else {
+        // Clear model-scoped setup at the same point the model is replaced.
+        // Keeping this in the load transaction prevents a later rendering
+        // system from erasing a .cnt file that was just applied by
+        // `apply_pending_cnt_system`.
+        setup.clear();
+        *model = FemModel::single_mesh(name, mesh);
+    }
     status.loaded(path.clone());
     version.bump();
 }
@@ -2345,7 +2506,7 @@ pub(crate) fn rebuild_boundary_loads_list(
 
         if setup.boundary_conditions.is_empty() && setup.nodal_loads.is_empty() && setup.distributed_loads.is_empty() {
             list.spawn((
-                Text::new("(none yet — select nodes and use buttons above)"),
+                Text::new("(none yet - select nodes and use buttons above)"),
                 TextFont { font_size: FontSize::Px(9.5), ..default() },
                 TextColor(TEXT_MUTED),
             ));
@@ -2493,7 +2654,7 @@ pub(crate) fn update_selection_info_text(
         let fem_core::FemEntityId::Node(node_id) = target else { return None; };
         model.as_deref()?.meshes.iter().find_map(|mesh| {
             mesh.node_position(node_id).map(|pos| {
-                format!("  ·  Node {} ({:.3}, {:.3}, {:.3})", node_id.0, pos.x, pos.y, pos.z)
+                format!("  |  Node {} ({:.3}, {:.3}, {:.3})", node_id.0, pos.x, pos.y, pos.z)
             })
         })
     }).unwrap_or_default();
@@ -2552,12 +2713,12 @@ pub(crate) fn update_apply_load_label(
         let axis = ["?","X","Y","Z"].get(dof as usize).copied().unwrap_or("?");
         let sign_char = if sign >= 0.0 { "+" } else { "-" };
         format!(" {sign_char}{axis} {mag:.0}")
-    }).unwrap_or_else(|| " (pick direction ↑)".to_string());
+    }).unwrap_or_else(|| " (pick direction)".to_string());
 
     **text = if n > 0 {
-        format!("Apply Load{dir_label}  →  ({n} nodes)")
+        format!("Apply Load{dir_label}  ({n} nodes)")
     } else {
-        format!("Apply Load{dir_label}  —  no nodes selected")
+        format!("Apply Load{dir_label}  - no nodes selected")
     };
 }
 
@@ -2855,9 +3016,9 @@ pub(crate) fn update_apply_dload_label(
     let kind_label = match *kind { SelectedDloadKind::Pressure => "Pressure", SelectedDloadKind::Gravity => "Gravity" };
 
     **text = if n > 0 {
-        format!("Apply {kind_label} {mag:.2}  →  ({n} {unit})")
+        format!("Apply {kind_label} {mag:.2}  ({n} {unit})")
     } else {
-        format!("Apply {kind_label}  —  no faces/elements selected")
+        format!("Apply {kind_label}  - no faces/elements selected")
     };
 }
 
@@ -3119,7 +3280,7 @@ fn setup_entry_row(
     });
 }
 
-/// Formats one [`fem_core::FemMaterial`] as `"[Mat] name  E=.. ν=.. ρ=.."`,
+/// Formats one [`fem_core::FemMaterial`] as `"[Mat] name  E=.. nu=.. rho=.."`,
 /// omitting any property that wasn't present in the source file rather
 /// than showing a misleading placeholder value.
 fn format_material_line(material: &fem_core::FemMaterial) -> String {
@@ -3129,10 +3290,10 @@ fn format_material_line(material: &fem_core::FemMaterial) -> String {
         parts.push(format!("E={young:.3e}"));
     }
     if let Some(poisson) = material.poisson_ratio {
-        parts.push(format!("\u{3bd}={poisson:.3}"));
+        parts.push(format!("nu={poisson:.3}"));
     }
     if let Some(density) = material.density {
-        parts.push(format!("\u{3c1}={density:.3e}"));
+        parts.push(format!("rho={density:.3e}"));
     }
 
     if parts.is_empty() {
@@ -3456,7 +3617,7 @@ pub(crate) fn open_result_button_system(
     model: Option<Res<FemModel>>,
     mut results: ResMut<FemResultSet>,
     mut settings: ResMut<visualization::VisualizationSettings>,
-    mut tab: ResMut<WorkflowTab>,
+    mut page: ResMut<SidebarPage>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
@@ -3552,8 +3713,9 @@ pub(crate) fn open_result_button_system(
         }
 
         bevy::log::info!("Loaded {step_count} result step(s) from {:?}", path.file_name());
-        // Auto-switch to Post-Process tab on first result load.
-        *tab = WorkflowTab::Post;
+        // A newly loaded result is immediately visible without another
+        // navigation click.
+        *page = SidebarPage::Results;
     }
 }
 
@@ -3646,13 +3808,33 @@ pub(crate) fn apply_pending_cnt_system(
 
     match hecmw::load_cnt_file(&path, mesh, mesh_index) {
         Ok(data) => {
+            let counts = (
+                data.boundary_conditions.len(),
+                data.boundary_conditions
+                    .iter()
+                    .map(|condition| condition.nodes.len())
+                    .sum::<usize>(),
+                data.nodal_loads.len(),
+                data.distributed_loads.len(),
+                data.materials.len(),
+                data.sections.len(),
+            );
             setup.boundary_conditions.extend(data.boundary_conditions);
             setup.nodal_loads.extend(data.nodal_loads);
             setup.distributed_loads.extend(data.distributed_loads);
             setup.materials.extend(data.materials);
             setup.sections.extend(data.sections);
             setup.set_changed();
-            bevy::log::info!("Loaded analysis setup from {:?}", path.file_name());
+            bevy::log::info!(
+                "Loaded analysis setup from {:?}: {} BCs / {} constrained nodes, {} nodal loads, {} distributed loads, {} materials, {} sections",
+                path.file_name(),
+                counts.0,
+                counts.1,
+                counts.2,
+                counts.3,
+                counts.4,
+                counts.5,
+            );
         }
         Err(e) => bevy::log::warn!("Failed to parse cnt file {:?}: {e}", path),
     }
@@ -3935,7 +4117,7 @@ pub(crate) fn export_button_system(
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             let Some(model) = model.as_deref() else {
-                set_export_status(&mut status_query, "✗ No mesh loaded");
+                set_export_status(&mut status_query, "Error: no mesh loaded");
                 continue;
             };
 
@@ -3960,7 +4142,7 @@ pub(crate) fn export_button_system(
                         String::new()
                     };
                     let message = format!(
-                        "✓ {stem}.*{part_note}\n{}N/{}E  BC:{} Ld:{} Mat:{} Sec:{} Ctc:{}",
+                        "OK {stem}.*{part_note}\n{}N/{}E  BC:{} Ld:{} Mat:{} Sec:{} Ctc:{}",
                         summary.node_count,
                         summary.element_count,
                         summary.boundary_condition_count,
@@ -3971,7 +4153,7 @@ pub(crate) fn export_button_system(
                     );
                     set_export_status(&mut status_query, &message);
                 }
-                Err(e)  => set_export_status(&mut status_query, &format!("✗ {e}")),
+                Err(e)  => set_export_status(&mut status_query, &format!("Error: {e}")),
             }
         }
 
@@ -4229,7 +4411,11 @@ pub(crate) fn playback_button_system(
 
         for &child in children {
             if let Ok(mut t) = labels.get_mut(child) {
-                **t = if playback.playing { "‖  Pause".to_string() } else { "▶  Play".to_string() };
+                **t = if playback.playing {
+                    "Pause".to_string()
+                } else {
+                    "Play".to_string()
+                };
             }
         }
     }
@@ -4529,4 +4715,89 @@ fn compact_path(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod sidebar_page_tests {
+    use std::path::PathBuf;
+
+    use super::{SidebarPage, SidebarPageContent, apply_mesh};
+    use fem_core::{
+        AnalysisSetup, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId,
+    };
+
+    #[test]
+    fn analysis_shell_is_limited_to_analysis_pages() {
+        let pages = SidebarPageContent::analysis();
+
+        assert!(!pages.contains(SidebarPage::Model));
+        assert!(!pages.contains(SidebarPage::Contact));
+        assert!(pages.contains(SidebarPage::Loads));
+        assert!(pages.contains(SidebarPage::Materials));
+        assert!(pages.contains(SidebarPage::Solve));
+        assert!(!pages.contains(SidebarPage::Results));
+    }
+
+    #[test]
+    fn single_page_masks_do_not_leak_to_other_pages() {
+        let all_pages = [
+            SidebarPage::Model,
+            SidebarPage::Contact,
+            SidebarPage::Loads,
+            SidebarPage::Materials,
+            SidebarPage::Solve,
+            SidebarPage::Results,
+        ];
+
+        for selected in all_pages {
+            let content = SidebarPageContent::page(selected);
+            for candidate in all_pages {
+                assert_eq!(content.contains(candidate), selected == candidate);
+            }
+        }
+    }
+
+    #[test]
+    fn replacing_a_mesh_clears_setup_inside_the_load_transaction() {
+        let mut model = FemModel::demo_hex8();
+        let mut setup = AnalysisSetup::default();
+        setup.add_constraint(0, vec![NodeId(0)], 1, 3, 0.0);
+        let mut status = MeshLoadStatus::default();
+        let mut version = FemModelVersion::default();
+
+        apply_mesh(
+            FemMesh::demo_hex8(),
+            &PathBuf::from("replacement.msh"),
+            false,
+            &mut model,
+            &mut status,
+            &mut version,
+            &mut setup,
+        );
+
+        assert!(setup.is_empty());
+        assert_eq!(version.value, 1);
+    }
+
+    #[test]
+    fn importing_an_assembly_part_preserves_existing_setup() {
+        let mut model = FemModel::demo_hex8();
+        let mut setup = AnalysisSetup::default();
+        setup.add_constraint(0, vec![NodeId(0)], 1, 3, 0.0);
+        let mut status = MeshLoadStatus::default();
+        let mut version = FemModelVersion::default();
+
+        apply_mesh(
+            FemMesh::demo_hex8(),
+            &PathBuf::from("part.msh"),
+            true,
+            &mut model,
+            &mut status,
+            &mut version,
+            &mut setup,
+        );
+
+        assert_eq!(setup.boundary_conditions.len(), 1);
+        assert_eq!(model.meshes.len(), 2);
+    }
 }

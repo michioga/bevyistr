@@ -1,6 +1,6 @@
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
-use fem_core::InteractionMode;
+use fem_core::{InteractionMode, UiPointerState};
 
 #[derive(Component)]
 pub struct OrbitCamera {
@@ -50,6 +50,7 @@ pub fn orbit_camera_system(
     mut wheel_evr: MessageReader<MouseWheel>,
     mut query: Query<(&mut Transform, &mut OrbitCamera)>,
     mut mode: ResMut<InteractionMode>,
+    ui_pointer: Res<UiPointerState>,
 ) {
     let Ok((mut transform, mut orbit)) = query.single_mut() else {
         return;
@@ -61,7 +62,7 @@ pub fn orbit_camera_system(
         rotation_move += ev.delta;
     }
 
-    if buttons.pressed(MouseButton::Middle) {
+    if !ui_pointer.over_ui && buttons.pressed(MouseButton::Middle) {
         let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
 
         if shift {
@@ -92,7 +93,7 @@ pub fn orbit_camera_system(
         }
     }
 
-    if buttons.just_pressed(MouseButton::Right) {
+    if !ui_pointer.over_ui && buttons.just_pressed(MouseButton::Right) {
         *mode = InteractionMode::Orbit;
     }
 
@@ -108,6 +109,10 @@ pub fn orbit_camera_system(
     const ZOOM_SPEED: f32 = 0.15;
 
     for ev in wheel_evr.read() {
+        if ui_pointer.over_ui {
+            continue;
+        }
+
         let factor = (1.0 - ev.y * ZOOM_SPEED).max(0.05);
 
         orbit.radius = (orbit.radius * factor).clamp(orbit.min_radius, orbit.max_radius);
@@ -124,4 +129,70 @@ pub fn orbit_camera_system(
     transform.translation = orbit.focus + dir * orbit.radius;
 
     transform.look_at(orbit.focus, Vec3::Y);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::input::mouse::MouseScrollUnit;
+    use bevy::input::touch::TouchPhase;
+
+    fn test_app(pointer_over_ui: bool) -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<InteractionMode>();
+        app.insert_resource(UiPointerState {
+            over_ui: pointer_over_ui,
+        });
+        app.add_message::<MouseMotion>();
+        app.add_message::<MouseWheel>();
+        app.add_systems(Update, orbit_camera_system);
+
+        let window = app.world_mut().spawn_empty().id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 0.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+                OrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 10.0,
+                    target_focus: Vec3::ZERO,
+                    min_radius: 1.0,
+                    max_radius: 100.0,
+                },
+            ))
+            .id();
+
+        (app, window, camera)
+    }
+
+    fn scroll(app: &mut App, window: Entity, y: f32) {
+        app.world_mut()
+            .resource_mut::<Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: 0.0,
+                y,
+                window,
+                phase: TouchPhase::Moved,
+            });
+    }
+
+    #[test]
+    fn wheel_over_ui_is_discarded_instead_of_zooming_later() {
+        let (mut app, window, camera) = test_app(true);
+
+        scroll(&mut app, window, 1.0);
+        app.update();
+        assert_eq!(app.world().get::<OrbitCamera>(camera).unwrap().radius, 10.0);
+
+        app.world_mut().resource_mut::<UiPointerState>().over_ui = false;
+        app.update();
+        assert_eq!(app.world().get::<OrbitCamera>(camera).unwrap().radius, 10.0);
+
+        scroll(&mut app, window, 1.0);
+        app.update();
+        assert_eq!(app.world().get::<OrbitCamera>(camera).unwrap().radius, 8.5);
+    }
 }
