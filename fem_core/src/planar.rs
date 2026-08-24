@@ -1,9 +1,12 @@
-//! Planar selection: expand a seed face (or the boundary-face of a seed
-//! element) to all connected coplanar faces within an angle threshold.
+//! Surface selection growth from a seed face (or the boundary face hit on a
+//! seed element).
 //!
-//! This is the core geometry computation behind the "Select Coplanar" UI
-//! feature. The result is a `Vec<FaceId>` and a parallel `Vec<ElementId>`
-//! that the UI can push into [`SelectionState`].
+//! Two deliberately different operations are provided:
+//!
+//! - **Coplanar** compares every candidate with the original seed normal, so
+//!   normal drift cannot walk around a cylinder or fillet.
+//! - **Smooth** compares each candidate with its immediate predecessor, so a
+//!   gently faceted curved surface can be followed step by step.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -13,39 +16,51 @@ use crate::{ElementId, FaceId, FemMesh, NodeId};
 
 // ─── public API ──────────────────────────────────────────────────────────────
 
-/// Expands outward from `seed_face` through the boundary-face adjacency
-/// graph of `mesh`, adding each face whose normal makes an angle ≤
-/// `threshold_deg` with its **immediate BFS predecessor's** normal (not
-/// the seed face's normal — see below).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NormalReference {
+    Seed,
+    Predecessor,
+}
+
+/// Selects a connected, nearly planar surface patch.
 ///
-/// Returns `(face_ids, element_ids)` — the caller inserts both into
-/// [`SelectionState`] (faces for the Face filter, elements for the Element
-/// filter).
-///
-/// The angle comparison uses **absolute** dot product so that reversed
-/// normals (opposite winding on neighbouring faces) still match — in
-/// practice HECMW meshes sometimes have inconsistent winding on surface
-/// patches exported from CAD.
-///
-/// Comparing each face to its immediate predecessor (step-by-step) rather
-/// than to the fixed seed is deliberate, not incidental: a smoothly curved
-/// surface — a cylindrical bore, a fillet — is faceted into many small
-/// triangles whose normal changes by only a few degrees from one to the
-/// next, but whose normal *accumulates* around a full sweep (a bore's
-/// normal is perpendicular to the seed's a quarter of the way around, and
-/// anti-parallel halfway around). Comparing against a fixed seed normal
-/// means the threshold would have to account for that entire accumulated
-/// sweep, so no single-digit or even moderate threshold could ever walk
-/// all the way around a full bore — the walk stalls a small arc away from
-/// the seed regardless of how the threshold is tuned. Comparing each step
-/// to its own predecessor only ever measures the *local* facet-to-facet
-/// angle change, so a curved surface with gentle enough faceting can be
-/// walked all the way around with a small threshold, exactly matching
-/// tools like Blender's "Select Similar > Coplanar."
+/// Every candidate normal is compared with the original seed normal. This is
+/// the operation to use for flat CAD faces split into many FEM facets.
 pub fn expand_coplanar_from_face(
-    mesh:          &FemMesh,
-    seed_face:     FaceId,
+    mesh: &FemMesh,
+    seed_face: FaceId,
     threshold_deg: f32,
+) -> (Vec<FaceId>, Vec<ElementId>) {
+    expand_faces(
+        mesh,
+        seed_face,
+        threshold_deg,
+        NormalReference::Seed,
+    )
+}
+
+/// Selects a connected smooth surface patch.
+///
+/// Each candidate normal is compared with the face from which the traversal
+/// reached it. This allows gradual normal drift around cylinders and fillets.
+pub fn expand_smooth_from_face(
+    mesh: &FemMesh,
+    seed_face: FaceId,
+    threshold_deg: f32,
+) -> (Vec<FaceId>, Vec<ElementId>) {
+    expand_faces(
+        mesh,
+        seed_face,
+        threshold_deg,
+        NormalReference::Predecessor,
+    )
+}
+
+fn expand_faces(
+    mesh: &FemMesh,
+    seed_face: FaceId,
+    threshold_deg: f32,
+    normal_reference: NormalReference,
 ) -> (Vec<FaceId>, Vec<ElementId>) {
     if threshold_deg < 0.0 {
         return (vec![seed_face], vec![]);
@@ -69,9 +84,9 @@ pub fn expand_coplanar_from_face(
 
     // Bail out early if the seed itself has no usable normal (degenerate
     // face) — nothing sensible to compare against.
-    if !normals.contains_key(&seed_face) {
+    let Some(&seed_normal) = normals.get(&seed_face) else {
         return (vec![seed_face], vec![]);
-    }
+    };
 
     // Edge (pair of sorted NodeIds) → list of face IDs sharing that edge
     let mut edge_to_faces: HashMap<(NodeId, NodeId), Vec<FaceId>> = HashMap::new();
@@ -112,10 +127,12 @@ pub fn expand_coplanar_from_face(
         for neighbour_id in neighbours {
             if visited.contains(&neighbour_id) { continue; }
 
-            // Compare to *this* face's normal (the BFS predecessor), not
-            // the seed's — see the function doc comment for why.
+            let reference_normal = match normal_reference {
+                NormalReference::Seed => seed_normal,
+                NormalReference::Predecessor => current_normal,
+            };
             let cos = normals.get(&neighbour_id)
-                .map(|n| current_normal.dot(*n).abs())
+                .map(|normal| reference_normal.dot(*normal).abs())
                 .unwrap_or(0.0);
 
             if cos >= cos_threshold {
@@ -126,13 +143,17 @@ pub fn expand_coplanar_from_face(
     }
 
     // Collect element IDs from the selected faces.
-    let element_ids: Vec<ElementId> = visited.iter()
+    let mut face_ids: Vec<FaceId> = visited.into_iter().collect();
+    face_ids.sort_unstable();
+
+    let mut element_ids: Vec<ElementId> = face_ids.iter()
         .filter_map(|fid| face_by_id.get(fid)?.element)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    element_ids.sort_unstable();
 
-    (visited.into_iter().collect(), element_ids)
+    (face_ids, element_ids)
 }
 
 /// Same as [`expand_coplanar_from_face`] but starts from the first
@@ -150,6 +171,23 @@ pub fn expand_coplanar_from_element(
 
     match seed_face {
         Some(fid) => expand_coplanar_from_face(mesh, fid, threshold_deg),
+        None => (vec![], vec![seed_element]),
+    }
+}
+
+/// Element counterpart to [`expand_smooth_from_face`].
+pub fn expand_smooth_from_element(
+    mesh: &FemMesh,
+    seed_element: ElementId,
+    threshold_deg: f32,
+) -> (Vec<FaceId>, Vec<ElementId>) {
+    let seed_face = mesh.cached_boundary_faces()
+        .iter()
+        .find(|face| face.element == Some(seed_element))
+        .map(|face| face.id);
+
+    match seed_face {
+        Some(face_id) => expand_smooth_from_face(mesh, face_id, threshold_deg),
         None => (vec![], vec![seed_element]),
     }
 }
@@ -173,4 +211,64 @@ fn face_normal(pts: &[Vec3]) -> Option<Vec3> {
         n.z += (a.x - b.x) * (a.y + b.y);
     }
     n.try_normalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ElementType, FemElement, FemNode};
+
+    fn three_patch_strip() -> FemMesh {
+        let slope_10 = 10.0_f32.to_radians().tan();
+        let slope_20 = 20.0_f32.to_radians().tan();
+        let heights = [0.0, 0.0, slope_10, slope_10 + slope_20];
+
+        let mut nodes = Vec::new();
+        for (station, &height) in heights.iter().enumerate() {
+            nodes.push(FemNode::new(
+                NodeId((station * 2) as u32),
+                Vec3::new(station as f32, 0.0, height),
+            ));
+            nodes.push(FemNode::new(
+                NodeId((station * 2 + 1) as u32),
+                Vec3::new(station as f32, 1.0, height),
+            ));
+        }
+
+        let elements = (0..3)
+            .map(|index| {
+                FemElement::new(
+                    ElementId(index as u32),
+                    ElementType::ShellQuad4,
+                    vec![
+                        NodeId((index * 2) as u32),
+                        NodeId((index * 2 + 2) as u32),
+                        NodeId((index * 2 + 3) as u32),
+                        NodeId((index * 2 + 1) as u32),
+                    ],
+                )
+            })
+            .collect();
+
+        FemMesh::new(nodes, elements)
+    }
+
+    #[test]
+    fn coplanar_does_not_accumulate_normal_drift_but_smooth_does() {
+        let mesh = three_patch_strip();
+        let seed = mesh
+            .cached_boundary_faces()
+            .iter()
+            .find(|face| face.element == Some(ElementId(0)))
+            .expect("the first shell element has one boundary face")
+            .id;
+
+        let (coplanar_faces, _) = expand_coplanar_from_face(&mesh, seed, 12.0);
+        let (strict_coplanar_faces, _) = expand_coplanar_from_face(&mesh, seed, 0.5);
+        let (smooth_faces, _) = expand_smooth_from_face(&mesh, seed, 12.0);
+
+        assert_eq!(coplanar_faces.len(), 2);
+        assert_eq!(strict_coplanar_faces.len(), 1);
+        assert_eq!(smooth_faces.len(), 3);
+    }
 }

@@ -426,6 +426,9 @@ fn push_target(selection: &mut SelectionState, target: FemEntityRef) {
     if !selection.targets.contains(&target) {
         selection.targets.push(target);
     }
+    if !selection.highlight_targets.contains(&target) {
+        selection.highlight_targets.push(target);
+    }
 }
 
 fn project_node(

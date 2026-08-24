@@ -616,9 +616,9 @@ pub fn update_hover_materials(
 /// shows the model's entire current selection (every face the person has
 /// clicked/box-selected, not only the most recent one), and
 /// [`TopologyHighlight::Hover`] shows [`fem_core::HoverPreviewTargets`] —
-/// the full coplanar group that would be added if the person clicked right
-/// now, computed by `ui`'s `update_hover_preview_group` (falls back to just
-/// the single hovered entity when planar/coplanar selection is off).
+/// the full Coplanar/Smooth group that would be added if the person clicked
+/// right now, computed by `ui`'s `update_hover_preview_group` (or just the
+/// single hovered entity in Single mode).
 pub(crate) fn update_topology_highlights(
     model: Option<Res<FemModel>>,
     hover_preview: Res<fem_core::HoverPreviewTargets>,
@@ -643,26 +643,40 @@ pub(crate) fn update_topology_highlights(
 
     // When every hover-preview target is already part of the selection
     // (the common case: hovering the thing you just selected, or —
-    // with planar selection on — hovering back over the same group),
+    // with surface growth on — hovering back over the same group),
     // hide the hover overlay entirely and let only the selected (bright
     // green) overlay show. Without this both overlays render at the same
     // position and blend into a confusing colour.
     let hover_is_redundant = !hover_preview.targets.is_empty()
         && hover_preview.targets.iter().all(|t| selection.targets.contains(t));
 
-    let hover_targets: &[FemEntityRef] = if hover_is_redundant { &[] } else { &hover_preview.targets };
+    let preview_highlights: &[FemEntityRef] = if hover_preview.highlight_targets.is_empty() {
+        &hover_preview.targets
+    } else {
+        &hover_preview.highlight_targets
+    };
+    let selected_highlights: &[FemEntityRef] = if selection.highlight_targets.is_empty() {
+        &selection.targets
+    } else {
+        &selection.highlight_targets
+    };
+    let hover_targets: &[FemEntityRef] = if hover_is_redundant {
+        &[]
+    } else {
+        preview_highlights
+    };
 
-    if cache.hover.as_slice() == hover_targets && cache.selected == selection.targets {
+    if cache.hover.as_slice() == hover_targets && cache.selected == selected_highlights {
         return;
     }
 
     cache.hover = hover_targets.to_vec();
-    cache.selected = selection.targets.clone();
+    cache.selected = selected_highlights.to_vec();
 
     for (highlight, mut mesh, mut transform, mut visibility) in &mut query {
         let targets: &[FemEntityRef] = match highlight {
             TopologyHighlight::Hover    => hover_targets,
-            TopologyHighlight::Selected => &selection.targets,
+            TopologyHighlight::Selected => selected_highlights,
         };
 
         if targets.is_empty() {

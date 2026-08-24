@@ -24,6 +24,8 @@ const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 const ACTIVE_BORDER: Color = Color::srgb(0.57, 0.86, 0.92);
+const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
+const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 
 #[derive(Component)]
 pub(crate) struct SelectionLevelButton {
@@ -54,42 +56,53 @@ pub(crate) struct MakeNodeGroupButton;
 #[derive(Component)]
 pub(crate) struct MakeElementGroupButton;
 
-/// Resource controlling the coplanar-face-expansion feature.
-///
-/// When `enabled`, clicking a face or element in the 3D view expands the
-/// selection to all connected boundary faces whose normal deviates by at
-/// most `angle_deg` from the clicked face's normal.
-///
-/// The angle can be changed with a slider while hovering; the live
-/// coplanar-group *preview* (see [`fem_core::HoverPreviewTargets`], built
-/// each frame by [`update_hover_preview_group`]) re-runs the walk from
-/// whatever's under the cursor every frame, so the preview always reflects
-/// the current threshold before you ever click — essential for "feel" on
-/// curved or chamfered geometry where the right threshold isn't obvious in
-/// advance. What actually gets added to the selection on a click is
-/// whatever the preview showed at that moment (see
-/// [`selection::click_selection_system`]), so this resource only needs to
-/// track the toggle and the threshold — no click-time seed bookkeeping.
-#[derive(Resource, Debug, Clone)]
-pub(crate) struct PlanarSelectionSettings {
-    pub enabled: bool,
-    pub angle_deg: f32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SurfaceSelectionMode {
+    #[default]
+    Single,
+    Coplanar,
+    Smooth,
 }
 
-impl Default for PlanarSelectionSettings {
+impl SurfaceSelectionMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Single => "Single",
+            Self::Coplanar => "Coplanar",
+            Self::Smooth => "Smooth",
+        }
+    }
+}
+
+/// Controls how one hovered boundary face grows into a selection preview.
+///
+/// `Coplanar` compares every face with the seed normal; `Smooth` compares
+/// neighbouring faces and can therefore follow a curved surface. The target
+/// type remains pure: Face mode yields faces, while Element mode yields the
+/// complete elements immediately behind the same surface patch.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct SurfaceSelectionSettings {
+    pub mode: SurfaceSelectionMode,
+}
+
+impl Default for SurfaceSelectionSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            angle_deg: 15.0,
+            mode: SurfaceSelectionMode::Single,
         }
     }
 }
 
 #[derive(Component)]
-pub(crate) struct PlanarSelectionToggle;
+pub(crate) struct SurfaceSelectionModeButton {
+    mode: SurfaceSelectionMode,
+}
 
 #[derive(Component)]
-pub(crate) struct PlanarSelectionHint;
+pub(crate) struct SurfaceSelectionHint;
+
+#[derive(Component)]
+pub(crate) struct SurfaceAngleControls;
 
 /// Active section type selection for the "Add Section" panel.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -684,50 +697,69 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     SelectionInfoText,
                 ));
 
-                // ── Planar selection ──────────────────────────────────────
+                // ── Surface selection growth ──────────────────────────────
                 sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: px(8.0),
+                        column_gap: px(4.0),
+                        width: percent(100.0),
                         margin: UiRect::top(px(4.0)),
                         ..default()
                     },
                 )).with_children(|row| {
-                    row.spawn((
-                        Button,
-                        Node {
-                            padding: UiRect::axes(px(10.0), px(4.0)),
-                            border: UiRect::all(px(1.0)),
-                            border_radius: BorderRadius::all(px(5.0)),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                        BackgroundColor(BUTTON_NORMAL),
-                        BorderColor::all(PANEL_BORDER),
-                        PlanarSelectionToggle,
-                        Name::new("PlanarToggle"),
-                    )).with_child((
-                        Text::new("Planar OFF"),
-                        TextFont { font_size: FontSize::Px(11.0), ..default() },
-                        TextColor(TEXT_MAIN),
-                    ));
-                });
-                spawn_slider(sec, SliderConfig {
-                    width: 272.0,
-                    min: 0.0, max: 90.0, value: 15.0,
-                    label: "Angle threshold (deg)",
-                    id: SliderId::PlanarAngle,
+                    for mode in [
+                        SurfaceSelectionMode::Single,
+                        SurfaceSelectionMode::Coplanar,
+                        SurfaceSelectionMode::Smooth,
+                    ] {
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                padding: UiRect::axes(px(6.0), px(4.0)),
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(5.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            SurfaceSelectionModeButton { mode },
+                            Name::new(format!("SurfaceSelection_{}", mode.label())),
+                        )).with_child((
+                            Text::new(mode.label()),
+                            TextFont { font_size: FontSize::Px(10.5), ..default() },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
                 });
                 sec.spawn((
-                    Text::new("Face = surface  |  Element = whole element"),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                    SurfaceAngleControls,
+                )).with_children(|controls| {
+                    spawn_slider(controls, SliderConfig {
+                        width: 272.0,
+                        min: 0.0,
+                        max: 90.0,
+                        value: DEFAULT_SMOOTH_ANGLE_DEG,
+                        label: "Smooth angle threshold (deg)",
+                        id: SliderId::SurfaceAngle,
+                    });
+                });
+                sec.spawn((
+                    Text::new("Face = one surface face  |  Element = one whole FEM element"),
                     TextFont {
                         font_size: FontSize::Px(10.0),
                         ..default()
                     },
                     TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
-                    PlanarSelectionHint,
+                    SurfaceSelectionHint,
                 ));
 
                 sec.spawn((
@@ -2730,53 +2762,52 @@ pub(crate) fn rebuild_boundary_loads_list(
 /// entry per click (rather than merging into an existing one) keeps the
 /// list simple and undo straightforward: delete the most-recent entry to
 /// revert the action.
-// ── planar selection ──────────────────────────────────────────────────────────
+// ── surface selection growth ─────────────────────────────────────────────────
 
-/// Toggles the `PlanarSelectionSettings::enabled` flag and updates the
-/// button label to "Planar ON" / "Planar OFF".
-pub(crate) fn planar_selection_toggle_system(
-    mut planar: ResMut<PlanarSelectionSettings>,
+pub(crate) fn surface_selection_mode_button_system(
+    mut settings: ResMut<SurfaceSelectionSettings>,
     mut buttons: Query<
         (
             Ref<Interaction>,
+            &SurfaceSelectionModeButton,
             &mut BackgroundColor,
             &mut BorderColor,
-            &Children,
         ),
-        With<PlanarSelectionToggle>,
     >,
-    mut labels: Query<&mut Text>,
+    mut angle_controls: Query<&mut Visibility, With<SurfaceAngleControls>>,
 ) {
-    for (interaction, mut bg, mut border, children) in &mut buttons {
+    for (interaction, button, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            planar.enabled = !planar.enabled;
+            settings.mode = button.mode;
         }
 
-        let active = planar.enabled;
+        let active = settings.mode == button.mode;
         let color = match (*interaction, active) {
             (Interaction::Pressed, _) => BUTTON_PRESSED,
             (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
             (Interaction::Hovered, false) => BUTTON_HOVERED,
             (Interaction::None, false) => BUTTON_NORMAL,
         };
-        *bg = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
+        *background = BackgroundColor(color);
+        *border = if active {
+            BorderColor::all(ACTIVE_BORDER)
+        } else {
+            BorderColor::all(PANEL_BORDER)
+        };
+    }
 
-        for &child in children {
-            if let Ok(mut text) = labels.get_mut(child) {
-                **text = if planar.enabled {
-                    "Planar  ON".to_string()
-                } else {
-                    "Planar OFF".to_string()
-                };
-            }
-        }
+    for mut visibility in &mut angle_controls {
+        *visibility = if settings.mode == SurfaceSelectionMode::Smooth {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
 /// Computes the live "what would clicking select right now" preview group
 /// (see [`fem_core::HoverPreviewTargets`]) from the current hover target
-/// and the planar/coplanar settings, every frame.
+/// and the active Single/Coplanar/Smooth mode, every frame.
 ///
 /// This always walks from whatever is under the cursor *this* frame,
 /// independent of what's already selected — [`selection::click_selection_system`]
@@ -2785,86 +2816,119 @@ pub(crate) fn planar_selection_toggle_system(
 /// so there's no separate click-time seed to track here.
 pub(crate) fn update_hover_preview_group(
     hover: Res<HoverResult>,
-    planar: Res<PlanarSelectionSettings>,
+    settings: Res<SurfaceSelectionSettings>,
     model: Option<Res<FemModel>>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut preview: ResMut<fem_core::HoverPreviewTargets>,
 ) {
-    let new_targets: Vec<fem_core::FemEntityRef> = match hover.hit {
-        None => Vec::new(),
+    let (new_targets, new_highlight_targets): (Vec<_>, Vec<_>) = match hover.hit {
+        None => (Vec::new(), Vec::new()),
 
-        Some(hit) if !planar.enabled => vec![hit.target],
+        Some(hit) if settings.mode == SurfaceSelectionMode::Single => {
+            (vec![hit.target], vec![hit.target])
+        }
 
         Some(hit) => {
             let target = hit.target;
-            let threshold = slider_query
-                .iter()
-                .find(|s| s.id == SliderId::PlanarAngle)
-                .map(|s| s.value)
-                .unwrap_or(planar.angle_deg);
+            let threshold = match settings.mode {
+                SurfaceSelectionMode::Coplanar => COPLANAR_TOLERANCE_DEG,
+                SurfaceSelectionMode::Smooth => slider_query
+                    .iter()
+                    .find(|slider| slider.id == SliderId::SurfaceAngle)
+                    .map(|slider| slider.value)
+                    .unwrap_or(DEFAULT_SMOOTH_ANGLE_DEG),
+                SurfaceSelectionMode::Single => unreachable!(),
+            };
 
             let Some(mesh) = model
                 .as_deref()
                 .and_then(|model| model.meshes.get(target.mesh_index))
             else {
-                preview.targets = vec![target];
+                let fallback = vec![target];
+                if preview.targets != fallback || preview.highlight_targets != fallback {
+                    preview.targets = fallback.clone();
+                    preview.highlight_targets = fallback;
+                }
                 return;
             };
 
             match target.entity {
                 fem_core::FemEntityId::Face(fid) => {
-                    let (faces, _) = fem_core::expand_coplanar_from_face(mesh, fid, threshold);
-                    faces
+                    let (faces, _) = match settings.mode {
+                        SurfaceSelectionMode::Coplanar => {
+                            fem_core::expand_coplanar_from_face(mesh, fid, threshold)
+                        }
+                        SurfaceSelectionMode::Smooth => {
+                            fem_core::expand_smooth_from_face(mesh, fid, threshold)
+                        }
+                        SurfaceSelectionMode::Single => unreachable!(),
+                    };
+                    let face_targets: Vec<_> = faces
                         .into_iter()
                         .map(|id| fem_core::FemEntityRef::face(target.mesh_index, id))
-                        .collect()
+                        .collect();
+                    (face_targets.clone(), face_targets)
                 }
                 fem_core::FemEntityId::Element(eid) => {
                     // Always commit `Element` targets here, matching the
-                    // seed's own kind — never `Face`. `expand_coplanar_from_element`
-                    // returns `faces` only as an internal detail of how it
-                    // computed the group (it walks by face, since that's
-                    // where normals live). The renderer draws the complete
-                    // geometry of every resulting element, while Face mode
-                    // draws only the surface patch. Keeping the committed
-                    // target kind pure is also required by element-group
-                    // export and element-based setup operations.
+                    // seed's own kind — never `Face`. Surface-growth functions
+                    // return `faces` only as an internal detail of how they
+                    // compute the group (they walk by face, since that's
+                    // where normals live). Those faces now become the overlay
+                    // geometry while the committed targets remain Elements,
+                    // avoiding a misleading display of every internal
+                    // tetrahedron side. Keeping the committed target kind pure
+                    // is required by element-group export and setup operations.
                     let seed_face = hit.surface_face.filter(|face_id| {
                         mesh.cached_boundary_faces()
                             .iter()
                             .any(|face| face.id == *face_id && face.element == Some(eid))
                     });
-                    let (_, elements) = match seed_face {
-                        Some(face_id) => {
+                    let (faces, elements) = match (settings.mode, seed_face) {
+                        (SurfaceSelectionMode::Coplanar, Some(face_id)) => {
                             fem_core::expand_coplanar_from_face(mesh, face_id, threshold)
                         }
-                        None => fem_core::expand_coplanar_from_element(mesh, eid, threshold),
+                        (SurfaceSelectionMode::Coplanar, None) => {
+                            fem_core::expand_coplanar_from_element(mesh, eid, threshold)
+                        }
+                        (SurfaceSelectionMode::Smooth, Some(face_id)) => {
+                            fem_core::expand_smooth_from_face(mesh, face_id, threshold)
+                        }
+                        (SurfaceSelectionMode::Smooth, None) => {
+                            fem_core::expand_smooth_from_element(mesh, eid, threshold)
+                        }
+                        (SurfaceSelectionMode::Single, _) => unreachable!(),
                     };
-                    elements
+                    let element_targets = elements
                         .into_iter()
                         .map(|id| fem_core::FemEntityRef::element(target.mesh_index, id))
-                        .collect()
+                        .collect();
+                    let face_targets = faces
+                        .into_iter()
+                        .map(|id| fem_core::FemEntityRef::face(target.mesh_index, id))
+                        .collect();
+                    (element_targets, face_targets)
                 }
-                _ => vec![target],
+                _ => (vec![target], vec![target]),
             }
         }
     };
 
     // Avoid marking the resource `Changed` (and so triggering a highlight
     // mesh rebuild) every single frame when nothing actually moved.
-    if preview.targets != new_targets {
+    if preview.targets != new_targets || preview.highlight_targets != new_highlight_targets {
         preview.targets = new_targets;
+        preview.highlight_targets = new_highlight_targets;
     }
 }
 
-/// Explains the intentionally different meaning of Planar selection for
-/// Face and Element filters at the point of use.
-pub(crate) fn update_planar_selection_hint(
+/// Explains both the growth algorithm and the Face/Element target distinction.
+pub(crate) fn update_surface_selection_hint(
     filter: Res<SelectionFilter>,
-    planar: Res<PlanarSelectionSettings>,
-    mut query: Query<&mut Text, With<PlanarSelectionHint>>,
+    settings: Res<SurfaceSelectionSettings>,
+    mut query: Query<&mut Text, With<SurfaceSelectionHint>>,
 ) {
-    if !filter.is_changed() && !planar.is_changed() {
+    if !filter.is_changed() && !settings.is_changed() {
         return;
     }
 
@@ -2872,17 +2936,36 @@ pub(crate) fn update_planar_selection_hint(
         return;
     };
 
-    **text = match (filter.level, planar.enabled) {
-        (SelectionLevel::Face, true) => "Face Planar = connected surface patch",
-        (SelectionLevel::Element, true) => {
-            "Element Planar = elements behind face patch"
+    **text = surface_selection_hint(filter.level, settings.mode).to_string();
+}
+
+fn surface_selection_hint(
+    level: SelectionLevel,
+    mode: SurfaceSelectionMode,
+) -> &'static str {
+    match (level, mode) {
+        (SelectionLevel::Face, SurfaceSelectionMode::Single) => {
+            "Face Single = one boundary surface face"
         }
-        (SelectionLevel::Face, false) => "Face = one boundary surface face",
-        (SelectionLevel::Element, false) => "Element = one whole FEM element",
-        (_, true) => "Planar ON applies to Face and Element",
-        (_, false) => "Face = surface  |  Element = whole element",
+        (SelectionLevel::Element, SurfaceSelectionMode::Single) => {
+            "Element Single = one whole FEM element"
+        }
+        (SelectionLevel::Face, SurfaceSelectionMode::Coplanar) => {
+            "Face Coplanar = flat patch (fixed 0.5° tolerance)"
+        }
+        (SelectionLevel::Element, SurfaceSelectionMode::Coplanar) => {
+            "Element Coplanar = volumes; bodies extend behind surface"
+        }
+        (SelectionLevel::Face, SurfaceSelectionMode::Smooth) => {
+            "Face Smooth = connected curved surface patch"
+        }
+        (SelectionLevel::Element, SurfaceSelectionMode::Smooth) => {
+            "Element Smooth = whole elements behind curved patch"
+        }
+        (_, SurfaceSelectionMode::Single) => "Single selects one topology item",
+        (_, SurfaceSelectionMode::Coplanar) => "Coplanar applies to Face and Element",
+        (_, SurfaceSelectionMode::Smooth) => "Smooth applies to Face and Element",
     }
-    .to_string();
 }
 
 /// Updates the `SelectionInfoText` every frame with:
@@ -3819,6 +3902,9 @@ pub(crate) fn set_button_system(
                         for target in &targets {
                             if !selection.targets.contains(target) {
                                 selection.targets.push(*target);
+                            }
+                            if !selection.highlight_targets.contains(target) {
+                                selection.highlight_targets.push(*target);
                             }
                         }
 
@@ -5176,7 +5262,7 @@ pub(crate) fn apply_slider_to_results(
             // These sliders are read by dedicated systems; result display doesn't need them.
             SliderId::LoadMagnitude
             | SliderId::SectionThickness
-            | SliderId::PlanarAngle
+            | SliderId::SurfaceAngle
             | SliderId::DloadMagnitude
             | SliderId::PlaybackSpeed => {}
         }
@@ -5304,10 +5390,16 @@ fn compact_path(path: &Path) -> String {
 mod sidebar_page_tests {
     use std::path::PathBuf;
 
-    use super::{SidebarPage, SidebarPageContent, apply_mesh, selected_nodes_by_mesh};
-    use fem_core::{
-        AnalysisSetup, FemEntityRef, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId,
+    use super::{
+        SidebarPage, SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings,
+        apply_mesh, selected_nodes_by_mesh, surface_selection_hint, update_hover_preview_group,
     };
+    use bevy::prelude::{App, Update, Vec3};
+    use fem_core::{
+        AnalysisSetup, FemEntityId, FemEntityRef, FemMesh, FemModel, FemModelVersion,
+        HoverPreviewTargets, MeshLoadStatus, NodeId, SelectionHit, SelectionLevel,
+    };
+    use interaction::HoverResult;
     use selection::SelectionState;
 
     #[test]
@@ -5399,5 +5491,56 @@ mod sidebar_page_tests {
 
         assert_eq!(grouped.get(&0), Some(&vec![NodeId(7)]));
         assert_eq!(grouped.get(&1), Some(&vec![NodeId(7)]));
+    }
+
+    #[test]
+    fn surface_growth_hint_keeps_face_and_element_meanings_distinct() {
+        assert_eq!(
+            surface_selection_hint(SelectionLevel::Face, SurfaceSelectionMode::Smooth),
+            "Face Smooth = connected curved surface patch"
+        );
+        assert_eq!(
+            surface_selection_hint(SelectionLevel::Element, SurfaceSelectionMode::Smooth),
+            "Element Smooth = whole elements behind curved patch"
+        );
+    }
+
+    #[test]
+    fn element_surface_growth_keeps_element_targets_but_highlights_faces() {
+        let model = FemModel::demo_hex8();
+        let face = model.meshes[0].cached_boundary_faces()[0].clone();
+        let element = face.element.expect("a solid boundary face has an owner");
+        let hit = SelectionHit::new(
+            FemEntityRef::element(0, element),
+            Vec3::ZERO,
+            0.0,
+        )
+        .with_surface(face.id, face.element);
+
+        let mut app = App::new();
+        app.insert_resource(model);
+        app.insert_resource(HoverResult {
+            entity: None,
+            hit: Some(hit),
+        });
+        app.insert_resource(SurfaceSelectionSettings {
+            mode: SurfaceSelectionMode::Coplanar,
+        });
+        app.init_resource::<HoverPreviewTargets>();
+        app.add_systems(Update, update_hover_preview_group);
+
+        app.update();
+
+        let preview = app.world().resource::<HoverPreviewTargets>();
+        assert!(preview
+            .targets
+            .iter()
+            .all(|target| matches!(target.entity, FemEntityId::Element(_))));
+        assert!(preview
+            .highlight_targets
+            .iter()
+            .all(|target| matches!(target.entity, FemEntityId::Face(_))));
+        assert!(!preview.targets.is_empty());
+        assert!(!preview.highlight_targets.is_empty());
     }
 }

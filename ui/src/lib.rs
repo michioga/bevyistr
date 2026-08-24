@@ -17,7 +17,7 @@ use layout::{
     make_node_group_button_system, material_preset_button_system,
     material_select_button_system, mesh_load_system, open_mesh_button_system,
     open_project_button_system, open_result_button_system, open_setup_button_system,
-    planar_selection_toggle_system,
+    surface_selection_mode_button_system,
     playback_advance_system, playback_button_system, push_undo_before_setup_change,
     rebuild_boundary_loads_list, rebuild_materials_sections_list, rebuild_section_def_panel,
     rebuild_sets_list, render_mode_button_system, section_type_button_system,
@@ -28,10 +28,10 @@ use layout::{
     update_analysis_setup_stats_text, update_apply_dload_label, update_apply_load_label,
     update_constraint_button_labels, update_contact_candidate_text, update_mesh_stats_text,
     update_hover_preview_group,
-    update_planar_selection_hint,
+    update_surface_selection_hint,
     update_parts_list_text, update_result_stats_text, update_selection_info_text,
     update_selection_stats_text, update_sidebar_page_visibility, update_ui_pointer_state,
-    PlanarSelectionSettings, PlaybackState, SelectedDloadKind,
+    SurfaceSelectionSettings, PlaybackState, SelectedDloadKind,
     SelectedEgrp, SelectedLoadDirection, SelectedMaterialForSection, SelectedSectionType,
     SidebarPage, UndoInProgress, UndoStack,
 };
@@ -58,7 +58,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<SelectedSectionType>();
         app.init_resource::<SelectedEgrp>();
         app.init_resource::<SelectedMaterialForSection>();
-        app.init_resource::<PlanarSelectionSettings>();
+        app.init_resource::<SurfaceSelectionSettings>();
         app.init_resource::<SelectedDloadKind>();
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
@@ -124,18 +124,18 @@ impl Plugin for UiPlugin {
             rebuild_materials_sections_list,
             toggle_constraints_button_system,
             toggle_loads_button_system,
-            planar_selection_toggle_system,
+            surface_selection_mode_button_system.in_set(InteractionSystems::UiInput),
             update_hover_preview_group
                 .after(slider::update_sliders)
                 .in_set(InteractionSystems::Preview),
         ));
 
-        // Group 5: undo/redo, planar selection, sliders, text updates (≤16 systems)
+        // Group 5: undo/redo, surface selection, sliders, text updates (≤16 systems)
         app.add_systems(Update, (
             push_undo_before_setup_change,
             undo_redo_system.after(push_undo_before_setup_change),
             update_selection_info_text,
-            update_planar_selection_hint,
+            update_surface_selection_hint,
             update_constraint_button_labels,
             update_apply_load_label,
             update_apply_dload_label,
