@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use fem_core::{EdgeId, ElementId, FaceId, FemEntityId, NodeId, SelectionLevel};
+use fem_core::{EdgeId, ElementId, FaceId, FemEntityId, FemEntityRef, NodeId, SelectionLevel};
 
 #[derive(Component)]
 pub struct Hovered;
@@ -9,28 +9,30 @@ pub struct Selected;
 
 #[derive(Component)]
 pub struct Selectable {
-    pub target: FemEntityId,
+    pub target: FemEntityRef,
 }
 
 impl Selectable {
-    pub const fn new(target: FemEntityId) -> Self {
-        Self { target }
+    pub const fn new(mesh_index: usize, target: FemEntityId) -> Self {
+        Self {
+            target: FemEntityRef::new(mesh_index, target),
+        }
     }
 
-    pub const fn node(id: NodeId) -> Self {
-        Self::new(FemEntityId::Node(id))
+    pub const fn node(mesh_index: usize, id: NodeId) -> Self {
+        Self::new(mesh_index, FemEntityId::Node(id))
     }
 
-    pub const fn edge(id: EdgeId) -> Self {
-        Self::new(FemEntityId::Edge(id))
+    pub const fn edge(mesh_index: usize, id: EdgeId) -> Self {
+        Self::new(mesh_index, FemEntityId::Edge(id))
     }
 
-    pub const fn face(id: FaceId) -> Self {
-        Self::new(FemEntityId::Face(id))
+    pub const fn face(mesh_index: usize, id: FaceId) -> Self {
+        Self::new(mesh_index, FemEntityId::Face(id))
     }
 
-    pub const fn element(id: ElementId) -> Self {
-        Self::new(FemEntityId::Element(id))
+    pub const fn element(mesh_index: usize, id: ElementId) -> Self {
+        Self::new(mesh_index, FemEntityId::Element(id))
     }
 
     pub const fn level(&self) -> SelectionLevel {
@@ -40,7 +42,7 @@ impl Selectable {
 
 impl Default for Selectable {
     fn default() -> Self {
-        Self::element(ElementId(0))
+        Self::element(0, ElementId(0))
     }
 }
 

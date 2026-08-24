@@ -674,7 +674,9 @@ fn parse_f32(field: &str, line_number: usize, label: &str) -> Result<f32, HecmwP
 
 #[cfg(test)]
 mod tests {
-    use fem_core::{ContactType, ElementType, FaceId, FemEntityId, FemModel, SurfaceSetRef};
+    use fem_core::{
+        ContactType, ElementType, FaceId, FemEntityId, FemEntityRef, FemModel, SurfaceSetRef,
+    };
 
     use super::*;
 
@@ -879,11 +881,11 @@ mod tests {
         let mut model = FemModel::single_mesh("tet", mesh);
 
         assert_eq!(
-            model.create_surface_set_from_targets("MASTER", &[FemEntityId::Face(FaceId(0))]),
+            model.create_surface_set_from_targets("MASTER", &[FemEntityRef::face(0, FaceId(0))]),
             1
         );
         assert_eq!(
-            model.create_surface_set_from_targets("SLAVE", &[FemEntityId::Face(FaceId(1))]),
+            model.create_surface_set_from_targets("SLAVE", &[FemEntityRef::face(0, FaceId(1))]),
             1
         );
 

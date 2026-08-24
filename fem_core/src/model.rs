@@ -871,13 +871,22 @@ impl FemModel {
     pub fn create_surface_set_from_targets(
         &mut self,
         name: impl Into<String>,
-        targets: &[FemEntityId],
+        targets: &[FemEntityRef],
     ) -> usize {
         let name = name.into();
 
         self.meshes
             .iter_mut()
-            .map(|mesh| mesh.push_surface_set_from_targets(name.clone(), targets))
+            .enumerate()
+            .map(|(mesh_index, mesh)| {
+                let local_targets: Vec<FemEntityId> = targets
+                    .iter()
+                    .filter(|target| target.mesh_index == mesh_index)
+                    .map(|target| target.entity)
+                    .collect();
+
+                mesh.push_surface_set_from_targets(name.clone(), &local_targets)
+            })
             .sum()
     }
 
@@ -1078,7 +1087,7 @@ pub struct ElementId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalFaceId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FemEntityId {
     Node(NodeId),
 
@@ -1097,6 +1106,88 @@ impl FemEntityId {
             Self::Face(_) => SelectionLevel::Face,
             Self::Element(_) => SelectionLevel::Element,
         }
+    }
+}
+
+/// A topology entity scoped to one mesh in a multi-part [`FemModel`].
+///
+/// Node, edge, face, and element IDs are only unique inside their owning
+/// mesh. Selection and hover state must therefore carry `mesh_index` with
+/// the local ID; otherwise importing two meshes whose IDs both start at 1
+/// makes a click on one part highlight or edit the other part as well.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FemEntityRef {
+    pub mesh_index: usize,
+
+    pub entity: FemEntityId,
+}
+
+impl FemEntityRef {
+    pub const fn new(mesh_index: usize, entity: FemEntityId) -> Self {
+        Self { mesh_index, entity }
+    }
+
+    pub const fn node(mesh_index: usize, id: NodeId) -> Self {
+        Self::new(mesh_index, FemEntityId::Node(id))
+    }
+
+    pub const fn edge(mesh_index: usize, id: EdgeId) -> Self {
+        Self::new(mesh_index, FemEntityId::Edge(id))
+    }
+
+    pub const fn face(mesh_index: usize, id: FaceId) -> Self {
+        Self::new(mesh_index, FemEntityId::Face(id))
+    }
+
+    pub const fn element(mesh_index: usize, id: ElementId) -> Self {
+        Self::new(mesh_index, FemEntityId::Element(id))
+    }
+
+    pub const fn level(self) -> SelectionLevel {
+        self.entity.level()
+    }
+}
+
+/// Complete result of resolving one pointer position against FEM topology.
+///
+/// `target` is the entity selected at the active filter level. For a ray hit
+/// on a boundary surface, `surface_face` and `element` preserve the complete
+/// hit context even when `target` is an Element. This allows later gestures
+/// (surface grow, double-click, selection cycling) to reinterpret the same
+/// hit without repeating the pick or guessing an arbitrary element face.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionHit {
+    pub target: FemEntityRef,
+
+    pub surface_face: Option<FaceId>,
+
+    pub element: Option<ElementId>,
+
+    pub world_position: Vec3,
+
+    /// Distance from the picking ray origin, used to order stacked hits.
+    pub depth: f32,
+}
+
+impl SelectionHit {
+    pub const fn new(target: FemEntityRef, world_position: Vec3, depth: f32) -> Self {
+        Self {
+            target,
+            surface_face: None,
+            element: None,
+            world_position,
+            depth,
+        }
+    }
+
+    pub const fn with_surface(mut self, face: FaceId, element: Option<ElementId>) -> Self {
+        self.surface_face = Some(face);
+        self.element = element;
+        self
+    }
+
+    pub const fn level(self) -> SelectionLevel {
+        self.target.level()
     }
 }
 
@@ -1237,5 +1328,29 @@ mod tests {
                 ordered_pair(complete_edge.nodes[0], complete_edge.nodes[1])
             );
         }
+    }
+
+    #[test]
+    fn mesh_scoped_entity_refs_do_not_collide() {
+        assert_ne!(
+            FemEntityRef::element(0, ElementId(1)),
+            FemEntityRef::element(1, ElementId(1))
+        );
+    }
+
+    #[test]
+    fn surface_creation_only_updates_the_target_mesh() {
+        let mut model = FemModel::single_mesh("Part A", FemMesh::demo_hex8());
+        model.add_mesh("Part B", FemMesh::demo_hex8());
+        let face_id = model.meshes[1].cached_boundary_faces()[0].id;
+
+        let count = model.create_surface_set_from_targets(
+            "PART_B_SURFACE",
+            &[FemEntityRef::face(1, face_id)],
+        );
+
+        assert_eq!(count, 1);
+        assert!(model.meshes[0].surface_sets.is_empty());
+        assert_eq!(model.meshes[1].surface_sets.len(), 1);
     }
 }

@@ -4,8 +4,8 @@ use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use fem_core::{
-    ContactCandidateState, FaceId, FemEdge, FemElement, FemEntityId, FemFace, FemMesh, FemModel,
-    FemNode, FemResultSet, rainbow_color,
+    ContactCandidateState, FaceId, FemEdge, FemElement, FemEntityId, FemEntityRef, FemFace,
+    FemMesh, FemModel, FemNode, FemResultSet, rainbow_color,
 };
 use interaction::HoverResult;
 use std::collections::BTreeSet;
@@ -162,9 +162,9 @@ pub(crate) struct TopologyHighlightCache {
     /// only rebuilds geometry when it actually changes (rebuilding walks
     /// every target's boundary face and rebuilds a full merged mesh, not
     /// free on a large model).
-    hover: Vec<FemEntityId>,
+    hover: Vec<FemEntityRef>,
 
-    selected: Vec<FemEntityId>,
+    selected: Vec<FemEntityRef>,
 }
 
 /// Marker for any entity spawned to visualize the current [`FemModel`].
@@ -332,19 +332,19 @@ pub(crate) fn spawn_model_visuals(
                 &element_materials
             };
 
-            spawn_element_visual(commands, meshes, fem_mesh, element, materials_for_element, section, model_scale);
+            spawn_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials_for_element, section, model_scale);
         }
 
         for face in fem_mesh.cached_boundary_faces() {
-            spawn_face_visual(commands, meshes, fem_mesh, face, &face_materials);
+            spawn_face_visual(commands, meshes, mesh_index, fem_mesh, face, &face_materials);
         }
 
         for edge in fem_mesh.cached_edges() {
-            spawn_edge_visual(commands, meshes, fem_mesh, edge, &edge_materials);
+            spawn_edge_visual(commands, meshes, mesh_index, fem_mesh, edge, &edge_materials);
         }
 
         for node in &fem_mesh.nodes {
-            spawn_node_visual(commands, meshes, node, &node_materials);
+            spawn_node_visual(commands, meshes, mesh_index, node, &node_materials);
         }
     }
 }
@@ -616,9 +616,9 @@ pub fn update_hover_materials(
 /// shows the model's entire current selection (every face the person has
 /// clicked/box-selected, not only the most recent one), and
 /// [`TopologyHighlight::Hover`] shows [`fem_core::HoverPreviewTargets`] —
-/// the full coplanar group that would be added if the person clicked right
-/// now, computed by `ui`'s `update_hover_preview_group` (falls back to just
-/// the single hovered entity when planar/coplanar selection is off).
+/// the full Coplanar/Smooth group that would be added if the person clicked
+/// right now, computed by `ui`'s `update_hover_preview_group` (or just the
+/// single hovered entity in Single mode).
 pub(crate) fn update_topology_highlights(
     model: Option<Res<FemModel>>,
     hover_preview: Res<fem_core::HoverPreviewTargets>,
@@ -643,26 +643,40 @@ pub(crate) fn update_topology_highlights(
 
     // When every hover-preview target is already part of the selection
     // (the common case: hovering the thing you just selected, or —
-    // with planar selection on — hovering back over the same group),
+    // with surface growth on — hovering back over the same group),
     // hide the hover overlay entirely and let only the selected (bright
     // green) overlay show. Without this both overlays render at the same
     // position and blend into a confusing colour.
     let hover_is_redundant = !hover_preview.targets.is_empty()
         && hover_preview.targets.iter().all(|t| selection.targets.contains(t));
 
-    let hover_targets: &[FemEntityId] = if hover_is_redundant { &[] } else { &hover_preview.targets };
+    let preview_highlights: &[FemEntityRef] = if hover_preview.highlight_targets.is_empty() {
+        &hover_preview.targets
+    } else {
+        &hover_preview.highlight_targets
+    };
+    let selected_highlights: &[FemEntityRef] = if selection.highlight_targets.is_empty() {
+        &selection.targets
+    } else {
+        &selection.highlight_targets
+    };
+    let hover_targets: &[FemEntityRef] = if hover_is_redundant {
+        &[]
+    } else {
+        preview_highlights
+    };
 
-    if cache.hover.as_slice() == hover_targets && cache.selected == selection.targets {
+    if cache.hover.as_slice() == hover_targets && cache.selected == selected_highlights {
         return;
     }
 
     cache.hover = hover_targets.to_vec();
-    cache.selected = selection.targets.clone();
+    cache.selected = selected_highlights.to_vec();
 
     for (highlight, mut mesh, mut transform, mut visibility) in &mut query {
-        let targets: &[FemEntityId] = match highlight {
+        let targets: &[FemEntityRef] = match highlight {
             TopologyHighlight::Hover    => hover_targets,
-            TopologyHighlight::Selected => &selection.targets,
+            TopologyHighlight::Selected => selected_highlights,
         };
 
         if targets.is_empty() {
@@ -981,7 +995,7 @@ pub(crate) fn update_contact_candidate_highlights(
 /// the whole group rather than just one facet of it.
 fn apply_topology_highlight(
     model: &FemModel,
-    targets: &[FemEntityId],
+    targets: &[FemEntityRef],
     meshes: &mut Assets<Mesh>,
     mesh: &mut Mesh3d,
     transform: &mut Transform,
@@ -990,27 +1004,21 @@ fn apply_topology_highlight(
     let scale = model_visual_scale(model);
 
     let last = *targets.last()?;
+    let fem_mesh = model.meshes.get(last.mesh_index)?;
 
-    match last {
+    match last.entity {
         FemEntityId::Node(id) => {
-            let position = model
-                .meshes
-                .iter()
-                .find_map(|fem_mesh| fem_mesh.node_position(id))?;
+            let position = fem_mesh.node_position(id)?;
             mesh.0 = meshes.add(Cuboid::new(scale * 0.012, scale * 0.012, scale * 0.012));
             *transform = Transform::from_translation(position);
         }
         FemEntityId::Edge(id) => {
-            let (start, end) = model.meshes.iter().find_map(|fem_mesh| {
-                let edge = fem_mesh
-                    .cached_boundary_edges()
-                    .iter()
-                    .find(|edge| edge.id == id)?;
-                Some((
-                    fem_mesh.node_position(edge.nodes[0])?,
-                    fem_mesh.node_position(edge.nodes[1])?,
-                ))
-            })?;
+            let edge = fem_mesh
+                .cached_boundary_edges()
+                .iter()
+                .find(|edge| edge.id == id)?;
+            let start = fem_mesh.node_position(edge.nodes[0])?;
+            let end = fem_mesh.node_position(edge.nodes[1])?;
             let delta = end - start;
             let length = delta.length();
 
@@ -1032,7 +1040,7 @@ fn apply_topology_highlight(
         }
         FemEntityId::Face(_) | FemEntityId::Element(_) => {
             let face_targets = targets.iter().copied()
-                .filter(|t| matches!(t, FemEntityId::Face(_) | FemEntityId::Element(_)));
+                .filter(|t| matches!(t.entity, FemEntityId::Face(_) | FemEntityId::Element(_)));
 
             mesh.0 = meshes.add(build_multi_face_highlight_mesh(model, face_targets)?);
             *transform = Transform::default();
@@ -1067,7 +1075,7 @@ fn apply_topology_highlight(
 /// that cost.
 fn build_multi_face_highlight_mesh(
     model: &FemModel,
-    targets: impl Iterator<Item = FemEntityId>,
+    targets: impl Iterator<Item = FemEntityRef>,
 ) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -1088,19 +1096,21 @@ fn build_multi_face_highlight_mesh(
 
 fn append_target_highlight_triangles(
     model: &FemModel,
-    target: FemEntityId,
+    target: FemEntityRef,
     positions: &mut Vec<[f32; 3]>,
     normals: &mut Vec<[f32; 3]>,
 ) {
-    match target {
+    let Some(fem_mesh) = model.meshes.get(target.mesh_index) else {
+        return;
+    };
+
+    match target.entity {
         FemEntityId::Face(id) => {
-            let Some((fem_mesh, face)) = model.meshes.iter().find_map(|fem_mesh| {
-                fem_mesh
-                    .cached_boundary_faces()
-                    .iter()
-                    .find(|face| face.id == id)
-                    .map(|face| (fem_mesh, face))
-            }) else {
+            let Some(face) = fem_mesh
+                .cached_boundary_faces()
+                .iter()
+                .find(|face| face.id == id)
+            else {
                 return;
             };
             let Some(points) = fem_mesh.node_positions(&face.nodes) else {
@@ -1110,13 +1120,7 @@ fn append_target_highlight_triangles(
             append_face_triangles(positions, normals, &points);
         }
         FemEntityId::Element(id) => {
-            let Some((fem_mesh, element)) = model.meshes.iter().find_map(|fem_mesh| {
-                fem_mesh
-                    .elements
-                    .iter()
-                    .find(|element| element.id == id)
-                    .map(|element| (fem_mesh, element))
-            }) else {
+            let Some(element) = fem_mesh.elements.iter().find(|element| element.id == id) else {
                 return;
             };
 
@@ -1197,6 +1201,7 @@ pub(crate) fn model_visual_scale(model: &FemModel) -> f32 {
 fn spawn_element_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     element: &FemElement,
     materials: &MaterialSet,
@@ -1204,11 +1209,11 @@ fn spawn_element_visual(
     model_scale: f32,
 ) {
     if element.element_type.is_shell() {
-        spawn_shell_element_visual(commands, meshes, fem_mesh, element, materials, section, model_scale);
+        spawn_shell_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials, section, model_scale);
     } else if element.element_type.is_beam() {
-        spawn_beam_element_visual(commands, meshes, fem_mesh, element, materials, section, model_scale);
+        spawn_beam_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials, section, model_scale);
     } else {
-        spawn_solid_element_visual(commands, meshes, fem_mesh, element, materials);
+        spawn_solid_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials);
     }
 }
 
@@ -1218,6 +1223,7 @@ fn spawn_element_visual(
 fn spawn_solid_element_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     element: &FemElement,
     materials: &MaterialSet,
@@ -1247,7 +1253,7 @@ fn spawn_solid_element_visual(
         transform,
         VisualLayer::Shaded,
         Visibility::Visible,
-        Selectable::element(element.id),
+        Selectable::element(mesh_index, element.id),
         ElementEntity::new(element.id),
         NormalMaterial(materials.normal.clone()),
         FlatMaterial(materials.flat.clone()),
@@ -1304,6 +1310,7 @@ fn shell_corner_count(element_type: &fem_core::ElementType) -> usize {
 fn spawn_shell_element_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     element: &FemElement,
     materials: &MaterialSet,
@@ -1380,7 +1387,7 @@ fn spawn_shell_element_visual(
         Transform::default(),
         VisualLayer::Shaded,
         Visibility::Visible,
-        Selectable::element(element.id),
+        Selectable::element(mesh_index, element.id),
         ElementEntity::new(element.id),
         NormalMaterial(materials.normal.clone()),
         FlatMaterial(materials.flat.clone()),
@@ -1407,6 +1414,7 @@ fn spawn_shell_element_visual(
 fn spawn_beam_element_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     element: &FemElement,
     materials: &MaterialSet,
@@ -1464,7 +1472,7 @@ fn spawn_beam_element_visual(
             },
             VisualLayer::Shaded,
             Visibility::Visible,
-            Selectable::element(element.id),
+            Selectable::element(mesh_index, element.id),
             ElementEntity::new(element.id),
             NormalMaterial(materials.normal.clone()),
             FlatMaterial(materials.flat.clone()),
@@ -1484,6 +1492,7 @@ fn spawn_beam_element_visual(
 fn spawn_face_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     face: &FemFace,
     materials: &MaterialSet,
@@ -1501,7 +1510,7 @@ fn spawn_face_visual(
         Transform::default(),
         VisualLayer::Shaded,
         Visibility::Visible,
-        Selectable::face(face.id),
+        Selectable::face(mesh_index, face.id),
         FaceEntity::new(face.id),
         NormalMaterial(materials.normal.clone()),
         FlatMaterial(materials.flat.clone()),
@@ -1553,6 +1562,7 @@ fn build_extruded_polygon_mesh(points: &[Vec3], thickness: f32) -> Option<Mesh> 
 fn spawn_edge_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     edge: &FemEdge,
     materials: &MaterialSet,
@@ -1585,7 +1595,7 @@ fn spawn_edge_visual(
         },
         VisualLayer::Edge,
         Visibility::Visible,
-        Selectable::edge(edge.id),
+        Selectable::edge(mesh_index, edge.id),
         EdgeEntity::new(edge.id),
         NormalMaterial(materials.normal.clone()),
         FlatMaterial(materials.flat.clone()),
@@ -1600,6 +1610,7 @@ fn spawn_edge_visual(
 fn spawn_node_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    mesh_index: usize,
     node: &FemNode,
     materials: &MaterialSet,
 ) {
@@ -1609,7 +1620,7 @@ fn spawn_node_visual(
         Transform::from_translation(node.position),
         VisualLayer::Node,
         Visibility::Visible,
-        Selectable::node(node.id),
+        Selectable::node(mesh_index, node.id),
         NodeEntity::new(node.id),
         NormalMaterial(materials.normal.clone()),
         FlatMaterial(materials.flat.clone()),
@@ -1976,12 +1987,12 @@ mod tests {
 
         let face = build_multi_face_highlight_mesh(
             &model,
-            [FemEntityId::Face(face_id)].into_iter(),
+            [FemEntityRef::face(0, face_id)].into_iter(),
         )
         .unwrap();
         let element = build_multi_face_highlight_mesh(
             &model,
-            [FemEntityId::Element(ElementId(0))].into_iter(),
+            [FemEntityRef::element(0, ElementId(0))].into_iter(),
         )
         .unwrap();
 

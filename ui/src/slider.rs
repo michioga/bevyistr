@@ -15,8 +15,8 @@ pub enum SliderId {
     /// Shell thickness or beam cross-sectional area for the section
     /// definition panel in ANALYSIS SETUP.
     SectionThickness,
-    /// Coplanar-face angle threshold (0–90°) for the planar selection feature.
-    PlanarAngle,
+    /// Face-normal angle threshold (0–90°) for Coplanar/Smooth growth.
+    SurfaceAngle,
     /// Distributed load (pressure / gravity acceleration) magnitude.
     DloadMagnitude,
     /// Animation playback speed: value is steps/second (0.5 – 10).
@@ -217,7 +217,6 @@ pub(crate) fn update_sliders(
     mut thumb_query: Query<(&SliderThumb, &mut Node), Without<SliderTrack>>,
     mut fill_query:  Query<(&SliderFill,  &mut Node), (Without<SliderTrack>, Without<SliderThumb>)>,
     mut text_query:  Query<(&SliderValueText, &mut Text)>,
-    ui_pointer:      Res<fem_core::UiPointerState>,
 ) {
     if let Ok(window) = windows.single() {
         if let Some(cursor) = window.cursor_position() {
@@ -227,7 +226,7 @@ pub(crate) fn update_sliders(
                 }
             }
 
-            if buttons.just_pressed(MouseButton::Left) && !ui_pointer.over_ui {
+            if buttons.just_pressed(MouseButton::Left) {
                 for (_, mut state, track_node, track_gt) in &mut track_query {
                     let scale  = track_node.inverse_scale_factor;
                     let size   = track_node.size() * scale;

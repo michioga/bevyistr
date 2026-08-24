@@ -11,7 +11,10 @@ pub mod spatial;
 pub use boundary::*;
 pub use contact::*;
 pub use model::*;
-pub use planar::{expand_coplanar_from_element, expand_coplanar_from_face};
+pub use planar::{
+    expand_coplanar_from_element, expand_coplanar_from_face, expand_smooth_from_element,
+    expand_smooth_from_face,
+};
 pub use result::*;
 pub use spatial::*;
 
@@ -133,19 +136,25 @@ impl FemModelVersion {
 /// The entities that would be added to the selection if the person
 /// clicked on the current hover target right now.
 ///
-/// Usually just the hovered entity itself, but expanded to the full
-/// connected coplanar face group (via [`crate::expand_coplanar_from_face`]
-/// / [`crate::expand_coplanar_from_element`]) when the planar/coplanar
-/// selection feature is active — computed each frame by a system in the
-/// `ui` crate (which owns the planar-selection settings and the angle
-/// slider) and consumed by `visualization`'s hover highlight, so the
+/// Usually just the hovered entity itself, but expanded to a connected
+/// Coplanar or Smooth surface group when surface growth is active. It is
+/// computed each frame by a system in the `ui` crate (which owns the growth
+/// mode and angle slider) and consumed by `visualization`'s hover highlight, so the
 /// preview accurately reflects what a click would actually select rather
 /// than just the single facet under the cursor. Living in `fem_core`
 /// rather than `ui` or `visualization` lets both depend on it without
 /// `visualization` needing a (backwards) dependency on `ui`.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct HoverPreviewTargets {
-    pub targets: Vec<FemEntityId>,
+    /// FEM entities that will be committed when the pointer is clicked.
+    pub targets: Vec<FemEntityRef>,
+
+    /// Geometry used only for the hover overlay. This normally matches
+    /// `targets`, but an Element surface-growth preview stores element IDs in
+    /// `targets` while drawing the boundary Face patch here. That prevents
+    /// internal tetrahedron faces from looking like accidentally selected
+    /// edges around an otherwise flat patch.
+    pub highlight_targets: Vec<FemEntityRef>,
 }
 
 /// A `.cnt` file queued to be merged into [`AnalysisSetup`] once a mesh

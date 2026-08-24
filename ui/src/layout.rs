@@ -4,11 +4,13 @@ use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use camera::OrbitCamera;
 use fem_core::{
-    ContactCandidateState, ContactType, FemEntityId, FemModel, FemModelVersion, FemResultSet,
-    MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel, UiPointerState,
+    ContactCandidateState, ContactType, FemEntityId, FemEntityRef, FemModel, FemModelVersion,
+    FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel,
+    UiPointerState,
 };
 use interaction::HoverResult;
-use selection::{Hovered, Selectable, Selected, SelectionState};
+use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use visualization::ContourSettings;
 use visualization::{VisualizationMode, VisualizationSettings};
@@ -22,11 +24,33 @@ const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 const ACTIVE_BORDER: Color = Color::srgb(0.57, 0.86, 0.92);
+const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
+const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 
 #[derive(Component)]
 pub(crate) struct SelectionLevelButton {
     level: SelectionLevel,
 }
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct SelectionGuideState {
+    pub expanded: bool,
+}
+
+impl Default for SelectionGuideState {
+    fn default() -> Self {
+        Self { expanded: true }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct SelectionGuideToggle;
+
+#[derive(Component)]
+pub(crate) struct SelectionGuidePanel;
+
+#[derive(Component)]
+pub(crate) struct SelectionOperationHint;
 
 #[derive(Component)]
 pub(crate) struct RenderModeButton {
@@ -52,42 +76,53 @@ pub(crate) struct MakeNodeGroupButton;
 #[derive(Component)]
 pub(crate) struct MakeElementGroupButton;
 
-/// Resource controlling the coplanar-face-expansion feature.
-///
-/// When `enabled`, clicking a face or element in the 3D view expands the
-/// selection to all connected boundary faces whose normal deviates by at
-/// most `angle_deg` from the clicked face's normal.
-///
-/// The angle can be changed with a slider while hovering; the live
-/// coplanar-group *preview* (see [`fem_core::HoverPreviewTargets`], built
-/// each frame by [`update_hover_preview_group`]) re-runs the walk from
-/// whatever's under the cursor every frame, so the preview always reflects
-/// the current threshold before you ever click — essential for "feel" on
-/// curved or chamfered geometry where the right threshold isn't obvious in
-/// advance. What actually gets added to the selection on a click is
-/// whatever the preview showed at that moment (see
-/// [`selection::click_selection_system`]), so this resource only needs to
-/// track the toggle and the threshold — no click-time seed bookkeeping.
-#[derive(Resource, Debug, Clone)]
-pub(crate) struct PlanarSelectionSettings {
-    pub enabled: bool,
-    pub angle_deg: f32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SurfaceSelectionMode {
+    #[default]
+    Single,
+    Coplanar,
+    Smooth,
 }
 
-impl Default for PlanarSelectionSettings {
+impl SurfaceSelectionMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Single => "Single",
+            Self::Coplanar => "Coplanar",
+            Self::Smooth => "Smooth",
+        }
+    }
+}
+
+/// Controls how one hovered boundary face grows into a selection preview.
+///
+/// `Coplanar` compares every face with the seed normal; `Smooth` compares
+/// neighbouring faces and can therefore follow a curved surface. The target
+/// type remains pure: Face mode yields faces, while Element mode yields the
+/// complete elements immediately behind the same surface patch.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct SurfaceSelectionSettings {
+    pub mode: SurfaceSelectionMode,
+}
+
+impl Default for SurfaceSelectionSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            angle_deg: 15.0,
+            mode: SurfaceSelectionMode::Single,
         }
     }
 }
 
 #[derive(Component)]
-pub(crate) struct PlanarSelectionToggle;
+pub(crate) struct SurfaceSelectionModeButton {
+    mode: SurfaceSelectionMode,
+}
 
 #[derive(Component)]
-pub(crate) struct PlanarSelectionHint;
+pub(crate) struct SurfaceSelectionHint;
+
+#[derive(Component)]
+pub(crate) struct SurfaceAngleControls;
 
 /// Active section type selection for the "Add Section" panel.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -670,7 +705,67 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextColor(TEXT_MAIN),
                     SelectionStatsText,
                 ));
-                hint_text(sec, "Click = select   Ctrl/Shift+Click = add   Alt+Click = remove   Drag = box select");
+                sec.spawn((
+                    Text::new("Action: REPLACE — click or drag starts a new selection"),
+                    TextFont {
+                        font_size: FontSize::Px(10.2),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.50, 0.78, 0.95, 0.95)),
+                    SelectionOperationHint,
+                ));
+                sec.spawn((
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        min_height: px(24.0),
+                        padding: UiRect::axes(px(8.0), px(3.0)),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.08, 0.14, 0.18, 0.96)),
+                    BorderColor::all(Color::srgba(0.30, 0.58, 0.72, 0.90)),
+                    SelectionGuideToggle,
+                    Name::new("SelectionGuideToggle"),
+                )).with_child((
+                    Text::new("Selection guide  [hide]"),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.72, 0.88, 0.96)),
+                ));
+                sec.spawn((
+                    Node {
+                        width: percent(100.0),
+                        padding: UiRect::all(px(7.0)),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.045, 0.075, 0.095, 0.94)),
+                    BorderColor::all(Color::srgba(0.22, 0.40, 0.50, 0.78)),
+                    SelectionGuidePanel,
+                    Name::new("SelectionGuidePanel"),
+                )).with_child((
+                    Text::new(
+                        "Click / drag       Replace selection\n\
+                         Ctrl + click/drag  Add to selection\n\
+                         Shift + click/drag Toggle selected / unselected\n\
+                         Alt or Ctrl+Shift  Remove from selection\n\
+                         Esc                Clear all\n\
+                         Drag left → right  Fully enclosed only\n\
+                         Drag right → left  Crossing / touching",
+                    ),
+                    TextFont {
+                        font_size: FontSize::Px(9.6),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.70, 0.78, 0.82, 0.94)),
+                ));
                 // Dynamic info: count + hover coords — updated every frame.
                 sec.spawn((
                     Text::new("Selected: 0  |  Hover: -"),
@@ -679,50 +774,69 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     SelectionInfoText,
                 ));
 
-                // ── Planar selection ──────────────────────────────────────
+                // ── Surface selection growth ──────────────────────────────
                 sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: px(8.0),
+                        column_gap: px(4.0),
+                        width: percent(100.0),
                         margin: UiRect::top(px(4.0)),
                         ..default()
                     },
                 )).with_children(|row| {
-                    row.spawn((
-                        Button,
-                        Node {
-                            padding: UiRect::axes(px(10.0), px(4.0)),
-                            border: UiRect::all(px(1.0)),
-                            border_radius: BorderRadius::all(px(5.0)),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                        BackgroundColor(BUTTON_NORMAL),
-                        BorderColor::all(PANEL_BORDER),
-                        PlanarSelectionToggle,
-                        Name::new("PlanarToggle"),
-                    )).with_child((
-                        Text::new("Planar OFF"),
-                        TextFont { font_size: FontSize::Px(11.0), ..default() },
-                        TextColor(TEXT_MAIN),
-                    ));
-                });
-                spawn_slider(sec, SliderConfig {
-                    width: 272.0,
-                    min: 0.0, max: 90.0, value: 15.0,
-                    label: "Angle threshold (deg)",
-                    id: SliderId::PlanarAngle,
+                    for mode in [
+                        SurfaceSelectionMode::Single,
+                        SurfaceSelectionMode::Coplanar,
+                        SurfaceSelectionMode::Smooth,
+                    ] {
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                padding: UiRect::axes(px(6.0), px(4.0)),
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(5.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            SurfaceSelectionModeButton { mode },
+                            Name::new(format!("SurfaceSelection_{}", mode.label())),
+                        )).with_child((
+                            Text::new(mode.label()),
+                            TextFont { font_size: FontSize::Px(10.5), ..default() },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
                 });
                 sec.spawn((
-                    Text::new("Face = surface  |  Element = whole element"),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                    SurfaceAngleControls,
+                )).with_children(|controls| {
+                    spawn_slider(controls, SliderConfig {
+                        width: 272.0,
+                        min: 0.0,
+                        max: 90.0,
+                        value: DEFAULT_SMOOTH_ANGLE_DEG,
+                        label: "Smooth angle threshold (deg)",
+                        id: SliderId::SurfaceAngle,
+                    });
+                });
+                sec.spawn((
+                    Text::new("Face = one surface face  |  Element = one whole FEM element"),
                     TextFont {
                         font_size: FontSize::Px(10.0),
                         ..default()
                     },
                     TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
-                    PlanarSelectionHint,
+                    SurfaceSelectionHint,
                 ));
 
                 sec.spawn((
@@ -2037,6 +2151,98 @@ pub(crate) fn update_ui_pointer_state(
     state.over_ui = over_capture_region || over_interactive_widget;
 }
 
+pub(crate) fn selection_guide_toggle_system(
+    mut state: ResMut<SelectionGuideState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &Children,
+        ),
+        With<SelectionGuideToggle>,
+    >,
+    mut panels: Query<&mut Node, With<SelectionGuidePanel>>,
+    mut labels: Query<&mut Text>,
+) {
+    for (interaction, mut background, mut border, children) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.expanded = !state.expanded;
+        }
+
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => Color::srgba(0.11, 0.20, 0.25, 0.98),
+            Interaction::None => Color::srgba(0.08, 0.14, 0.18, 0.96),
+        });
+        *border = BorderColor::all(if state.expanded {
+            ACTIVE_BORDER
+        } else {
+            Color::srgba(0.30, 0.58, 0.72, 0.90)
+        });
+
+        for &child in children {
+            if let Ok(mut text) = labels.get_mut(child) {
+                **text = if state.expanded {
+                    "Selection guide  [hide]"
+                } else {
+                    "Selection guide  [show]"
+                }
+                .to_string();
+            }
+        }
+    }
+
+    for mut node in &mut panels {
+        node.display = if state.expanded {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
+pub(crate) fn update_selection_operation_hint(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut hints: Query<(&mut Text, &mut TextColor), With<SelectionOperationHint>>,
+) {
+    let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    let alt = keyboard.pressed(KeyCode::AltLeft) || keyboard.pressed(KeyCode::AltRight);
+    let operation = SelectionOperation::from_modifiers(ctrl, shift, alt);
+    let (label, color) = selection_operation_hint(operation);
+
+    for (mut text, mut text_color) in &mut hints {
+        if text.as_str() != label {
+            **text = label.to_string();
+        }
+        if text_color.0 != color {
+            text_color.0 = color;
+        }
+    }
+}
+
+fn selection_operation_hint(operation: SelectionOperation) -> (&'static str, Color) {
+    match operation {
+        SelectionOperation::Replace => (
+            "Action: REPLACE — click or drag starts a new selection",
+            Color::srgba(0.50, 0.78, 0.95, 0.95),
+        ),
+        SelectionOperation::Add => (
+            "Action: ADD — Ctrl keeps the current selection",
+            Color::srgba(0.42, 0.90, 0.60, 0.96),
+        ),
+        SelectionOperation::Toggle => (
+            "Action: TOGGLE — Shift reverses selected / unselected",
+            Color::srgba(0.98, 0.76, 0.34, 0.96),
+        ),
+        SelectionOperation::Remove => (
+            "Action: REMOVE — Alt or Ctrl+Shift subtracts",
+            Color::srgba(1.0, 0.48, 0.42, 0.96),
+        ),
+    }
+}
+
 pub(crate) fn selection_level_button_system(
     mut commands: Commands,
     mut filter: ResMut<SelectionFilter>,
@@ -2725,134 +2931,173 @@ pub(crate) fn rebuild_boundary_loads_list(
 /// entry per click (rather than merging into an existing one) keeps the
 /// list simple and undo straightforward: delete the most-recent entry to
 /// revert the action.
-// ── planar selection ──────────────────────────────────────────────────────────
+// ── surface selection growth ─────────────────────────────────────────────────
 
-/// Toggles the `PlanarSelectionSettings::enabled` flag and updates the
-/// button label to "Planar ON" / "Planar OFF".
-pub(crate) fn planar_selection_toggle_system(
-    mut planar: ResMut<PlanarSelectionSettings>,
+pub(crate) fn surface_selection_mode_button_system(
+    mut settings: ResMut<SurfaceSelectionSettings>,
     mut buttons: Query<
         (
             Ref<Interaction>,
+            &SurfaceSelectionModeButton,
             &mut BackgroundColor,
             &mut BorderColor,
-            &Children,
         ),
-        With<PlanarSelectionToggle>,
     >,
-    mut labels: Query<&mut Text>,
+    mut angle_controls: Query<&mut Visibility, With<SurfaceAngleControls>>,
 ) {
-    for (interaction, mut bg, mut border, children) in &mut buttons {
+    for (interaction, button, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            planar.enabled = !planar.enabled;
+            settings.mode = button.mode;
         }
 
-        let active = planar.enabled;
+        let active = settings.mode == button.mode;
         let color = match (*interaction, active) {
             (Interaction::Pressed, _) => BUTTON_PRESSED,
             (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
             (Interaction::Hovered, false) => BUTTON_HOVERED,
             (Interaction::None, false) => BUTTON_NORMAL,
         };
-        *bg = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
+        *background = BackgroundColor(color);
+        *border = if active {
+            BorderColor::all(ACTIVE_BORDER)
+        } else {
+            BorderColor::all(PANEL_BORDER)
+        };
+    }
 
-        for &child in children {
-            if let Ok(mut text) = labels.get_mut(child) {
-                **text = if planar.enabled {
-                    "Planar  ON".to_string()
-                } else {
-                    "Planar OFF".to_string()
-                };
-            }
-        }
+    for mut visibility in &mut angle_controls {
+        *visibility = if settings.mode == SurfaceSelectionMode::Smooth {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
 /// Computes the live "what would clicking select right now" preview group
 /// (see [`fem_core::HoverPreviewTargets`]) from the current hover target
-/// and the planar/coplanar settings, every frame.
+/// and the active Single/Coplanar/Smooth mode, every frame.
 ///
 /// This always walks from whatever is under the cursor *this* frame,
 /// independent of what's already selected — [`selection::click_selection_system`]
 /// is what actually commits this preview into [`SelectionState`] on click
-/// (respecting Ctrl/Shift to add another group, or Alt to remove this one),
+/// (respecting the shared replace/add/toggle/remove modifier rules),
 /// so there's no separate click-time seed to track here.
 pub(crate) fn update_hover_preview_group(
     hover: Res<HoverResult>,
-    planar: Res<PlanarSelectionSettings>,
+    settings: Res<SurfaceSelectionSettings>,
     model: Option<Res<FemModel>>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut preview: ResMut<fem_core::HoverPreviewTargets>,
 ) {
-    let new_targets: Vec<fem_core::FemEntityId> = match hover.target {
-        None => Vec::new(),
+    let (new_targets, new_highlight_targets): (Vec<_>, Vec<_>) = match hover.hit {
+        None => (Vec::new(), Vec::new()),
 
-        Some(target) if !planar.enabled => vec![target],
+        Some(hit) if settings.mode == SurfaceSelectionMode::Single => {
+            (vec![hit.target], vec![hit.target])
+        }
 
-        Some(target) => {
-            let threshold = slider_query
-                .iter()
-                .find(|s| s.id == SliderId::PlanarAngle)
-                .map(|s| s.value)
-                .unwrap_or(planar.angle_deg);
+        Some(hit) => {
+            let target = hit.target;
+            let threshold = match settings.mode {
+                SurfaceSelectionMode::Coplanar => COPLANAR_TOLERANCE_DEG,
+                SurfaceSelectionMode::Smooth => slider_query
+                    .iter()
+                    .find(|slider| slider.id == SliderId::SurfaceAngle)
+                    .map(|slider| slider.value)
+                    .unwrap_or(DEFAULT_SMOOTH_ANGLE_DEG),
+                SurfaceSelectionMode::Single => unreachable!(),
+            };
 
-            let Some(mesh) = model.as_deref().and_then(|m| m.meshes.first()) else {
-                preview.targets = vec![target];
+            let Some(mesh) = model
+                .as_deref()
+                .and_then(|model| model.meshes.get(target.mesh_index))
+            else {
+                let fallback = vec![target];
+                if preview.targets != fallback || preview.highlight_targets != fallback {
+                    preview.targets = fallback.clone();
+                    preview.highlight_targets = fallback;
+                }
                 return;
             };
 
-            match target {
+            match target.entity {
                 fem_core::FemEntityId::Face(fid) => {
-                    let (faces, _) = fem_core::expand_coplanar_from_face(mesh, fid, threshold);
-                    faces.into_iter().map(fem_core::FemEntityId::Face).collect()
+                    let (faces, _) = match settings.mode {
+                        SurfaceSelectionMode::Coplanar => {
+                            fem_core::expand_coplanar_from_face(mesh, fid, threshold)
+                        }
+                        SurfaceSelectionMode::Smooth => {
+                            fem_core::expand_smooth_from_face(mesh, fid, threshold)
+                        }
+                        SurfaceSelectionMode::Single => unreachable!(),
+                    };
+                    let face_targets: Vec<_> = faces
+                        .into_iter()
+                        .map(|id| fem_core::FemEntityRef::face(target.mesh_index, id))
+                        .collect();
+                    (face_targets.clone(), face_targets)
                 }
                 fem_core::FemEntityId::Element(eid) => {
                     // Always commit `Element` targets here, matching the
-                    // seed's own kind — never `Face`. `expand_coplanar_from_element`
-                    // returns `faces` only as an internal detail of how it
-                    // computed the group (it walks by face, since that's
-                    // where normals live). The renderer draws the complete
-                    // geometry of every resulting element, while Face mode
-                    // draws only the surface patch. Keeping the committed
-                    // target kind pure is also required by element-group
-                    // export and element-based setup operations.
-                    let seed_face = hover.surface_face.filter(|face_id| {
+                    // seed's own kind — never `Face`. Surface-growth functions
+                    // return `faces` only as an internal detail of how they
+                    // compute the group (they walk by face, since that's
+                    // where normals live). Those faces now become the overlay
+                    // geometry while the committed targets remain Elements,
+                    // avoiding a misleading display of every internal
+                    // tetrahedron side. Keeping the committed target kind pure
+                    // is required by element-group export and setup operations.
+                    let seed_face = hit.surface_face.filter(|face_id| {
                         mesh.cached_boundary_faces()
                             .iter()
                             .any(|face| face.id == *face_id && face.element == Some(eid))
                     });
-                    let (_, elements) = match seed_face {
-                        Some(face_id) => {
+                    let (faces, elements) = match (settings.mode, seed_face) {
+                        (SurfaceSelectionMode::Coplanar, Some(face_id)) => {
                             fem_core::expand_coplanar_from_face(mesh, face_id, threshold)
                         }
-                        None => fem_core::expand_coplanar_from_element(mesh, eid, threshold),
+                        (SurfaceSelectionMode::Coplanar, None) => {
+                            fem_core::expand_coplanar_from_element(mesh, eid, threshold)
+                        }
+                        (SurfaceSelectionMode::Smooth, Some(face_id)) => {
+                            fem_core::expand_smooth_from_face(mesh, face_id, threshold)
+                        }
+                        (SurfaceSelectionMode::Smooth, None) => {
+                            fem_core::expand_smooth_from_element(mesh, eid, threshold)
+                        }
+                        (SurfaceSelectionMode::Single, _) => unreachable!(),
                     };
-                    elements
+                    let element_targets = elements
                         .into_iter()
-                        .map(fem_core::FemEntityId::Element)
-                        .collect()
+                        .map(|id| fem_core::FemEntityRef::element(target.mesh_index, id))
+                        .collect();
+                    let face_targets = faces
+                        .into_iter()
+                        .map(|id| fem_core::FemEntityRef::face(target.mesh_index, id))
+                        .collect();
+                    (element_targets, face_targets)
                 }
-                other => vec![other],
+                _ => (vec![target], vec![target]),
             }
         }
     };
 
     // Avoid marking the resource `Changed` (and so triggering a highlight
     // mesh rebuild) every single frame when nothing actually moved.
-    if preview.targets != new_targets {
+    if preview.targets != new_targets || preview.highlight_targets != new_highlight_targets {
         preview.targets = new_targets;
+        preview.highlight_targets = new_highlight_targets;
     }
 }
 
-/// Explains the intentionally different meaning of Planar selection for
-/// Face and Element filters at the point of use.
-pub(crate) fn update_planar_selection_hint(
+/// Explains both the growth algorithm and the Face/Element target distinction.
+pub(crate) fn update_surface_selection_hint(
     filter: Res<SelectionFilter>,
-    planar: Res<PlanarSelectionSettings>,
-    mut query: Query<&mut Text, With<PlanarSelectionHint>>,
+    settings: Res<SurfaceSelectionSettings>,
+    mut query: Query<&mut Text, With<SurfaceSelectionHint>>,
 ) {
-    if !filter.is_changed() && !planar.is_changed() {
+    if !filter.is_changed() && !settings.is_changed() {
         return;
     }
 
@@ -2860,17 +3105,36 @@ pub(crate) fn update_planar_selection_hint(
         return;
     };
 
-    **text = match (filter.level, planar.enabled) {
-        (SelectionLevel::Face, true) => "Face Planar = connected surface patch",
-        (SelectionLevel::Element, true) => {
-            "Element Planar = elements behind face patch"
+    **text = surface_selection_hint(filter.level, settings.mode).to_string();
+}
+
+fn surface_selection_hint(
+    level: SelectionLevel,
+    mode: SurfaceSelectionMode,
+) -> &'static str {
+    match (level, mode) {
+        (SelectionLevel::Face, SurfaceSelectionMode::Single) => {
+            "Face Single = one boundary surface face"
         }
-        (SelectionLevel::Face, false) => "Face = one boundary surface face",
-        (SelectionLevel::Element, false) => "Element = one whole FEM element",
-        (_, true) => "Planar ON applies to Face and Element",
-        (_, false) => "Face = surface  |  Element = whole element",
+        (SelectionLevel::Element, SurfaceSelectionMode::Single) => {
+            "Element Single = one whole FEM element"
+        }
+        (SelectionLevel::Face, SurfaceSelectionMode::Coplanar) => {
+            "Face Coplanar = flat patch (fixed 0.5° tolerance)"
+        }
+        (SelectionLevel::Element, SurfaceSelectionMode::Coplanar) => {
+            "Element Coplanar = volumes; bodies extend behind surface"
+        }
+        (SelectionLevel::Face, SurfaceSelectionMode::Smooth) => {
+            "Face Smooth = connected curved surface patch"
+        }
+        (SelectionLevel::Element, SurfaceSelectionMode::Smooth) => {
+            "Element Smooth = whole elements behind curved patch"
+        }
+        (_, SurfaceSelectionMode::Single) => "Single selects one topology item",
+        (_, SurfaceSelectionMode::Coplanar) => "Coplanar applies to Face and Element",
+        (_, SurfaceSelectionMode::Smooth) => "Smooth applies to Face and Element",
     }
-    .to_string();
 }
 
 /// Updates the `SelectionInfoText` every frame with:
@@ -2893,12 +3157,12 @@ pub(crate) fn update_selection_info_text(
     let node_count = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
     let elem_count = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Element(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Element(_)))
         .count();
 
     let sel_part = match (node_count, elem_count) {
@@ -2914,18 +3178,17 @@ pub(crate) fn update_selection_info_text(
 
     // Hover info: show node XYZ when hovering a node.
     let hover_part = hover
-        .target
-        .and_then(|target| {
-            let fem_core::FemEntityId::Node(node_id) = target else {
+        .hit
+        .and_then(|hit| {
+            let fem_core::FemEntityId::Node(node_id) = hit.target.entity else {
                 return None;
             };
-            model.as_deref()?.meshes.iter().find_map(|mesh| {
-                mesh.node_position(node_id).map(|pos| {
-                    format!(
-                        "  |  Node {} ({:.3}, {:.3}, {:.3})",
-                        node_id.0, pos.x, pos.y, pos.z
-                    )
-                })
+            let mesh = model.as_deref()?.meshes.get(hit.target.mesh_index)?;
+            mesh.node_position(node_id).map(|pos| {
+                format!(
+                    "  |  Node {} ({:.3}, {:.3}, {:.3})",
+                    node_id.0, pos.x, pos.y, pos.z
+                )
             })
         })
         .unwrap_or_default();
@@ -2948,7 +3211,7 @@ pub(crate) fn update_constraint_button_labels(
     let n = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
 
     for (btn, children) in &buttons {
@@ -2982,7 +3245,7 @@ pub(crate) fn update_apply_load_label(
     let n = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
 
     let mag = slider_query
@@ -3030,6 +3293,23 @@ pub(crate) fn clear_all_bc_loads_button_system(
     }
 }
 
+fn selected_nodes_by_mesh(
+    selection: &SelectionState,
+) -> BTreeMap<usize, Vec<fem_core::NodeId>> {
+    let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::NodeId>>::new();
+
+    for target in &selection.targets {
+        if let FemEntityId::Node(id) = target.entity {
+            by_mesh.entry(target.mesh_index).or_default().insert(id);
+        }
+    }
+
+    by_mesh
+        .into_iter()
+        .map(|(mesh_index, nodes)| (mesh_index, nodes.into_iter().collect()))
+        .collect()
+}
+
 pub(crate) fn constraint_preset_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     model: Option<Res<FemModel>>,
@@ -3050,49 +3330,23 @@ pub(crate) fn constraint_preset_button_system(
 
     for (interaction, mut bg, mut border, preset) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let nodes: Vec<fem_core::NodeId> = selection
-                .targets
-                .iter()
-                .filter_map(|target| {
-                    if let fem_core::FemEntityId::Node(id) = target {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
+                if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
+                    continue;
+                }
 
-            if nodes.is_empty() {
-                continue;
+                let bc_name = setup.next_auto_name_pub("BC");
+
+                setup.boundary_conditions.push(fem_core::BoundaryCondition {
+                    name: bc_name,
+                    mesh_index,
+                    nodes,
+                    ngrp_name: None,
+                    dof_start: preset.dof_start,
+                    dof_end: preset.dof_end,
+                    value: 0.0,
+                });
             }
-
-            let mesh_index = model
-                .meshes
-                .iter()
-                .enumerate()
-                .find_map(|(i, mesh)| {
-                    nodes
-                        .iter()
-                        .all(|&node| mesh.node_position(node).is_some())
-                        .then_some(i)
-                })
-                .unwrap_or(0);
-
-            // Compute the name *before* the mutable push — Rust cannot hold
-            // an immutable borrow (for the name lookup) and a mutable borrow
-            // (for `push`) on `setup` at the same time within a single
-            // struct expression.
-            let bc_name = setup.next_auto_name_pub("BC");
-
-            setup.boundary_conditions.push(fem_core::BoundaryCondition {
-                name: bc_name,
-                mesh_index,
-                nodes,
-                ngrp_name: None, // created from selection, not from a NGRP
-                dof_start: preset.dof_start,
-                dof_end: preset.dof_end,
-                value: 0.0,
-            });
         }
 
         let color = match *interaction {
@@ -3172,46 +3426,25 @@ pub(crate) fn apply_load_button_system(
                 continue;
             };
 
-            let nodes: Vec<fem_core::NodeId> = selection
-                .targets
-                .iter()
-                .filter_map(|target| {
-                    if let fem_core::FemEntityId::Node(id) = target {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if nodes.is_empty() {
-                continue;
-            }
-
-            let mesh_index = model
-                .meshes
-                .iter()
-                .enumerate()
-                .find_map(|(i, mesh)| {
-                    nodes
-                        .iter()
-                        .all(|&n| mesh.node_position(n).is_some())
-                        .then_some(i)
-                })
-                .unwrap_or(0);
-
-            let name = setup.next_auto_name_pub("LOAD");
             let value = magnitude * sign;
 
-            for node in nodes {
-                setup.nodal_loads.push(fem_core::NodalLoad {
-                    name: name.clone(),
-                    mesh_index,
-                    node,
-                    ngrp_name: None, // created from selection, not from a NGRP
-                    dof,
-                    value,
-                });
+            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
+                if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
+                    continue;
+                }
+
+                let name = setup.next_auto_name_pub("LOAD");
+
+                for node in nodes {
+                    setup.nodal_loads.push(fem_core::NodalLoad {
+                        name: name.clone(),
+                        mesh_index,
+                        node,
+                        ngrp_name: None,
+                        dof,
+                        value,
+                    });
+                }
             }
         }
 
@@ -3269,46 +3502,35 @@ pub(crate) fn dload_kind_button_system(
 fn selected_elements_from_faces_or_elements(
     selection: &SelectionState,
     model: &FemModel,
-) -> Vec<fem_core::ElementId> {
-    let face_ids: Vec<fem_core::FaceId> = selection
-        .targets
-        .iter()
-        .filter_map(|t| {
-            if let fem_core::FemEntityId::Face(id) = t {
-                Some(*id)
-            } else {
-                None
-            }
-        })
-        .collect();
+) -> BTreeMap<usize, Vec<fem_core::ElementId>> {
+    let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementId>>::new();
 
-    if !face_ids.is_empty() {
-        let mut elements = Vec::new();
-        for mesh in &model.meshes {
-            for face in mesh.cached_boundary_faces() {
-                if face_ids.contains(&face.id) {
-                    if let Some(eid) = face.element {
-                        if !elements.contains(&eid) {
-                            elements.push(eid);
-                        }
-                    }
-                }
-            }
+    for target in &selection.targets {
+        let Some(mesh) = model.meshes.get(target.mesh_index) else {
+            continue;
+        };
+
+        let element = match target.entity {
+            FemEntityId::Face(id) => mesh
+                .cached_boundary_faces()
+                .iter()
+                .find(|face| face.id == id)
+                .and_then(|face| face.element),
+            FemEntityId::Element(id) => Some(id),
+            FemEntityId::Node(_) | FemEntityId::Edge(_) => None,
+        };
+
+        if let Some(element) = element {
+            by_mesh
+                .entry(target.mesh_index)
+                .or_default()
+                .insert(element);
         }
-        return elements;
     }
 
-    // Fallback: directly-selected elements.
-    selection
-        .targets
-        .iter()
-        .filter_map(|t| {
-            if let fem_core::FemEntityId::Element(id) = t {
-                Some(*id)
-            } else {
-                None
-            }
-        })
+    by_mesh
+        .into_iter()
+        .map(|(mesh_index, elements)| (mesh_index, elements.into_iter().collect()))
         .collect()
 }
 
@@ -3323,20 +3545,28 @@ fn selected_elements_from_faces_or_elements(
 /// sets): a `Face` target maps directly to its owning element's face, and
 /// an `Element` target expands to every boundary face of that element.
 ///
-/// Like [`selected_elements_from_faces_or_elements`], this scans every
-/// mesh in the model rather than tracking which mesh a selected id belongs
-/// to — [`SelectionState`] doesn't carry a mesh index today, so a
-/// multi-part assembly with colliding face ids across parts is a known
-/// limitation shared with the rest of the selection system, not something
-/// newly introduced here.
 fn selected_faces_from_faces_or_elements(
     selection: &SelectionState,
     model: &FemModel,
-) -> Vec<fem_core::ElementFaceRef> {
-    model
-        .meshes
-        .iter()
-        .flat_map(|mesh| mesh.surface_refs_from_targets(&selection.targets))
+) -> BTreeMap<usize, Vec<fem_core::ElementFaceRef>> {
+    let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementFaceRef>>::new();
+
+    for target in &selection.targets {
+        let Some(mesh) = model.meshes.get(target.mesh_index) else {
+            continue;
+        };
+
+        for face_ref in mesh.surface_refs_from_targets(&[target.entity]) {
+            by_mesh
+                .entry(target.mesh_index)
+                .or_default()
+                .insert(face_ref);
+        }
+    }
+
+    by_mesh
+        .into_iter()
+        .map(|(mesh_index, faces)| (mesh_index, faces.into_iter().collect()))
         .collect()
 }
 
@@ -3364,11 +3594,17 @@ pub(crate) fn update_apply_dload_label(
     // .cnt); gravity counts elements, since it has no face to speak of.
     let (n, unit) = match *kind {
         SelectedDloadKind::Pressure => (
-            selected_faces_from_faces_or_elements(&selection, model).len(),
+            selected_faces_from_faces_or_elements(&selection, model)
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
             "faces",
         ),
         SelectedDloadKind::Gravity => (
-            selected_elements_from_faces_or_elements(&selection, model).len(),
+            selected_elements_from_faces_or_elements(&selection, model)
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
             "elements",
         ),
     };
@@ -3418,36 +3654,48 @@ pub(crate) fn apply_dload_button_system(
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             // Pressure needs which face was picked (P1..P6 in the exported
             // .cnt); gravity is a whole-element body force and has no face.
-            let (dload_kind, target, direction) = match *kind {
-                SelectedDloadKind::Pressure => (
-                    fem_core::DistributedLoadKind::Pressure,
-                    fem_core::DistributedLoadTarget::Faces(selected_faces_from_faces_or_elements(
-                        &selection, model,
-                    )),
-                    None,
-                ),
-                SelectedDloadKind::Gravity => (
-                    fem_core::DistributedLoadKind::Gravity,
-                    fem_core::DistributedLoadTarget::Elements(
-                        selected_elements_from_faces_or_elements(&selection, model),
-                    ),
-                    Some(Vec3::NEG_Y),
-                ),
-            };
+            match *kind {
+                SelectedDloadKind::Pressure => {
+                    for (mesh_index, faces) in
+                        selected_faces_from_faces_or_elements(&selection, model)
+                    {
+                        if faces.is_empty() {
+                            continue;
+                        }
 
-            if !target.is_empty() {
-                let name = setup.next_auto_name_pub("DLOAD");
+                        let name = setup.next_auto_name_pub("DLOAD");
+                        setup.distributed_loads.push(fem_core::DistributedLoad {
+                            name,
+                            mesh_index,
+                            target: fem_core::DistributedLoadTarget::Faces(faces),
+                            kind: fem_core::DistributedLoadKind::Pressure,
+                            value: magnitude,
+                            direction: None,
+                        });
+                    }
+                }
+                SelectedDloadKind::Gravity => {
+                    for (mesh_index, elements) in
+                        selected_elements_from_faces_or_elements(&selection, model)
+                    {
+                        if elements.is_empty() {
+                            continue;
+                        }
 
-                setup.distributed_loads.push(fem_core::DistributedLoad {
-                    name,
-                    mesh_index: 0,
-                    target,
-                    kind: dload_kind,
-                    value: magnitude,
-                    direction,
-                });
-                setup.set_changed();
+                        let name = setup.next_auto_name_pub("DLOAD");
+                        setup.distributed_loads.push(fem_core::DistributedLoad {
+                            name,
+                            mesh_index,
+                            target: fem_core::DistributedLoadTarget::Elements(elements),
+                            kind: fem_core::DistributedLoadKind::Gravity,
+                            value: magnitude,
+                            direction: Some(Vec3::NEG_Y),
+                        });
+                    }
+                }
             }
+
+            setup.set_changed();
         }
 
         let color = match *interaction {
@@ -3754,8 +4002,8 @@ fn set_list_button(parent: &mut ChildSpawnerCommands, set_button: SetButton, lab
 }
 
 /// Selects every member of the clicked set, mirroring the result of a box
-/// select over exactly that set: clears the current selection (or extends
-/// it with Ctrl held), sets [`SelectionFilter::level`] to match the set's
+/// select over exactly that set: applies the shared selection modifier,
+/// sets [`SelectionFilter::level`] to match the set's
 /// kind, and marks matching [`Selectable`] entities as [`Selected`] so
 /// per-entity rendering (small meshes) highlights them too, alongside the
 /// [`SelectionState::targets`] used by the topology highlight overlay for
@@ -3797,16 +4045,22 @@ pub(crate) fn set_button_system(
                             .map(|set| mesh.surface_set_targets(set)),
                     };
 
-                    if let Some(targets) = targets {
+                    if let Some(local_targets) = targets {
+                        let targets: Vec<fem_core::FemEntityRef> = local_targets
+                            .into_iter()
+                            .map(|target| {
+                                fem_core::FemEntityRef::new(set_button.mesh_index, target)
+                            })
+                            .collect();
                         let ctrl = keyboard.pressed(KeyCode::ControlLeft)
                             || keyboard.pressed(KeyCode::ControlRight);
-
-                        if !ctrl {
-                            for entity in &selected_query {
-                                commands.entity(entity).remove::<Selected>();
-                            }
-                            selection.clear();
-                        }
+                        let shift = keyboard.pressed(KeyCode::ShiftLeft)
+                            || keyboard.pressed(KeyCode::ShiftRight);
+                        let alt = keyboard.pressed(KeyCode::AltLeft)
+                            || keyboard.pressed(KeyCode::AltRight);
+                        let operation = selection::SelectionOperation::from_modifiers(
+                            ctrl, shift, alt,
+                        );
 
                         filter.level = match set_button.kind {
                             SetKind::Node => SelectionLevel::Node,
@@ -3814,19 +4068,17 @@ pub(crate) fn set_button_system(
                             SetKind::Surface => SelectionLevel::Face,
                         };
 
-                        for target in &targets {
-                            if !selection.targets.contains(target) {
-                                selection.targets.push(*target);
-                            }
+                        selection.apply_group(&targets, &targets, operation);
+
+                        for entity in &selected_query {
+                            commands.entity(entity).remove::<Selected>();
                         }
+                        selection.entities.clear();
 
                         for (entity, selectable) in &selectable_query {
-                            if targets.contains(&selectable.target) {
+                            if selection.targets.contains(&selectable.target) {
                                 commands.entity(entity).insert(Selected);
-
-                                if !selection.entities.contains(&entity) {
-                                    selection.entities.push(entity);
-                                }
+                                selection.entities.push(entity);
                             }
                         }
                     }
@@ -3952,7 +4204,7 @@ pub(crate) fn update_selection_stats_text(
     };
 
     let hover_text = hover
-        .target
+        .target()
         .map(|target| entity_label(target, model.as_deref()))
         .unwrap_or("none".to_string());
 
@@ -4286,20 +4538,14 @@ pub(crate) fn make_node_group_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let nodes: Vec<fem_core::NodeId> = selection
-                .targets
-                .iter()
-                .filter_map(|t| {
-                    if let fem_core::FemEntityId::Node(id) = t {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
+                let Some(mesh) = model.meshes.get_mut(mesh_index) else {
+                    continue;
+                };
+                if nodes.is_empty() {
+                    continue;
+                }
 
-            if !nodes.is_empty() {
-                let mesh = model.meshes.first_mut().unwrap();
                 let n = mesh.node_sets.len() + 1;
                 let name = format!("NGRP{n}");
                 mesh.node_sets.push(fem_core::FemNodeSet { name, nodes });
@@ -4328,24 +4574,27 @@ pub(crate) fn make_element_group_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let elements: Vec<fem_core::ElementId> = selection
-                .targets
-                .iter()
-                .filter_map(|t| {
-                    if let fem_core::FemEntityId::Element(id) = t {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementId>>::new();
+            for target in &selection.targets {
+                if let FemEntityId::Element(id) = target.entity {
+                    by_mesh.entry(target.mesh_index).or_default().insert(id);
+                }
+            }
 
-            if !elements.is_empty() {
-                let mesh = model.meshes.first_mut().unwrap();
+            for (mesh_index, elements) in by_mesh {
+                let Some(mesh) = model.meshes.get_mut(mesh_index) else {
+                    continue;
+                };
+                if elements.is_empty() {
+                    continue;
+                }
+
                 let n = mesh.element_sets.len() + 1;
                 let name = format!("EGRP{n}");
-                mesh.element_sets
-                    .push(fem_core::FemElementSet { name, elements });
+                mesh.element_sets.push(fem_core::FemElementSet {
+                    name,
+                    elements: elements.into_iter().collect(),
+                });
             }
         }
 
@@ -5177,7 +5426,7 @@ pub(crate) fn apply_slider_to_results(
             // These sliders are read by dedicated systems; result display doesn't need them.
             SliderId::LoadMagnitude
             | SliderId::SectionThickness
-            | SliderId::PlanarAngle
+            | SliderId::SurfaceAngle
             | SliderId::DloadMagnitude
             | SliderId::PlaybackSpeed => {}
         }
@@ -5214,7 +5463,7 @@ fn selection_level_label(level: SelectionLevel) -> &'static str {
     }
 }
 
-/// Formats a [`FemEntityId`] for status-line display.
+/// Formats a mesh-scoped [`FemEntityRef`] for status-line display.
 ///
 /// For elements, appends the FEM element type (e.g. `"Element 354 (Hex8)"`)
 /// when `model` is available — this makes mixed element-type meshes
@@ -5222,26 +5471,28 @@ fn selection_level_label(level: SelectionLevel) -> &'static str {
 /// its neighbours (e.g. a solid cuboid surrounded by thin shell plates),
 /// hovering it immediately shows whether that's actually a different
 /// element type rather than a rendering bug.
-fn entity_label(target: FemEntityId, model: Option<&FemModel>) -> String {
-    match target {
+fn entity_label(target: FemEntityRef, model: Option<&FemModel>) -> String {
+    let entity = match target.entity {
         FemEntityId::Node(id) => format!("Node {}", id.0),
         FemEntityId::Edge(id) => format!("Edge {}", id.0),
         FemEntityId::Face(id) => format!("Face {}", id.0),
         FemEntityId::Element(id) => {
-            let type_label = model.and_then(|model| {
-                model.meshes.iter().find_map(|mesh| {
-                    mesh.elements
-                        .iter()
-                        .find(|e| e.id == id)
-                        .map(|e| element_type_label(&e.element_type))
-                })
-            });
+            let type_label = model
+                .and_then(|model| model.meshes.get(target.mesh_index))
+                .and_then(|mesh| mesh.elements.iter().find(|element| element.id == id))
+                .map(|element| element_type_label(&element.element_type));
 
             match type_label {
                 Some(label) => format!("Element {} ({label})", id.0),
                 None => format!("Element {}", id.0),
             }
         }
+    };
+
+    if model.is_some_and(|model| model.meshes.len() > 1) {
+        format!("{} / {entity}", mesh_label(model, target.mesh_index))
+    } else {
+        entity
     }
 }
 
@@ -5303,8 +5554,18 @@ fn compact_path(path: &Path) -> String {
 mod sidebar_page_tests {
     use std::path::PathBuf;
 
-    use super::{SidebarPage, SidebarPageContent, apply_mesh};
-    use fem_core::{AnalysisSetup, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId};
+    use super::{
+        SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
+        SurfaceSelectionSettings, apply_mesh, selected_nodes_by_mesh,
+        selection_operation_hint, surface_selection_hint, update_hover_preview_group,
+    };
+    use bevy::prelude::{App, Update, Vec3};
+    use fem_core::{
+        AnalysisSetup, FemEntityId, FemEntityRef, FemMesh, FemModel, FemModelVersion,
+        HoverPreviewTargets, MeshLoadStatus, NodeId, SelectionHit, SelectionLevel,
+    };
+    use interaction::HoverResult;
+    use selection::{SelectionOperation, SelectionState};
 
     #[test]
     fn analysis_shell_is_limited_to_analysis_pages() {
@@ -5379,5 +5640,81 @@ mod sidebar_page_tests {
 
         assert_eq!(setup.boundary_conditions.len(), 1);
         assert_eq!(model.meshes.len(), 2);
+    }
+
+    #[test]
+    fn selected_nodes_remain_partitioned_by_mesh() {
+        let selection = SelectionState {
+            targets: vec![
+                FemEntityRef::node(0, NodeId(7)),
+                FemEntityRef::node(1, NodeId(7)),
+            ],
+            ..Default::default()
+        };
+
+        let grouped = selected_nodes_by_mesh(&selection);
+
+        assert_eq!(grouped.get(&0), Some(&vec![NodeId(7)]));
+        assert_eq!(grouped.get(&1), Some(&vec![NodeId(7)]));
+    }
+
+    #[test]
+    fn surface_growth_hint_keeps_face_and_element_meanings_distinct() {
+        assert_eq!(
+            surface_selection_hint(SelectionLevel::Face, SurfaceSelectionMode::Smooth),
+            "Face Smooth = connected curved surface patch"
+        );
+        assert_eq!(
+            surface_selection_hint(SelectionLevel::Element, SurfaceSelectionMode::Smooth),
+            "Element Smooth = whole elements behind curved patch"
+        );
+    }
+
+    #[test]
+    fn selection_guide_starts_open_and_names_every_modifier_operation() {
+        assert!(SelectionGuideState::default().expanded);
+        assert!(selection_operation_hint(SelectionOperation::Replace).0.contains("REPLACE"));
+        assert!(selection_operation_hint(SelectionOperation::Add).0.contains("ADD"));
+        assert!(selection_operation_hint(SelectionOperation::Toggle).0.contains("TOGGLE"));
+        assert!(selection_operation_hint(SelectionOperation::Remove).0.contains("REMOVE"));
+    }
+
+    #[test]
+    fn element_surface_growth_keeps_element_targets_but_highlights_faces() {
+        let model = FemModel::demo_hex8();
+        let face = model.meshes[0].cached_boundary_faces()[0].clone();
+        let element = face.element.expect("a solid boundary face has an owner");
+        let hit = SelectionHit::new(
+            FemEntityRef::element(0, element),
+            Vec3::ZERO,
+            0.0,
+        )
+        .with_surface(face.id, face.element);
+
+        let mut app = App::new();
+        app.insert_resource(model);
+        app.insert_resource(HoverResult {
+            entity: None,
+            hit: Some(hit),
+        });
+        app.insert_resource(SurfaceSelectionSettings {
+            mode: SurfaceSelectionMode::Coplanar,
+        });
+        app.init_resource::<HoverPreviewTargets>();
+        app.add_systems(Update, update_hover_preview_group);
+
+        app.update();
+
+        let preview = app.world().resource::<HoverPreviewTargets>();
+        assert!(preview
+            .targets
+            .iter()
+            .all(|target| matches!(target.entity, FemEntityId::Element(_))));
+        assert!(preview
+            .highlight_targets
+            .iter()
+            .all(|target| matches!(target.entity, FemEntityId::Face(_))));
+        assert!(!preview.targets.is_empty());
+        assert!(!preview.highlight_targets.is_empty());
     }
 }
