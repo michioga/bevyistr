@@ -145,7 +145,7 @@ impl FemModelVersion {
 /// `visualization` needing a (backwards) dependency on `ui`.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct HoverPreviewTargets {
-    pub targets: Vec<FemEntityId>,
+    pub targets: Vec<FemEntityRef>,
 }
 
 /// A `.cnt` file queued to be merged into [`AnalysisSetup`] once a mesh

@@ -4,11 +4,13 @@ use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use camera::OrbitCamera;
 use fem_core::{
-    ContactCandidateState, ContactType, FemEntityId, FemModel, FemModelVersion, FemResultSet,
-    MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel, UiPointerState,
+    ContactCandidateState, ContactType, FemEntityId, FemEntityRef, FemModel, FemModelVersion,
+    FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel,
+    UiPointerState,
 };
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionState};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use visualization::ContourSettings;
 use visualization::{VisualizationMode, VisualizationSettings};
@@ -670,7 +672,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextColor(TEXT_MAIN),
                     SelectionStatsText,
                 ));
-                hint_text(sec, "Click = select   Ctrl/Shift+Click = add   Alt+Click = remove   Drag = box select");
+                hint_text(
+                    sec,
+                    "Click = select   Ctrl/Shift+Click = add   Alt+Click = remove\nDrag L→R = enclosed   R→L = crossing",
+                );
                 // Dynamic info: count + hover coords — updated every frame.
                 sec.spawn((
                     Text::new("Selected: 0  |  Hover: -"),
@@ -2785,27 +2790,34 @@ pub(crate) fn update_hover_preview_group(
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut preview: ResMut<fem_core::HoverPreviewTargets>,
 ) {
-    let new_targets: Vec<fem_core::FemEntityId> = match hover.target {
+    let new_targets: Vec<fem_core::FemEntityRef> = match hover.hit {
         None => Vec::new(),
 
-        Some(target) if !planar.enabled => vec![target],
+        Some(hit) if !planar.enabled => vec![hit.target],
 
-        Some(target) => {
+        Some(hit) => {
+            let target = hit.target;
             let threshold = slider_query
                 .iter()
                 .find(|s| s.id == SliderId::PlanarAngle)
                 .map(|s| s.value)
                 .unwrap_or(planar.angle_deg);
 
-            let Some(mesh) = model.as_deref().and_then(|m| m.meshes.first()) else {
+            let Some(mesh) = model
+                .as_deref()
+                .and_then(|model| model.meshes.get(target.mesh_index))
+            else {
                 preview.targets = vec![target];
                 return;
             };
 
-            match target {
+            match target.entity {
                 fem_core::FemEntityId::Face(fid) => {
                     let (faces, _) = fem_core::expand_coplanar_from_face(mesh, fid, threshold);
-                    faces.into_iter().map(fem_core::FemEntityId::Face).collect()
+                    faces
+                        .into_iter()
+                        .map(|id| fem_core::FemEntityRef::face(target.mesh_index, id))
+                        .collect()
                 }
                 fem_core::FemEntityId::Element(eid) => {
                     // Always commit `Element` targets here, matching the
@@ -2817,7 +2829,7 @@ pub(crate) fn update_hover_preview_group(
                     // draws only the surface patch. Keeping the committed
                     // target kind pure is also required by element-group
                     // export and element-based setup operations.
-                    let seed_face = hover.surface_face.filter(|face_id| {
+                    let seed_face = hit.surface_face.filter(|face_id| {
                         mesh.cached_boundary_faces()
                             .iter()
                             .any(|face| face.id == *face_id && face.element == Some(eid))
@@ -2830,10 +2842,10 @@ pub(crate) fn update_hover_preview_group(
                     };
                     elements
                         .into_iter()
-                        .map(fem_core::FemEntityId::Element)
+                        .map(|id| fem_core::FemEntityRef::element(target.mesh_index, id))
                         .collect()
                 }
-                other => vec![other],
+                _ => vec![target],
             }
         }
     };
@@ -2893,12 +2905,12 @@ pub(crate) fn update_selection_info_text(
     let node_count = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
     let elem_count = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Element(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Element(_)))
         .count();
 
     let sel_part = match (node_count, elem_count) {
@@ -2914,18 +2926,17 @@ pub(crate) fn update_selection_info_text(
 
     // Hover info: show node XYZ when hovering a node.
     let hover_part = hover
-        .target
-        .and_then(|target| {
-            let fem_core::FemEntityId::Node(node_id) = target else {
+        .hit
+        .and_then(|hit| {
+            let fem_core::FemEntityId::Node(node_id) = hit.target.entity else {
                 return None;
             };
-            model.as_deref()?.meshes.iter().find_map(|mesh| {
-                mesh.node_position(node_id).map(|pos| {
-                    format!(
-                        "  |  Node {} ({:.3}, {:.3}, {:.3})",
-                        node_id.0, pos.x, pos.y, pos.z
-                    )
-                })
+            let mesh = model.as_deref()?.meshes.get(hit.target.mesh_index)?;
+            mesh.node_position(node_id).map(|pos| {
+                format!(
+                    "  |  Node {} ({:.3}, {:.3}, {:.3})",
+                    node_id.0, pos.x, pos.y, pos.z
+                )
             })
         })
         .unwrap_or_default();
@@ -2948,7 +2959,7 @@ pub(crate) fn update_constraint_button_labels(
     let n = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
 
     for (btn, children) in &buttons {
@@ -2982,7 +2993,7 @@ pub(crate) fn update_apply_load_label(
     let n = selection
         .targets
         .iter()
-        .filter(|t| matches!(t, fem_core::FemEntityId::Node(_)))
+        .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
 
     let mag = slider_query
@@ -3030,6 +3041,23 @@ pub(crate) fn clear_all_bc_loads_button_system(
     }
 }
 
+fn selected_nodes_by_mesh(
+    selection: &SelectionState,
+) -> BTreeMap<usize, Vec<fem_core::NodeId>> {
+    let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::NodeId>>::new();
+
+    for target in &selection.targets {
+        if let FemEntityId::Node(id) = target.entity {
+            by_mesh.entry(target.mesh_index).or_default().insert(id);
+        }
+    }
+
+    by_mesh
+        .into_iter()
+        .map(|(mesh_index, nodes)| (mesh_index, nodes.into_iter().collect()))
+        .collect()
+}
+
 pub(crate) fn constraint_preset_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     model: Option<Res<FemModel>>,
@@ -3050,49 +3078,23 @@ pub(crate) fn constraint_preset_button_system(
 
     for (interaction, mut bg, mut border, preset) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let nodes: Vec<fem_core::NodeId> = selection
-                .targets
-                .iter()
-                .filter_map(|target| {
-                    if let fem_core::FemEntityId::Node(id) = target {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
+                if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
+                    continue;
+                }
 
-            if nodes.is_empty() {
-                continue;
+                let bc_name = setup.next_auto_name_pub("BC");
+
+                setup.boundary_conditions.push(fem_core::BoundaryCondition {
+                    name: bc_name,
+                    mesh_index,
+                    nodes,
+                    ngrp_name: None,
+                    dof_start: preset.dof_start,
+                    dof_end: preset.dof_end,
+                    value: 0.0,
+                });
             }
-
-            let mesh_index = model
-                .meshes
-                .iter()
-                .enumerate()
-                .find_map(|(i, mesh)| {
-                    nodes
-                        .iter()
-                        .all(|&node| mesh.node_position(node).is_some())
-                        .then_some(i)
-                })
-                .unwrap_or(0);
-
-            // Compute the name *before* the mutable push — Rust cannot hold
-            // an immutable borrow (for the name lookup) and a mutable borrow
-            // (for `push`) on `setup` at the same time within a single
-            // struct expression.
-            let bc_name = setup.next_auto_name_pub("BC");
-
-            setup.boundary_conditions.push(fem_core::BoundaryCondition {
-                name: bc_name,
-                mesh_index,
-                nodes,
-                ngrp_name: None, // created from selection, not from a NGRP
-                dof_start: preset.dof_start,
-                dof_end: preset.dof_end,
-                value: 0.0,
-            });
         }
 
         let color = match *interaction {
@@ -3172,46 +3174,25 @@ pub(crate) fn apply_load_button_system(
                 continue;
             };
 
-            let nodes: Vec<fem_core::NodeId> = selection
-                .targets
-                .iter()
-                .filter_map(|target| {
-                    if let fem_core::FemEntityId::Node(id) = target {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if nodes.is_empty() {
-                continue;
-            }
-
-            let mesh_index = model
-                .meshes
-                .iter()
-                .enumerate()
-                .find_map(|(i, mesh)| {
-                    nodes
-                        .iter()
-                        .all(|&n| mesh.node_position(n).is_some())
-                        .then_some(i)
-                })
-                .unwrap_or(0);
-
-            let name = setup.next_auto_name_pub("LOAD");
             let value = magnitude * sign;
 
-            for node in nodes {
-                setup.nodal_loads.push(fem_core::NodalLoad {
-                    name: name.clone(),
-                    mesh_index,
-                    node,
-                    ngrp_name: None, // created from selection, not from a NGRP
-                    dof,
-                    value,
-                });
+            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
+                if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
+                    continue;
+                }
+
+                let name = setup.next_auto_name_pub("LOAD");
+
+                for node in nodes {
+                    setup.nodal_loads.push(fem_core::NodalLoad {
+                        name: name.clone(),
+                        mesh_index,
+                        node,
+                        ngrp_name: None,
+                        dof,
+                        value,
+                    });
+                }
             }
         }
 
@@ -3269,46 +3250,35 @@ pub(crate) fn dload_kind_button_system(
 fn selected_elements_from_faces_or_elements(
     selection: &SelectionState,
     model: &FemModel,
-) -> Vec<fem_core::ElementId> {
-    let face_ids: Vec<fem_core::FaceId> = selection
-        .targets
-        .iter()
-        .filter_map(|t| {
-            if let fem_core::FemEntityId::Face(id) = t {
-                Some(*id)
-            } else {
-                None
-            }
-        })
-        .collect();
+) -> BTreeMap<usize, Vec<fem_core::ElementId>> {
+    let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementId>>::new();
 
-    if !face_ids.is_empty() {
-        let mut elements = Vec::new();
-        for mesh in &model.meshes {
-            for face in mesh.cached_boundary_faces() {
-                if face_ids.contains(&face.id) {
-                    if let Some(eid) = face.element {
-                        if !elements.contains(&eid) {
-                            elements.push(eid);
-                        }
-                    }
-                }
-            }
+    for target in &selection.targets {
+        let Some(mesh) = model.meshes.get(target.mesh_index) else {
+            continue;
+        };
+
+        let element = match target.entity {
+            FemEntityId::Face(id) => mesh
+                .cached_boundary_faces()
+                .iter()
+                .find(|face| face.id == id)
+                .and_then(|face| face.element),
+            FemEntityId::Element(id) => Some(id),
+            FemEntityId::Node(_) | FemEntityId::Edge(_) => None,
+        };
+
+        if let Some(element) = element {
+            by_mesh
+                .entry(target.mesh_index)
+                .or_default()
+                .insert(element);
         }
-        return elements;
     }
 
-    // Fallback: directly-selected elements.
-    selection
-        .targets
-        .iter()
-        .filter_map(|t| {
-            if let fem_core::FemEntityId::Element(id) = t {
-                Some(*id)
-            } else {
-                None
-            }
-        })
+    by_mesh
+        .into_iter()
+        .map(|(mesh_index, elements)| (mesh_index, elements.into_iter().collect()))
         .collect()
 }
 
@@ -3323,20 +3293,28 @@ fn selected_elements_from_faces_or_elements(
 /// sets): a `Face` target maps directly to its owning element's face, and
 /// an `Element` target expands to every boundary face of that element.
 ///
-/// Like [`selected_elements_from_faces_or_elements`], this scans every
-/// mesh in the model rather than tracking which mesh a selected id belongs
-/// to — [`SelectionState`] doesn't carry a mesh index today, so a
-/// multi-part assembly with colliding face ids across parts is a known
-/// limitation shared with the rest of the selection system, not something
-/// newly introduced here.
 fn selected_faces_from_faces_or_elements(
     selection: &SelectionState,
     model: &FemModel,
-) -> Vec<fem_core::ElementFaceRef> {
-    model
-        .meshes
-        .iter()
-        .flat_map(|mesh| mesh.surface_refs_from_targets(&selection.targets))
+) -> BTreeMap<usize, Vec<fem_core::ElementFaceRef>> {
+    let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementFaceRef>>::new();
+
+    for target in &selection.targets {
+        let Some(mesh) = model.meshes.get(target.mesh_index) else {
+            continue;
+        };
+
+        for face_ref in mesh.surface_refs_from_targets(&[target.entity]) {
+            by_mesh
+                .entry(target.mesh_index)
+                .or_default()
+                .insert(face_ref);
+        }
+    }
+
+    by_mesh
+        .into_iter()
+        .map(|(mesh_index, faces)| (mesh_index, faces.into_iter().collect()))
         .collect()
 }
 
@@ -3364,11 +3342,17 @@ pub(crate) fn update_apply_dload_label(
     // .cnt); gravity counts elements, since it has no face to speak of.
     let (n, unit) = match *kind {
         SelectedDloadKind::Pressure => (
-            selected_faces_from_faces_or_elements(&selection, model).len(),
+            selected_faces_from_faces_or_elements(&selection, model)
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
             "faces",
         ),
         SelectedDloadKind::Gravity => (
-            selected_elements_from_faces_or_elements(&selection, model).len(),
+            selected_elements_from_faces_or_elements(&selection, model)
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
             "elements",
         ),
     };
@@ -3418,36 +3402,48 @@ pub(crate) fn apply_dload_button_system(
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             // Pressure needs which face was picked (P1..P6 in the exported
             // .cnt); gravity is a whole-element body force and has no face.
-            let (dload_kind, target, direction) = match *kind {
-                SelectedDloadKind::Pressure => (
-                    fem_core::DistributedLoadKind::Pressure,
-                    fem_core::DistributedLoadTarget::Faces(selected_faces_from_faces_or_elements(
-                        &selection, model,
-                    )),
-                    None,
-                ),
-                SelectedDloadKind::Gravity => (
-                    fem_core::DistributedLoadKind::Gravity,
-                    fem_core::DistributedLoadTarget::Elements(
-                        selected_elements_from_faces_or_elements(&selection, model),
-                    ),
-                    Some(Vec3::NEG_Y),
-                ),
-            };
+            match *kind {
+                SelectedDloadKind::Pressure => {
+                    for (mesh_index, faces) in
+                        selected_faces_from_faces_or_elements(&selection, model)
+                    {
+                        if faces.is_empty() {
+                            continue;
+                        }
 
-            if !target.is_empty() {
-                let name = setup.next_auto_name_pub("DLOAD");
+                        let name = setup.next_auto_name_pub("DLOAD");
+                        setup.distributed_loads.push(fem_core::DistributedLoad {
+                            name,
+                            mesh_index,
+                            target: fem_core::DistributedLoadTarget::Faces(faces),
+                            kind: fem_core::DistributedLoadKind::Pressure,
+                            value: magnitude,
+                            direction: None,
+                        });
+                    }
+                }
+                SelectedDloadKind::Gravity => {
+                    for (mesh_index, elements) in
+                        selected_elements_from_faces_or_elements(&selection, model)
+                    {
+                        if elements.is_empty() {
+                            continue;
+                        }
 
-                setup.distributed_loads.push(fem_core::DistributedLoad {
-                    name,
-                    mesh_index: 0,
-                    target,
-                    kind: dload_kind,
-                    value: magnitude,
-                    direction,
-                });
-                setup.set_changed();
+                        let name = setup.next_auto_name_pub("DLOAD");
+                        setup.distributed_loads.push(fem_core::DistributedLoad {
+                            name,
+                            mesh_index,
+                            target: fem_core::DistributedLoadTarget::Elements(elements),
+                            kind: fem_core::DistributedLoadKind::Gravity,
+                            value: magnitude,
+                            direction: Some(Vec3::NEG_Y),
+                        });
+                    }
+                }
             }
+
+            setup.set_changed();
         }
 
         let color = match *interaction {
@@ -3797,7 +3793,13 @@ pub(crate) fn set_button_system(
                             .map(|set| mesh.surface_set_targets(set)),
                     };
 
-                    if let Some(targets) = targets {
+                    if let Some(local_targets) = targets {
+                        let targets: Vec<fem_core::FemEntityRef> = local_targets
+                            .into_iter()
+                            .map(|target| {
+                                fem_core::FemEntityRef::new(set_button.mesh_index, target)
+                            })
+                            .collect();
                         let ctrl = keyboard.pressed(KeyCode::ControlLeft)
                             || keyboard.pressed(KeyCode::ControlRight);
 
@@ -3952,7 +3954,7 @@ pub(crate) fn update_selection_stats_text(
     };
 
     let hover_text = hover
-        .target
+        .target()
         .map(|target| entity_label(target, model.as_deref()))
         .unwrap_or("none".to_string());
 
@@ -4286,20 +4288,14 @@ pub(crate) fn make_node_group_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let nodes: Vec<fem_core::NodeId> = selection
-                .targets
-                .iter()
-                .filter_map(|t| {
-                    if let fem_core::FemEntityId::Node(id) = t {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
+                let Some(mesh) = model.meshes.get_mut(mesh_index) else {
+                    continue;
+                };
+                if nodes.is_empty() {
+                    continue;
+                }
 
-            if !nodes.is_empty() {
-                let mesh = model.meshes.first_mut().unwrap();
                 let n = mesh.node_sets.len() + 1;
                 let name = format!("NGRP{n}");
                 mesh.node_sets.push(fem_core::FemNodeSet { name, nodes });
@@ -4328,24 +4324,27 @@ pub(crate) fn make_element_group_button_system(
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let elements: Vec<fem_core::ElementId> = selection
-                .targets
-                .iter()
-                .filter_map(|t| {
-                    if let fem_core::FemEntityId::Element(id) = t {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementId>>::new();
+            for target in &selection.targets {
+                if let FemEntityId::Element(id) = target.entity {
+                    by_mesh.entry(target.mesh_index).or_default().insert(id);
+                }
+            }
 
-            if !elements.is_empty() {
-                let mesh = model.meshes.first_mut().unwrap();
+            for (mesh_index, elements) in by_mesh {
+                let Some(mesh) = model.meshes.get_mut(mesh_index) else {
+                    continue;
+                };
+                if elements.is_empty() {
+                    continue;
+                }
+
                 let n = mesh.element_sets.len() + 1;
                 let name = format!("EGRP{n}");
-                mesh.element_sets
-                    .push(fem_core::FemElementSet { name, elements });
+                mesh.element_sets.push(fem_core::FemElementSet {
+                    name,
+                    elements: elements.into_iter().collect(),
+                });
             }
         }
 
@@ -5214,7 +5213,7 @@ fn selection_level_label(level: SelectionLevel) -> &'static str {
     }
 }
 
-/// Formats a [`FemEntityId`] for status-line display.
+/// Formats a mesh-scoped [`FemEntityRef`] for status-line display.
 ///
 /// For elements, appends the FEM element type (e.g. `"Element 354 (Hex8)"`)
 /// when `model` is available — this makes mixed element-type meshes
@@ -5222,26 +5221,28 @@ fn selection_level_label(level: SelectionLevel) -> &'static str {
 /// its neighbours (e.g. a solid cuboid surrounded by thin shell plates),
 /// hovering it immediately shows whether that's actually a different
 /// element type rather than a rendering bug.
-fn entity_label(target: FemEntityId, model: Option<&FemModel>) -> String {
-    match target {
+fn entity_label(target: FemEntityRef, model: Option<&FemModel>) -> String {
+    let entity = match target.entity {
         FemEntityId::Node(id) => format!("Node {}", id.0),
         FemEntityId::Edge(id) => format!("Edge {}", id.0),
         FemEntityId::Face(id) => format!("Face {}", id.0),
         FemEntityId::Element(id) => {
-            let type_label = model.and_then(|model| {
-                model.meshes.iter().find_map(|mesh| {
-                    mesh.elements
-                        .iter()
-                        .find(|e| e.id == id)
-                        .map(|e| element_type_label(&e.element_type))
-                })
-            });
+            let type_label = model
+                .and_then(|model| model.meshes.get(target.mesh_index))
+                .and_then(|mesh| mesh.elements.iter().find(|element| element.id == id))
+                .map(|element| element_type_label(&element.element_type));
 
             match type_label {
                 Some(label) => format!("Element {} ({label})", id.0),
                 None => format!("Element {}", id.0),
             }
         }
+    };
+
+    if model.is_some_and(|model| model.meshes.len() > 1) {
+        format!("{} / {entity}", mesh_label(model, target.mesh_index))
+    } else {
+        entity
     }
 }
 
@@ -5303,8 +5304,11 @@ fn compact_path(path: &Path) -> String {
 mod sidebar_page_tests {
     use std::path::PathBuf;
 
-    use super::{SidebarPage, SidebarPageContent, apply_mesh};
-    use fem_core::{AnalysisSetup, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId};
+    use super::{SidebarPage, SidebarPageContent, apply_mesh, selected_nodes_by_mesh};
+    use fem_core::{
+        AnalysisSetup, FemEntityRef, FemMesh, FemModel, FemModelVersion, MeshLoadStatus, NodeId,
+    };
+    use selection::SelectionState;
 
     #[test]
     fn analysis_shell_is_limited_to_analysis_pages() {
@@ -5379,5 +5383,21 @@ mod sidebar_page_tests {
 
         assert_eq!(setup.boundary_conditions.len(), 1);
         assert_eq!(model.meshes.len(), 2);
+    }
+
+    #[test]
+    fn selected_nodes_remain_partitioned_by_mesh() {
+        let selection = SelectionState {
+            targets: vec![
+                FemEntityRef::node(0, NodeId(7)),
+                FemEntityRef::node(1, NodeId(7)),
+            ],
+            ..Default::default()
+        };
+
+        let grouped = selected_nodes_by_mesh(&selection);
+
+        assert_eq!(grouped.get(&0), Some(&vec![NodeId(7)]));
+        assert_eq!(grouped.get(&1), Some(&vec![NodeId(7)]));
     }
 }

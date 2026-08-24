@@ -98,11 +98,11 @@ pub fn click_selection_system(
         selection.clear();
     }
 
-    let Some(hover_target) = hover.target else { return; };
+    let Some(hover_target) = hover.target() else { return; };
 
     let level = hover_target.level();
 
-    if !filter.accepts(level) || hover.level != Some(level) {
+    if !filter.accepts(level) || hover.level() != Some(level) {
         return;
     }
 
@@ -114,14 +114,15 @@ pub fn click_selection_system(
     // way a click always selects (or, with Alt, deselects) exactly what
     // was highlighted a moment before clicking, whether that's one facet
     // or an entire curved surface.
-    let group: &[fem_core::FemEntityId] = if hover_preview.targets.is_empty() {
+    let group: &[fem_core::FemEntityRef] = if hover_preview.targets.is_empty() {
         std::slice::from_ref(&hover_target)
     } else {
         &hover_preview.targets
     };
 
     if alt {
-        let removed: std::collections::HashSet<fem_core::FemEntityId> = group.iter().copied().collect();
+        let removed: std::collections::HashSet<fem_core::FemEntityRef> =
+            group.iter().copied().collect();
         selection.targets.retain(|target| !removed.contains(target));
 
         if let Some(entity) = hover.entity {

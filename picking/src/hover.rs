@@ -1,5 +1,8 @@
 use bevy::prelude::*;
-use fem_core::{FaceId, FemEntityId, FemMesh, FemModel, SelectionFilter, SelectionLevel, UiPointerState};
+use fem_core::{
+    ElementId, FaceId, FemEntityId, FemEntityRef, FemMesh, FemModel, SelectionFilter,
+    SelectionHit, SelectionLevel, UiPointerState,
+};
 
 use interaction::HoverResult;
 
@@ -51,9 +54,7 @@ pub fn hover_system(
     clear_hovered(&mut commands, &hovered_query);
 
     let mut best_entity = None;
-    let mut best_target = None;
-    let mut best_position = None;
-    let mut best_level = None;
+    let mut best_hit = None;
     let mut best_distance = f32::MAX;
 
     for (entity, transform, selectable) in selectable_query.iter() {
@@ -87,25 +88,17 @@ pub fn hover_system(
         if dist < 1.0 && projected < best_distance {
             best_distance = projected;
             best_entity = Some(entity);
-            best_target = Some(selectable.target);
-            best_position = Some(pos);
-            best_level = Some(level);
+            best_hit = Some(SelectionHit::new(selectable.target, pos, projected));
         }
     }
 
-    if let (Some(entity), Some(target), Some(position), Some(_level)) =
-        (best_entity, best_target, best_position, best_level)
-    {
+    if let (Some(entity), Some(hit)) = (best_entity, best_hit) {
         commands.entity(entity).insert(Hovered);
-        hover_result.set_entity(entity, target, position);
-    } else if let Some((target, point, surface_face)) =
+        hover_result.set_entity(entity, hit);
+    } else if let Some(hit) =
         model.and_then(|model| pick_model(&model, ray.origin, *ray.direction, filter.level))
     {
-        if let Some(surface_face) = surface_face {
-            hover_result.set_surface_target(target, surface_face, point);
-        } else {
-            hover_result.set_target(target, point);
-        }
+        hover_result.set_hit(hit);
     } else {
         hover_result.clear();
     }
@@ -122,24 +115,32 @@ fn pick_model(
     origin: Vec3,
     direction: Vec3,
     level: SelectionLevel,
-) -> Option<(FemEntityId, Vec3, Option<FaceId>)> {
+) -> Option<SelectionHit> {
     let threshold = model.bounds().map(selection_threshold).unwrap_or(0.05);
     let mut best = None;
 
-    for mesh in &model.meshes {
+    for (mesh_index, mesh) in model.meshes.iter().enumerate() {
         let candidate = match level {
-            SelectionLevel::Node => {
-                pick_node(mesh, origin, direction, threshold)
-                    .map(|(target, point, distance)| (target, point, distance, None))
-            }
-            SelectionLevel::Edge => {
-                pick_edge(mesh, origin, direction, threshold)
-                    .map(|(target, point, distance)| (target, point, distance, None))
-            }
+            SelectionLevel::Node => pick_node(mesh, origin, direction, threshold).map(
+                |(target, point, distance)| {
+                    SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
+                },
+            ),
+            SelectionLevel::Edge => pick_edge(mesh, origin, direction, threshold).map(
+                |(target, point, distance)| {
+                    SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
+                },
+            ),
             SelectionLevel::Face => pick_boundary_face(mesh, origin, direction, false)
-                .map(|(target, face, point, distance)| (target, point, distance, Some(face))),
+                .map(|(target, face, element, point, distance)| {
+                    SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
+                        .with_surface(face, element)
+                }),
             SelectionLevel::Element => pick_boundary_face(mesh, origin, direction, true)
-                .map(|(target, face, point, distance)| (target, point, distance, Some(face))),
+                .map(|(target, face, element, point, distance)| {
+                    SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
+                        .with_surface(face, element)
+                }),
         };
 
         let Some(candidate) = candidate else {
@@ -148,13 +149,13 @@ fn pick_model(
 
         if best
             .as_ref()
-            .is_none_or(|(_, _, distance, _)| candidate.2 < *distance)
+            .is_none_or(|best: &SelectionHit| candidate.depth < best.depth)
         {
             best = Some(candidate);
         }
     }
 
-    best.map(|(target, point, _, surface_face)| (target, point, surface_face))
+    best
 }
 
 /// Picks the mesh node closest to the ray's origin among nodes within
@@ -253,7 +254,7 @@ fn pick_boundary_face(
     origin: Vec3,
     direction: Vec3,
     select_element: bool,
-) -> Option<(FemEntityId, FaceId, Vec3, f32)> {
+) -> Option<(FemEntityId, FaceId, Option<ElementId>, Vec3, f32)> {
     let mut best = None;
     let faces = mesh.cached_boundary_faces();
 
@@ -286,9 +287,15 @@ fn pick_boundary_face(
 
             if best
                 .as_ref()
-                .is_none_or(|(_, _, _, best_distance)| distance < *best_distance)
+                .is_none_or(|(_, _, _, _, best_distance)| distance < *best_distance)
             {
-                best = Some((target, face.id, origin + direction * distance, distance));
+                best = Some((
+                    target,
+                    face.id,
+                    face.element,
+                    origin + direction * distance,
+                    distance,
+                ));
             }
         }
     }
@@ -384,11 +391,12 @@ mod tests {
     fn element_pick_retains_the_boundary_face_hit_by_the_ray() {
         let mesh = FemMesh::demo_hex8();
 
-        let (target, face_id, _, _) =
+        let (target, face_id, element, _, _) =
             pick_boundary_face(&mesh, Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z, true)
                 .expect("ray should hit the demo hex");
 
         assert_eq!(target, FemEntityId::Element(ElementId(0)));
+        assert_eq!(element, Some(ElementId(0)));
 
         let face = mesh
             .cached_boundary_faces()
@@ -399,5 +407,27 @@ mod tests {
             mesh.node_position(*node_id)
                 .is_some_and(|position| (position.z - 0.5).abs() < 1.0e-6)
         }));
+    }
+
+    #[test]
+    fn model_pick_scopes_colliding_element_ids_to_the_hit_mesh() {
+        let mut model = FemModel::single_mesh("Part A", FemMesh::demo_hex8());
+        let mut second = FemMesh::demo_hex8();
+        for node in &mut second.nodes {
+            node.position.x += 10.0;
+        }
+        model.add_mesh("Part B", second);
+
+        let hit = pick_model(
+            &model,
+            Vec3::new(10.0, 0.0, 5.0),
+            Vec3::NEG_Z,
+            SelectionLevel::Element,
+        )
+        .expect("ray should hit the translated second part");
+
+        assert_eq!(hit.target, FemEntityRef::element(1, ElementId(0)));
+        assert!(hit.surface_face.is_some());
+        assert_eq!(hit.element, Some(ElementId(0)));
     }
 }

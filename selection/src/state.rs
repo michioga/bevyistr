@@ -1,11 +1,11 @@
 use bevy::prelude::*;
-use fem_core::FemEntityId;
+use fem_core::FemEntityRef;
 
 #[derive(Resource, Default)]
 pub struct SelectionState {
     pub entities: Vec<Entity>,
 
-    pub targets: Vec<FemEntityId>,
+    pub targets: Vec<FemEntityRef>,
 }
 
 impl SelectionState {
