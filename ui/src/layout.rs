@@ -9,7 +9,7 @@ use fem_core::{
     UiPointerState,
 };
 use interaction::HoverResult;
-use selection::{Hovered, Selectable, Selected, SelectionState};
+use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use visualization::ContourSettings;
@@ -31,6 +31,26 @@ const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 pub(crate) struct SelectionLevelButton {
     level: SelectionLevel,
 }
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct SelectionGuideState {
+    pub expanded: bool,
+}
+
+impl Default for SelectionGuideState {
+    fn default() -> Self {
+        Self { expanded: true }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct SelectionGuideToggle;
+
+#[derive(Component)]
+pub(crate) struct SelectionGuidePanel;
+
+#[derive(Component)]
+pub(crate) struct SelectionOperationHint;
 
 #[derive(Component)]
 pub(crate) struct RenderModeButton {
@@ -685,10 +705,67 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextColor(TEXT_MAIN),
                     SelectionStatsText,
                 ));
-                hint_text(
-                    sec,
-                    "Click = select   Ctrl/Shift+Click = add   Alt+Click = remove\nDrag L→R = enclosed   R→L = crossing",
-                );
+                sec.spawn((
+                    Text::new("Action: REPLACE — click or drag starts a new selection"),
+                    TextFont {
+                        font_size: FontSize::Px(10.2),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.50, 0.78, 0.95, 0.95)),
+                    SelectionOperationHint,
+                ));
+                sec.spawn((
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        min_height: px(24.0),
+                        padding: UiRect::axes(px(8.0), px(3.0)),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.08, 0.14, 0.18, 0.96)),
+                    BorderColor::all(Color::srgba(0.30, 0.58, 0.72, 0.90)),
+                    SelectionGuideToggle,
+                    Name::new("SelectionGuideToggle"),
+                )).with_child((
+                    Text::new("Selection guide  [hide]"),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.72, 0.88, 0.96)),
+                ));
+                sec.spawn((
+                    Node {
+                        width: percent(100.0),
+                        padding: UiRect::all(px(7.0)),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.045, 0.075, 0.095, 0.94)),
+                    BorderColor::all(Color::srgba(0.22, 0.40, 0.50, 0.78)),
+                    SelectionGuidePanel,
+                    Name::new("SelectionGuidePanel"),
+                )).with_child((
+                    Text::new(
+                        "Click / drag       Replace selection\n\
+                         Ctrl + click/drag  Add to selection\n\
+                         Shift + click/drag Toggle selected / unselected\n\
+                         Alt or Ctrl+Shift  Remove from selection\n\
+                         Esc                Clear all\n\
+                         Drag left → right  Fully enclosed only\n\
+                         Drag right → left  Crossing / touching",
+                    ),
+                    TextFont {
+                        font_size: FontSize::Px(9.6),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.70, 0.78, 0.82, 0.94)),
+                ));
                 // Dynamic info: count + hover coords — updated every frame.
                 sec.spawn((
                     Text::new("Selected: 0  |  Hover: -"),
@@ -2074,6 +2151,98 @@ pub(crate) fn update_ui_pointer_state(
     state.over_ui = over_capture_region || over_interactive_widget;
 }
 
+pub(crate) fn selection_guide_toggle_system(
+    mut state: ResMut<SelectionGuideState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &Children,
+        ),
+        With<SelectionGuideToggle>,
+    >,
+    mut panels: Query<&mut Node, With<SelectionGuidePanel>>,
+    mut labels: Query<&mut Text>,
+) {
+    for (interaction, mut background, mut border, children) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.expanded = !state.expanded;
+        }
+
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => Color::srgba(0.11, 0.20, 0.25, 0.98),
+            Interaction::None => Color::srgba(0.08, 0.14, 0.18, 0.96),
+        });
+        *border = BorderColor::all(if state.expanded {
+            ACTIVE_BORDER
+        } else {
+            Color::srgba(0.30, 0.58, 0.72, 0.90)
+        });
+
+        for &child in children {
+            if let Ok(mut text) = labels.get_mut(child) {
+                **text = if state.expanded {
+                    "Selection guide  [hide]"
+                } else {
+                    "Selection guide  [show]"
+                }
+                .to_string();
+            }
+        }
+    }
+
+    for mut node in &mut panels {
+        node.display = if state.expanded {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
+pub(crate) fn update_selection_operation_hint(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut hints: Query<(&mut Text, &mut TextColor), With<SelectionOperationHint>>,
+) {
+    let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    let alt = keyboard.pressed(KeyCode::AltLeft) || keyboard.pressed(KeyCode::AltRight);
+    let operation = SelectionOperation::from_modifiers(ctrl, shift, alt);
+    let (label, color) = selection_operation_hint(operation);
+
+    for (mut text, mut text_color) in &mut hints {
+        if text.as_str() != label {
+            **text = label.to_string();
+        }
+        if text_color.0 != color {
+            text_color.0 = color;
+        }
+    }
+}
+
+fn selection_operation_hint(operation: SelectionOperation) -> (&'static str, Color) {
+    match operation {
+        SelectionOperation::Replace => (
+            "Action: REPLACE — click or drag starts a new selection",
+            Color::srgba(0.50, 0.78, 0.95, 0.95),
+        ),
+        SelectionOperation::Add => (
+            "Action: ADD — Ctrl keeps the current selection",
+            Color::srgba(0.42, 0.90, 0.60, 0.96),
+        ),
+        SelectionOperation::Toggle => (
+            "Action: TOGGLE — Shift reverses selected / unselected",
+            Color::srgba(0.98, 0.76, 0.34, 0.96),
+        ),
+        SelectionOperation::Remove => (
+            "Action: REMOVE — Alt or Ctrl+Shift subtracts",
+            Color::srgba(1.0, 0.48, 0.42, 0.96),
+        ),
+    }
+}
+
 pub(crate) fn selection_level_button_system(
     mut commands: Commands,
     mut filter: ResMut<SelectionFilter>,
@@ -2812,7 +2981,7 @@ pub(crate) fn surface_selection_mode_button_system(
 /// This always walks from whatever is under the cursor *this* frame,
 /// independent of what's already selected — [`selection::click_selection_system`]
 /// is what actually commits this preview into [`SelectionState`] on click
-/// (respecting Ctrl/Shift to add another group, or Alt to remove this one),
+/// (respecting the shared replace/add/toggle/remove modifier rules),
 /// so there's no separate click-time seed to track here.
 pub(crate) fn update_hover_preview_group(
     hover: Res<HoverResult>,
@@ -3833,8 +4002,8 @@ fn set_list_button(parent: &mut ChildSpawnerCommands, set_button: SetButton, lab
 }
 
 /// Selects every member of the clicked set, mirroring the result of a box
-/// select over exactly that set: clears the current selection (or extends
-/// it with Ctrl held), sets [`SelectionFilter::level`] to match the set's
+/// select over exactly that set: applies the shared selection modifier,
+/// sets [`SelectionFilter::level`] to match the set's
 /// kind, and marks matching [`Selectable`] entities as [`Selected`] so
 /// per-entity rendering (small meshes) highlights them too, alongside the
 /// [`SelectionState::targets`] used by the topology highlight overlay for
@@ -3885,13 +4054,13 @@ pub(crate) fn set_button_system(
                             .collect();
                         let ctrl = keyboard.pressed(KeyCode::ControlLeft)
                             || keyboard.pressed(KeyCode::ControlRight);
-
-                        if !ctrl {
-                            for entity in &selected_query {
-                                commands.entity(entity).remove::<Selected>();
-                            }
-                            selection.clear();
-                        }
+                        let shift = keyboard.pressed(KeyCode::ShiftLeft)
+                            || keyboard.pressed(KeyCode::ShiftRight);
+                        let alt = keyboard.pressed(KeyCode::AltLeft)
+                            || keyboard.pressed(KeyCode::AltRight);
+                        let operation = selection::SelectionOperation::from_modifiers(
+                            ctrl, shift, alt,
+                        );
 
                         filter.level = match set_button.kind {
                             SetKind::Node => SelectionLevel::Node,
@@ -3899,22 +4068,17 @@ pub(crate) fn set_button_system(
                             SetKind::Surface => SelectionLevel::Face,
                         };
 
-                        for target in &targets {
-                            if !selection.targets.contains(target) {
-                                selection.targets.push(*target);
-                            }
-                            if !selection.highlight_targets.contains(target) {
-                                selection.highlight_targets.push(*target);
-                            }
+                        selection.apply_group(&targets, &targets, operation);
+
+                        for entity in &selected_query {
+                            commands.entity(entity).remove::<Selected>();
                         }
+                        selection.entities.clear();
 
                         for (entity, selectable) in &selectable_query {
-                            if targets.contains(&selectable.target) {
+                            if selection.targets.contains(&selectable.target) {
                                 commands.entity(entity).insert(Selected);
-
-                                if !selection.entities.contains(&entity) {
-                                    selection.entities.push(entity);
-                                }
+                                selection.entities.push(entity);
                             }
                         }
                     }
@@ -5391,8 +5555,9 @@ mod sidebar_page_tests {
     use std::path::PathBuf;
 
     use super::{
-        SidebarPage, SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings,
-        apply_mesh, selected_nodes_by_mesh, surface_selection_hint, update_hover_preview_group,
+        SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
+        SurfaceSelectionSettings, apply_mesh, selected_nodes_by_mesh,
+        selection_operation_hint, surface_selection_hint, update_hover_preview_group,
     };
     use bevy::prelude::{App, Update, Vec3};
     use fem_core::{
@@ -5400,7 +5565,7 @@ mod sidebar_page_tests {
         HoverPreviewTargets, MeshLoadStatus, NodeId, SelectionHit, SelectionLevel,
     };
     use interaction::HoverResult;
-    use selection::SelectionState;
+    use selection::{SelectionOperation, SelectionState};
 
     #[test]
     fn analysis_shell_is_limited_to_analysis_pages() {
@@ -5503,6 +5668,15 @@ mod sidebar_page_tests {
             surface_selection_hint(SelectionLevel::Element, SurfaceSelectionMode::Smooth),
             "Element Smooth = whole elements behind curved patch"
         );
+    }
+
+    #[test]
+    fn selection_guide_starts_open_and_names_every_modifier_operation() {
+        assert!(SelectionGuideState::default().expanded);
+        assert!(selection_operation_hint(SelectionOperation::Replace).0.contains("REPLACE"));
+        assert!(selection_operation_hint(SelectionOperation::Add).0.contains("ADD"));
+        assert!(selection_operation_hint(SelectionOperation::Toggle).0.contains("TOGGLE"));
+        assert!(selection_operation_hint(SelectionOperation::Remove).0.contains("REMOVE"));
     }
 
     #[test]

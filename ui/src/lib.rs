@@ -30,8 +30,9 @@ use layout::{
     update_hover_preview_group,
     update_surface_selection_hint,
     update_parts_list_text, update_result_stats_text, update_selection_info_text,
-    update_selection_stats_text, update_sidebar_page_visibility, update_ui_pointer_state,
-    SurfaceSelectionSettings, PlaybackState, SelectedDloadKind,
+    update_selection_operation_hint, update_selection_stats_text,
+    update_sidebar_page_visibility, update_ui_pointer_state, selection_guide_toggle_system,
+    SelectionGuideState, SurfaceSelectionSettings, PlaybackState, SelectedDloadKind,
     SelectedEgrp, SelectedLoadDirection, SelectedMaterialForSection, SelectedSectionType,
     SidebarPage, UndoInProgress, UndoStack,
 };
@@ -54,6 +55,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<visualization::VisualizationSettings>();
         app.init_resource::<visualization::BoundaryVisualSettings>();
         app.init_resource::<SidebarPage>();
+        app.init_resource::<SelectionGuideState>();
         app.init_resource::<SelectedLoadDirection>();
         app.init_resource::<SelectedSectionType>();
         app.init_resource::<SelectedEgrp>();
@@ -125,6 +127,8 @@ impl Plugin for UiPlugin {
             toggle_constraints_button_system,
             toggle_loads_button_system,
             surface_selection_mode_button_system.in_set(InteractionSystems::UiInput),
+            selection_guide_toggle_system.in_set(InteractionSystems::UiInput),
+            update_selection_operation_hint.in_set(InteractionSystems::UiInput),
             update_hover_preview_group
                 .after(slider::update_sliders)
                 .in_set(InteractionSystems::Preview),

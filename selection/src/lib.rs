@@ -6,7 +6,9 @@ use bevy::prelude::*;
 use interaction::InteractionSystems;
 
 pub use components::*;
-pub use selection_system::{click_selection_system, selection_filter_shortcut_system};
+pub use selection_system::{
+    clear_selection_shortcut_system, click_selection_system, selection_filter_shortcut_system,
+};
 pub use state::*;
 
 pub struct SelectionPlugin;
@@ -19,7 +21,11 @@ impl Plugin for SelectionPlugin {
 
         app.add_systems(
             Update,
-            selection_filter_shortcut_system.in_set(InteractionSystems::UiInput),
+            (
+                selection_filter_shortcut_system,
+                clear_selection_shortcut_system,
+            )
+                .in_set(InteractionSystems::UiInput),
         );
         app.add_systems(
             Update,

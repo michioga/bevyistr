@@ -3,7 +3,7 @@ use fem_core::{
     Aabb, FemEntityId, FemEntityRef, FemMesh, FemModel, InteractionMode, NodeId, SelectionFilter,
     SelectionLevel, UiPointerState,
 };
-use selection::{Selectable, Selected, SelectionState};
+use selection::{Selectable, Selected, SelectionOperation, SelectionState};
 use std::collections::HashMap;
 
 use crate::BoxSelectState;
@@ -186,14 +186,10 @@ pub fn perform_box_selection(
     };
 
     let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
-
-    if !ctrl {
-        for entity in selected_query.iter() {
-            commands.entity(entity).remove::<Selected>();
-        }
-
-        selection.clear();
-    }
+    let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    let alt = keyboard.pressed(KeyCode::AltLeft) || keyboard.pressed(KeyCode::AltRight);
+    let operation = SelectionOperation::from_modifiers(ctrl, shift, alt);
+    let mut candidates = SelectionState::default();
 
     // Query the model geometry directly, including aggregate-rendered meshes
     // that have no per-topology Selectable entities.
@@ -206,7 +202,7 @@ pub fn perform_box_selection(
             max,
             crossing,
             filter.level,
-            &mut selection,
+            &mut candidates,
         );
     }
 
@@ -214,13 +210,13 @@ pub fn perform_box_selection(
     // one Selectable entity per topology item. Exact geometry selection is
     // performed from FemModel above; the entity transform is only a fallback
     // for standalone Selectables that are not backed by a model.
-    for (entity, transform, selectable) in selectable_query.iter() {
+    for (_, transform, selectable) in selectable_query.iter() {
         if !filter.accepts(selectable.level()) {
             continue;
         }
 
         let selected = if model.is_some() {
-            selection.targets.contains(&selectable.target)
+            candidates.targets.contains(&selectable.target)
         } else {
             camera
                 .world_to_viewport(camera_transform, transform.translation())
@@ -231,13 +227,28 @@ pub fn perform_box_selection(
             continue;
         }
 
-        commands.entity(entity).insert(Selected);
+        push_target(&mut candidates, selectable.target);
+    }
 
-        if !selection.entities.contains(&entity) {
+    selection.apply_group(
+        &candidates.targets,
+        &candidates.highlight_targets,
+        operation,
+    );
+
+    // Rebuild ECS marker bookkeeping from the authoritative topology target
+    // set. This keeps Remove and Toggle consistent even when a rectangle
+    // contains many per-entity visuals.
+    for entity in &selected_query {
+        commands.entity(entity).remove::<Selected>();
+    }
+    selection.entities.clear();
+
+    for (entity, _, selectable) in &selectable_query {
+        if selection.targets.contains(&selectable.target) {
+            commands.entity(entity).insert(Selected);
             selection.entities.push(entity);
         }
-
-        push_target(&mut selection, selectable.target);
     }
 }
 
