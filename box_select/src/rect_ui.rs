@@ -159,6 +159,7 @@ pub fn perform_box_selection(
     filter: Res<SelectionFilter>,
     ui_pointer: Res<UiPointerState>,
     mut selection: ResMut<SelectionState>,
+    mut click_sequence: ResMut<selection::ClickSequence>,
 
     camera_query: Query<(&Camera, &GlobalTransform)>,
 
@@ -180,6 +181,11 @@ pub fn perform_box_selection(
         // `click_selection_system` did on the preceding press untouched.
         return;
     }
+
+    // The press that began this drag was already observed by the click
+    // system. Do not let it combine with the next real click into a false
+    // double-click gesture.
+    click_sequence.reset();
 
     let Ok((camera, camera_transform)) = camera_query.single() else {
         return;

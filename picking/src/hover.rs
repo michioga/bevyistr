@@ -211,7 +211,8 @@ fn pick_edge(
     direction: Vec3,
     threshold: f32,
 ) -> Option<(FemEntityId, Vec3, f32)> {
-    let mut best = None;
+    let mut best_feature = None;
+    let mut best_regular = None;
     let edges = mesh.cached_boundary_edges();
 
     for edge_index in mesh.boundary_edge_indices_along_ray(origin, direction, threshold) {
@@ -229,16 +230,27 @@ fn pick_edge(
             continue;
         };
 
-        if distance_to_ray <= threshold
-            && best
-                .as_ref()
-                .is_none_or(|(_, _, distance)| projected < *distance)
-        {
-            best = Some((FemEntityId::Edge(edge.id), point, projected));
+        if distance_to_ray > threshold {
+            continue;
+        }
+
+        let candidate = (FemEntityId::Edge(edge.id), point, projected, distance_to_ray);
+        let best = if mesh.cached_feature_edge_ids().binary_search(&edge.id).is_ok() {
+            &mut best_feature
+        } else {
+            &mut best_regular
+        };
+        if best.as_ref().is_none_or(|(_, _, best_depth, best_distance)| {
+            distance_to_ray < *best_distance
+                || (distance_to_ray == *best_distance && projected < *best_depth)
+        }) {
+            *best = Some(candidate);
         }
     }
 
-    best
+    best_feature
+        .or(best_regular)
+        .map(|(target, point, projected, _)| (target, point, projected))
 }
 
 /// Picks the boundary face (or its owning element, if `select_element`)
@@ -429,5 +441,22 @@ mod tests {
         assert_eq!(hit.target, FemEntityRef::element(1, ElementId(0)));
         assert!(hit.surface_face.is_some());
         assert_eq!(hit.element, Some(ElementId(0)));
+    }
+
+    #[test]
+    fn edge_filter_returns_an_edge_without_falling_back_to_a_face() {
+        let model = FemModel::demo_hex8();
+
+        let hit = pick_model(
+            &model,
+            Vec3::new(0.0, 0.5, 5.0),
+            Vec3::NEG_Z,
+            SelectionLevel::Edge,
+        )
+        .expect("ray should hit the top edge of the demo hex");
+
+        assert!(matches!(hit.target.entity, FemEntityId::Edge(_)));
+        assert!(hit.surface_face.is_none());
+        assert!(hit.element.is_none());
     }
 }

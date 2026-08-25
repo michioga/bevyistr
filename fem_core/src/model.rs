@@ -151,6 +151,10 @@ impl FemMesh {
         &self.topology.boundary_edges
     }
 
+    pub fn cached_feature_edge_ids(&self) -> &[EdgeId] {
+        &self.topology.feature_edge_ids
+    }
+
     /// World-space AABB of each boundary face, parallel to
     /// [`FemMesh::cached_boundary_faces`].
     pub fn cached_boundary_face_bounds(&self) -> &[Aabb] {
@@ -395,6 +399,9 @@ pub struct TopologyCache {
 
     pub boundary_edges: Vec<FemEdge>,
 
+    /// Boundary edges classified as free boundaries or geometric creases.
+    pub feature_edge_ids: Vec<EdgeId>,
+
     /// World-space AABB of each entry in `boundary_faces`, in the same
     /// order.
     pub boundary_face_bounds: Vec<Aabb>,
@@ -447,6 +454,13 @@ impl TopologyCache {
         let edges = derive_edges(elements);
         let boundary_faces = derive_boundary_faces(elements);
         let boundary_edges = derive_boundary_edges_from_faces(&edges, &boundary_faces);
+        let feature_edge_ids = crate::connected::derive_feature_edge_ids(
+            nodes,
+            &node_indices,
+            &boundary_faces,
+            &boundary_edges,
+            crate::connected::DEFAULT_FEATURE_EDGE_ANGLE_DEG,
+        );
 
         let boundary_face_bounds: Vec<Aabb> = boundary_faces
             .iter()
@@ -483,6 +497,7 @@ impl TopologyCache {
             faces: derive_faces(elements),
             boundary_faces,
             boundary_edges,
+            feature_edge_ids,
             boundary_face_bounds,
             boundary_face_bvh,
             node_bounds,

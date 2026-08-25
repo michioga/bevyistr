@@ -126,7 +126,9 @@ impl Plugin for UiPlugin {
             rebuild_materials_sections_list,
             toggle_constraints_button_system,
             toggle_loads_button_system,
-            surface_selection_mode_button_system.in_set(InteractionSystems::UiInput),
+            surface_selection_mode_button_system
+                .after(selection_level_button_system)
+                .in_set(InteractionSystems::UiInput),
             selection_guide_toggle_system.in_set(InteractionSystems::UiInput),
             update_selection_operation_hint.in_set(InteractionSystems::UiInput),
             update_hover_preview_group

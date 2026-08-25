@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 pub mod boundary;
 pub mod contact;
+pub mod connected;
 pub mod model;
 pub mod planar;
 pub mod result;
@@ -10,6 +11,11 @@ pub mod spatial;
 
 pub use boundary::*;
 pub use contact::*;
+pub use connected::{
+    DEFAULT_FEATURE_EDGE_ANGLE_DEG, expand_connected_boundary_edges,
+    expand_connected_boundary_faces, expand_connected_elements, expand_connected_feature_edges,
+    expand_continuous_feature_edges,
+};
 pub use model::*;
 pub use planar::{
     expand_coplanar_from_element, expand_coplanar_from_face, expand_smooth_from_element,
@@ -140,8 +146,9 @@ impl FemModelVersion {
 /// Coplanar or Smooth surface group when surface growth is active. It is
 /// computed each frame by a system in the `ui` crate (which owns the growth
 /// mode and angle slider) and consumed by `visualization`'s hover highlight, so the
-/// preview accurately reflects what a click would actually select rather
-/// than just the single facet under the cursor. Living in `fem_core`
+/// preview accurately reflects what a single click would select rather
+/// than just the single facet under the cursor. Multi-click gestures may
+/// expand this group further. Living in `fem_core`
 /// rather than `ui` or `visualization` lets both depend on it without
 /// `visualization` needing a (backwards) dependency on `ui`.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
