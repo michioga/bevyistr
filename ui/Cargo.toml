@@ -10,6 +10,7 @@ fem_core = { path = "../fem_core" }
 gmsh = { path = "../gmsh" }
 hecmw = { path = "../hecmw" }
 interaction = { path = "../interaction" }
+picking = { path = "../picking" }
 rfd = "0.15"
 selection = { path = "../selection" }
 visualization = { path = "../visualization" }

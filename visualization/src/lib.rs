@@ -17,8 +17,8 @@ use demo_mesh::{
 pub use boundary_viz::{BoundaryVisual, BoundaryVisualSettings};
 pub use colorbar::ColorbagRoot;
 pub use demo_mesh::{
-    ContourSettings, FemMeshVisual, FlatMaterial, TransparentMaterial, VisualizationMode,
-    VisualizationSettings,
+    ContourSettings, FemMeshVisual, FemPartVisual, FlatMaterial, TransparentMaterial,
+    VisualizationMode, VisualizationSettings, build_part_edge_mesh, build_part_surface_mesh,
 };
 
 pub struct VisualizationPlugin;

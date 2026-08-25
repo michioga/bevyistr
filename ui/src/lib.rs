@@ -1,11 +1,19 @@
+mod assembly;
 mod layout;
 pub mod slider;
 
 use bevy::prelude::*;
 use interaction::InteractionSystems;
 
+use assembly::{
+    AssemblyEditorState, assembly_viewport_hover_system, assembly_viewport_input_system,
+    spawn_assembly_viewport_visuals, update_assembly_gizmo_visuals,
+    update_assembly_part_overlays,
+};
+
 use layout::{
     accept_contact_button_system, add_section_button_system, analysis_type_button_system,
+    assembly_mode_button_system, assembly_part_button_system, assembly_transform_button_system,
     apply_dload_button_system, apply_load_button_system, apply_pending_cnt_system,
     apply_slider_to_results,
     camera_refit_on_reload, clear_all_bc_loads_button_system, constraint_preset_button_system,
@@ -19,7 +27,8 @@ use layout::{
     open_project_button_system, open_result_button_system, open_setup_button_system,
     surface_selection_mode_button_system,
     playback_advance_system, playback_button_system, push_undo_before_setup_change,
-    rebuild_boundary_loads_list, rebuild_materials_sections_list, rebuild_section_def_panel,
+    rebuild_assembly_parts, rebuild_boundary_loads_list, rebuild_materials_sections_list,
+    rebuild_section_def_panel,
     rebuild_sets_list, render_mode_button_system, section_type_button_system,
     selection_level_button_system, set_button_system, sidebar_page_button_system,
     solver_method_button_system,
@@ -28,11 +37,12 @@ use layout::{
     update_analysis_setup_stats_text, update_apply_dload_label, update_apply_load_label,
     update_constraint_button_labels, update_contact_candidate_text, update_mesh_stats_text,
     update_hover_preview_group,
-    update_surface_selection_hint,
-    update_parts_list_text, update_result_stats_text, update_selection_info_text,
+    update_assembly_status_text, update_surface_selection_hint,
+    update_result_stats_text, update_selection_info_text,
     update_selection_operation_hint, update_selection_stats_text,
     update_sidebar_page_visibility, update_ui_pointer_state, selection_guide_toggle_system,
-    SelectionGuideState, SurfaceSelectionSettings, PlaybackState, SelectedDloadKind,
+    CameraFitRequest, SelectionGuideState, SurfaceSelectionSettings,
+    PlaybackState, SelectedDloadKind,
     SelectedEgrp, SelectedLoadDirection, SelectedMaterialForSection, SelectedSectionType,
     SidebarPage, UndoInProgress, UndoStack,
 };
@@ -48,6 +58,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::FemModelVersion>();
         app.init_resource::<fem_core::PendingCntLoad>();
         app.init_resource::<fem_core::UiPointerState>();
+        app.init_resource::<fem_core::ViewportTool>();
         app.init_resource::<fem_core::ContactCandidateState>();
         app.init_resource::<fem_core::FemResultSet>();
         app.init_resource::<fem_core::AnalysisSetup>();
@@ -55,6 +66,8 @@ impl Plugin for UiPlugin {
         app.init_resource::<visualization::VisualizationSettings>();
         app.init_resource::<visualization::BoundaryVisualSettings>();
         app.init_resource::<SidebarPage>();
+        app.init_resource::<AssemblyEditorState>();
+        app.init_resource::<CameraFitRequest>();
         app.init_resource::<SelectionGuideState>();
         app.init_resource::<SelectedLoadDirection>();
         app.init_resource::<SelectedSectionType>();
@@ -65,7 +78,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
         app.init_resource::<UndoInProgress>();
-        app.add_systems(Startup, spawn_ui);
+        app.add_systems(Startup, (spawn_ui, spawn_assembly_viewport_visuals));
 
         // Group 1: pointer, navigation, mesh loading (≤16 systems)
         app.add_systems(Update, (
@@ -126,7 +139,9 @@ impl Plugin for UiPlugin {
             rebuild_materials_sections_list,
             toggle_constraints_button_system,
             toggle_loads_button_system,
-            surface_selection_mode_button_system.in_set(InteractionSystems::UiInput),
+            surface_selection_mode_button_system
+                .after(selection_level_button_system)
+                .in_set(InteractionSystems::UiInput),
             selection_guide_toggle_system.in_set(InteractionSystems::UiInput),
             update_selection_operation_hint.in_set(InteractionSystems::UiInput),
             update_hover_preview_group
@@ -147,11 +162,38 @@ impl Plugin for UiPlugin {
             slider::update_sliders.after(step_keyboard_navigation),
             apply_slider_to_results.after(slider::update_sliders),
             update_mesh_stats_text,
-            update_parts_list_text,
             update_selection_stats_text,
             update_contact_candidate_text,
             update_result_stats_text,
             update_analysis_setup_stats_text,
         ));
+
+        // Group 6: assembly part selection and pose editing.
+        app.add_systems(Update, (
+            rebuild_assembly_parts.after(mesh_load_system),
+            assembly_mode_button_system.in_set(InteractionSystems::UiInput),
+            assembly_part_button_system
+                .after(rebuild_assembly_parts)
+                .in_set(InteractionSystems::UiInput),
+            assembly_transform_button_system
+                .after(assembly_part_button_system)
+                .after(slider::update_sliders)
+                .in_set(InteractionSystems::UiInput),
+            update_assembly_status_text.after(assembly_transform_button_system),
+        ));
+
+        app.add_systems(
+            Update,
+            assembly_viewport_hover_system.in_set(InteractionSystems::Picking),
+        );
+        app.add_systems(
+            Update,
+            assembly_viewport_input_system.in_set(InteractionSystems::Selection),
+        );
+        app.add_systems(
+            Update,
+            (update_assembly_part_overlays, update_assembly_gizmo_visuals)
+                .after(assembly_viewport_input_system),
+        );
     }
 }

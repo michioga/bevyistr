@@ -18,6 +18,12 @@ pub struct Part {
     pub name: String,
 
     pub mesh_index: usize,
+
+    /// Node positions as imported from the source mesh. The live positions
+    /// in [`FemModel::meshes`] are authoritative for rendering, picking,
+    /// contact search, and export; this snapshot only provides a reliable
+    /// "Reset pose" operation for assembly editing.
+    pub original_node_positions: Vec<Vec3>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +155,10 @@ impl FemMesh {
 
     pub fn cached_boundary_edges(&self) -> &[FemEdge] {
         &self.topology.boundary_edges
+    }
+
+    pub fn cached_feature_edge_ids(&self) -> &[EdgeId] {
+        &self.topology.feature_edge_ids
     }
 
     /// World-space AABB of each boundary face, parallel to
@@ -395,6 +405,9 @@ pub struct TopologyCache {
 
     pub boundary_edges: Vec<FemEdge>,
 
+    /// Boundary edges classified as free boundaries or geometric creases.
+    pub feature_edge_ids: Vec<EdgeId>,
+
     /// World-space AABB of each entry in `boundary_faces`, in the same
     /// order.
     pub boundary_face_bounds: Vec<Aabb>,
@@ -447,6 +460,13 @@ impl TopologyCache {
         let edges = derive_edges(elements);
         let boundary_faces = derive_boundary_faces(elements);
         let boundary_edges = derive_boundary_edges_from_faces(&edges, &boundary_faces);
+        let feature_edge_ids = crate::connected::derive_feature_edge_ids(
+            nodes,
+            &node_indices,
+            &boundary_faces,
+            &boundary_edges,
+            crate::connected::DEFAULT_FEATURE_EDGE_ANGLE_DEG,
+        );
 
         let boundary_face_bounds: Vec<Aabb> = boundary_faces
             .iter()
@@ -483,6 +503,7 @@ impl TopologyCache {
             faces: derive_faces(elements),
             boundary_faces,
             boundary_edges,
+            feature_edge_ids,
             boundary_face_bounds,
             boundary_face_bvh,
             node_bounds,
@@ -818,11 +839,13 @@ impl FemModel {
     pub fn single_mesh(name: impl Into<String>, mesh: FemMesh) -> Self {
         let mut mesh = mesh;
         mesh.rebuild_topology_cache();
+        let original_node_positions = mesh.nodes.iter().map(|node| node.position).collect();
 
         Self {
             parts: vec![Part {
                 name: name.into(),
                 mesh_index: 0,
+                original_node_positions,
             }],
             meshes: vec![mesh],
             contacts: Vec::new(),
@@ -840,6 +863,7 @@ impl FemModel {
     pub fn add_mesh(&mut self, name: impl Into<String>, mesh: FemMesh) -> usize {
         let mut mesh = mesh;
         mesh.rebuild_topology_cache();
+        let original_node_positions = mesh.nodes.iter().map(|node| node.position).collect();
 
         let mesh_index = self.meshes.len();
 
@@ -847,9 +871,103 @@ impl FemModel {
         self.parts.push(Part {
             name: name.into(),
             mesh_index,
+            original_node_positions,
         });
 
         mesh_index
+    }
+
+    /// Returns the current arithmetic centre of a part's nodes.
+    pub fn part_centroid(&self, part_index: usize) -> Option<Vec3> {
+        let mesh_index = self.parts.get(part_index)?.mesh_index;
+        let mesh = self.meshes.get(mesh_index)?;
+        if mesh.nodes.is_empty() {
+            return None;
+        }
+
+        Some(
+            mesh.nodes
+                .iter()
+                .fold(Vec3::ZERO, |sum, node| sum + node.position)
+                / mesh.nodes.len() as f32,
+        )
+    }
+
+    /// Returns the current axis-aligned bounds of one assembly part.
+    pub fn part_bounds(&self, part_index: usize) -> Option<(Vec3, Vec3)> {
+        let mesh_index = self.parts.get(part_index)?.mesh_index;
+        self.meshes.get(mesh_index)?.bounds()
+    }
+
+    /// Translates one part by mutating its live node coordinates.
+    ///
+    /// Keeping transformed coordinates in the mesh itself ensures every
+    /// downstream consumer (visualization, picking, contact detection, and
+    /// HECMW export) observes exactly the same assembly pose.
+    pub fn translate_part(&mut self, part_index: usize, delta: Vec3) -> bool {
+        if !delta.is_finite() {
+            return false;
+        }
+
+        let Some(mesh_index) = self.parts.get(part_index).map(|part| part.mesh_index) else {
+            return false;
+        };
+        let Some(mesh) = self.meshes.get_mut(mesh_index) else {
+            return false;
+        };
+
+        for node in &mut mesh.nodes {
+            node.position += delta;
+        }
+        mesh.rebuild_topology_cache();
+        true
+    }
+
+    /// Rotates one part around its current node centroid.
+    pub fn rotate_part_about_centroid(&mut self, part_index: usize, rotation: Quat) -> bool {
+        if !rotation.is_finite() || rotation.length_squared() <= f32::EPSILON {
+            return false;
+        }
+
+        let Some(centroid) = self.part_centroid(part_index) else {
+            return false;
+        };
+        let Some(mesh_index) = self.parts.get(part_index).map(|part| part.mesh_index) else {
+            return false;
+        };
+        let Some(mesh) = self.meshes.get_mut(mesh_index) else {
+            return false;
+        };
+        let rotation = rotation.normalize();
+
+        for node in &mut mesh.nodes {
+            node.position = centroid + rotation * (node.position - centroid);
+        }
+        mesh.rebuild_topology_cache();
+        true
+    }
+
+    /// Restores one part to the coordinates it had when imported.
+    pub fn reset_part_pose(&mut self, part_index: usize) -> bool {
+        let Some(part) = self.parts.get(part_index) else {
+            return false;
+        };
+        let Some(mesh) = self.meshes.get_mut(part.mesh_index) else {
+            return false;
+        };
+        if mesh.nodes.len() != part.original_node_positions.len() {
+            return false;
+        }
+
+        for (node, original) in mesh
+            .nodes
+            .iter_mut()
+            .zip(part.original_node_positions.iter().copied())
+        {
+            node.position = original;
+        }
+        mesh.rebuild_topology_cache();
+        true
     }
 
     pub fn demo_hex8() -> Self {
@@ -1352,5 +1470,81 @@ mod tests {
         assert_eq!(count, 1);
         assert!(model.meshes[0].surface_sets.is_empty());
         assert_eq!(model.meshes[1].surface_sets.len(), 1);
+    }
+
+    #[test]
+    fn translating_a_part_only_moves_its_mesh() {
+        let mut model = FemModel::single_mesh("Part A", FemMesh::demo_hex8());
+        model.add_mesh("Part B", FemMesh::demo_hex8());
+        let first_before = model.meshes[0].nodes[0].position;
+        let second_before = model.meshes[1].nodes[0].position;
+
+        assert!(model.translate_part(1, Vec3::new(3.0, -2.0, 5.0)));
+
+        assert_eq!(model.meshes[0].nodes[0].position, first_before);
+        assert_eq!(
+            model.meshes[1].nodes[0].position,
+            second_before + Vec3::new(3.0, -2.0, 5.0)
+        );
+        assert_eq!(
+            model.meshes[1].topology.node_bounds[0].min.x,
+            second_before.x + 3.0
+        );
+    }
+
+    #[test]
+    fn rotating_a_part_keeps_its_centroid_fixed() {
+        let mut model = FemModel::single_mesh("Part", FemMesh::demo_hex8());
+        let centroid_before = model.part_centroid(0).unwrap();
+        let first_before = model.meshes[0].nodes[0].position;
+        let rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+
+        assert!(model.rotate_part_about_centroid(0, rotation));
+
+        let centroid_after = model.part_centroid(0).unwrap();
+        assert!(centroid_after.distance(centroid_before) < 1.0e-6);
+        assert!(model.meshes[0].nodes[0]
+            .position
+            .distance(centroid_before + rotation * (first_before - centroid_before))
+            < 1.0e-6);
+    }
+
+    #[test]
+    fn reset_pose_restores_imported_coordinates_without_changing_ids_or_sets() {
+        let mut mesh = FemMesh::demo_hex8();
+        mesh.node_sets.push(FemNodeSet {
+            name: "FIX".to_string(),
+            nodes: vec![NodeId(0), NodeId(1)],
+        });
+        let mut model = FemModel::single_mesh("Part", mesh);
+        let positions_before: Vec<_> = model
+            .meshes[0]
+            .nodes
+            .iter()
+            .map(|node| node.position)
+            .collect();
+        let node_ids: Vec<_> = model.meshes[0].nodes.iter().map(|node| node.id).collect();
+
+        model.translate_part(0, Vec3::splat(7.0));
+        model.rotate_part_about_centroid(0, Quat::from_rotation_x(0.37));
+        assert!(model.reset_part_pose(0));
+
+        assert_eq!(
+            model.meshes[0]
+                .nodes
+                .iter()
+                .map(|node| node.position)
+                .collect::<Vec<_>>(),
+            positions_before
+        );
+        assert_eq!(
+            model.meshes[0]
+                .nodes
+                .iter()
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            node_ids
+        );
+        assert_eq!(model.meshes[0].node_sets[0].nodes, vec![NodeId(0), NodeId(1)]);
     }
 }

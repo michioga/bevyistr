@@ -1,4 +1,5 @@
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
+use crate::assembly::{AssemblyEditorState, reference_size as assembly_reference_size};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -6,7 +7,7 @@ use camera::OrbitCamera;
 use fem_core::{
     ContactCandidateState, ContactType, FemEntityId, FemEntityRef, FemModel, FemModelVersion,
     FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel,
-    UiPointerState,
+    UiPointerState, ViewportTool,
 };
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
@@ -26,6 +27,15 @@ const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 const ACTIVE_BORDER: Color = Color::srgb(0.57, 0.86, 0.92);
 const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
 const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
+const SELECTION_GUIDE_TEXT: &str = "Click / drag       Replace selection\n\
+Double click       Connected boundary\n\
+Triple click       Connected component\n\
+Ctrl + click/drag  Add to selection\n\
+Shift + click/drag Toggle selected / unselected\n\
+Alt or Ctrl+Shift  Remove from selection\n\
+Esc                Clear all\n\
+Drag left → right  Fully enclosed only\n\
+Drag right → left  Crossing / touching";
 
 #[derive(Component)]
 pub(crate) struct SelectionLevelButton {
@@ -123,6 +133,12 @@ pub(crate) struct SurfaceSelectionHint;
 
 #[derive(Component)]
 pub(crate) struct SurfaceAngleControls;
+
+#[derive(Component)]
+pub(crate) struct SurfaceSelectionControls;
+
+#[derive(Component)]
+pub(crate) struct SurfaceSelectionUnavailableHint;
 
 /// Active section type selection for the "Add Section" panel.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -272,7 +288,46 @@ impl UndoStack {
 }
 
 #[derive(Component)]
-pub(crate) struct PartsListText;
+pub(crate) struct AssemblyPartsContainer;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AssemblyPartButton {
+    part_index: usize,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AssemblyTransformButton {
+    action: AssemblyTransformAction,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AssemblyTransformAction {
+    Translate(Vec3),
+    Rotate(Vec3),
+    Reset,
+}
+
+#[derive(Component)]
+pub(crate) struct AssemblyStatusText;
+
+#[derive(Component)]
+pub(crate) struct AssemblyModeButton;
+
+#[derive(Component)]
+pub(crate) struct AssemblyModeButtonLabel;
+
+/// Explicit camera-fit request, kept separate from [`FemModelVersion`] so
+/// assembly edits can rebuild geometry without disrupting the current view.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub(crate) struct CameraFitRequest {
+    revision: u64,
+}
+
+impl CameraFitRequest {
+    fn request(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
+}
 
 #[derive(Component)]
 pub(crate) struct OpenSetupButton;
@@ -625,12 +680,6 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     MeshStatsText,
                 ));
                 sec.spawn((
-                    Text::new(""),
-                    TextFont { font_size: FontSize::Px(11.0), ..default() },
-                    TextColor(TEXT_MUTED),
-                    PartsListText,
-                ));
-                sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
@@ -660,6 +709,99 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     ));
                 });
                 hint_text(sec, "Open Project = load .msh + .cnt together   Open Mesh / + Import = mesh only");
+            });
+            divider(panel);
+
+            // ── § Assembly ──────────────────────────────────────────────
+            section(panel, "ASSEMBLY", |sec| {
+                sec.spawn((
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        height: px(30.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    AssemblyModeButton,
+                    Name::new("AssemblyModeButton"),
+                ))
+                .with_child((
+                    Text::new("Edit in viewport: OFF"),
+                    TextFont { font_size: FontSize::Px(11.5), ..default() },
+                    TextColor(TEXT_MAIN),
+                    AssemblyModeButtonLabel,
+                ));
+                hint_text(sec, "Viewport edit: click a part, then drag its X/Y/Z arrow");
+                sec.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(4.0),
+                        max_height: px(110.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    ScrollPosition::default(),
+                    ScrollableList,
+                    AssemblyPartsContainer,
+                    Name::new("AssemblyPartsContainer"),
+                ));
+                sec.spawn((
+                    Text::new("No part selected"),
+                    TextFont { font_size: FontSize::Px(10.5), ..default() },
+                    TextColor(TEXT_MUTED),
+                    AssemblyStatusText,
+                ));
+
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 0.1,
+                    max: 10.0,
+                    value: 1.0,
+                    label: "Move step (% of part size)",
+                    id: SliderId::AssemblyMovePercent,
+                });
+                assembly_action_row(sec, [
+                    ("-X", AssemblyTransformAction::Translate(-Vec3::X)),
+                    ("-Y", AssemblyTransformAction::Translate(-Vec3::Y)),
+                    ("-Z", AssemblyTransformAction::Translate(-Vec3::Z)),
+                ]);
+                assembly_action_row(sec, [
+                    ("+X", AssemblyTransformAction::Translate(Vec3::X)),
+                    ("+Y", AssemblyTransformAction::Translate(Vec3::Y)),
+                    ("+Z", AssemblyTransformAction::Translate(Vec3::Z)),
+                ]);
+
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 1.0,
+                    max: 45.0,
+                    value: 5.0,
+                    label: "Rotate step (deg)",
+                    id: SliderId::AssemblyRotationDegrees,
+                });
+                assembly_action_row(sec, [
+                    ("-RX", AssemblyTransformAction::Rotate(-Vec3::X)),
+                    ("-RY", AssemblyTransformAction::Rotate(-Vec3::Y)),
+                    ("-RZ", AssemblyTransformAction::Rotate(-Vec3::Z)),
+                ]);
+                assembly_action_row(sec, [
+                    ("+RX", AssemblyTransformAction::Rotate(Vec3::X)),
+                    ("+RY", AssemblyTransformAction::Rotate(Vec3::Y)),
+                    ("+RZ", AssemblyTransformAction::Rotate(Vec3::Z)),
+                ]);
+
+                action_button(
+                    sec,
+                    "Reset selected part pose",
+                    AssemblyTransformButton { action: AssemblyTransformAction::Reset },
+                    "AssemblyResetPoseButton",
+                );
+                hint_text(sec, "The transformed mesh coordinates are used for selection, contact search, and export");
             });
             divider(panel);
 
@@ -705,138 +847,12 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextColor(TEXT_MAIN),
                     SelectionStatsText,
                 ));
-                sec.spawn((
-                    Text::new("Action: REPLACE — click or drag starts a new selection"),
-                    TextFont {
-                        font_size: FontSize::Px(10.2),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(0.50, 0.78, 0.95, 0.95)),
-                    SelectionOperationHint,
-                ));
-                sec.spawn((
-                    Button,
-                    Node {
-                        width: percent(100.0),
-                        min_height: px(24.0),
-                        padding: UiRect::axes(px(8.0), px(3.0)),
-                        justify_content: JustifyContent::SpaceBetween,
-                        align_items: AlignItems::Center,
-                        border: UiRect::all(px(1.0)),
-                        border_radius: BorderRadius::all(px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.08, 0.14, 0.18, 0.96)),
-                    BorderColor::all(Color::srgba(0.30, 0.58, 0.72, 0.90)),
-                    SelectionGuideToggle,
-                    Name::new("SelectionGuideToggle"),
-                )).with_child((
-                    Text::new("Selection guide  [hide]"),
-                    TextFont {
-                        font_size: FontSize::Px(10.5),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.72, 0.88, 0.96)),
-                ));
-                sec.spawn((
-                    Node {
-                        width: percent(100.0),
-                        padding: UiRect::all(px(7.0)),
-                        border: UiRect::all(px(1.0)),
-                        border_radius: BorderRadius::all(px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.045, 0.075, 0.095, 0.94)),
-                    BorderColor::all(Color::srgba(0.22, 0.40, 0.50, 0.78)),
-                    SelectionGuidePanel,
-                    Name::new("SelectionGuidePanel"),
-                )).with_child((
-                    Text::new(
-                        "Click / drag       Replace selection\n\
-                         Ctrl + click/drag  Add to selection\n\
-                         Shift + click/drag Toggle selected / unselected\n\
-                         Alt or Ctrl+Shift  Remove from selection\n\
-                         Esc                Clear all\n\
-                         Drag left → right  Fully enclosed only\n\
-                         Drag right → left  Crossing / touching",
-                    ),
-                    TextFont {
-                        font_size: FontSize::Px(9.6),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(0.70, 0.78, 0.82, 0.94)),
-                ));
                 // Dynamic info: count + hover coords — updated every frame.
                 sec.spawn((
                     Text::new("Selected: 0  |  Hover: -"),
                     TextFont { font_size: FontSize::Px(11.0), ..default() },
                     TextColor(Color::srgba(0.50, 0.78, 0.95, 0.90)),
                     SelectionInfoText,
-                ));
-
-                // ── Surface selection growth ──────────────────────────────
-                sec.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: px(4.0),
-                        width: percent(100.0),
-                        margin: UiRect::top(px(4.0)),
-                        ..default()
-                    },
-                )).with_children(|row| {
-                    for mode in [
-                        SurfaceSelectionMode::Single,
-                        SurfaceSelectionMode::Coplanar,
-                        SurfaceSelectionMode::Smooth,
-                    ] {
-                        row.spawn((
-                            Button,
-                            Node {
-                                flex_grow: 1.0,
-                                padding: UiRect::axes(px(6.0), px(4.0)),
-                                border: UiRect::all(px(1.0)),
-                                border_radius: BorderRadius::all(px(5.0)),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                ..default()
-                            },
-                            BackgroundColor(BUTTON_NORMAL),
-                            BorderColor::all(PANEL_BORDER),
-                            SurfaceSelectionModeButton { mode },
-                            Name::new(format!("SurfaceSelection_{}", mode.label())),
-                        )).with_child((
-                            Text::new(mode.label()),
-                            TextFont { font_size: FontSize::Px(10.5), ..default() },
-                            TextColor(TEXT_MAIN),
-                        ));
-                    }
-                });
-                sec.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        ..default()
-                    },
-                    Visibility::Hidden,
-                    SurfaceAngleControls,
-                )).with_children(|controls| {
-                    spawn_slider(controls, SliderConfig {
-                        width: 272.0,
-                        min: 0.0,
-                        max: 90.0,
-                        value: DEFAULT_SMOOTH_ANGLE_DEG,
-                        label: "Smooth angle threshold (deg)",
-                        id: SliderId::SurfaceAngle,
-                    });
-                });
-                sec.spawn((
-                    Text::new("Face = one surface face  |  Element = one whole FEM element"),
-                    TextFont {
-                        font_size: FontSize::Px(10.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
-                    SurfaceSelectionHint,
                 ));
 
                 sec.spawn((
@@ -1591,42 +1607,197 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
             Node {
-                flex_direction: FlexDirection::Row,
-                padding: UiRect::axes(px(10.0), px(0.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                padding: UiRect::axes(px(10.0), px(4.0)),
                 ..default()
             },
-            Name::new("SelectionLevelBar"),
+            Name::new("SelectionToolbar"),
         ))
-        .with_children(|row| {
-            let count = levels.len();
-            for (index, (level, label)) in levels.iter().enumerate() {
-                let (radius, border) = segment_style(index == 0, index == count - 1);
-                row.spawn((
-                    Button,
+        .with_children(|toolbar| {
+            toolbar.spawn((
+                Text::new("SELECT TARGET"),
+                TextFont { font_size: FontSize::Px(9.2), ..default() },
+                TextColor(TEXT_MUTED),
+            ));
+            toolbar
+                .spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    ..default()
+                },))
+                .with_children(|row| {
+                    let count = levels.len();
+                    for (index, (level, label)) in levels.iter().enumerate() {
+                        let (radius, border) = segment_style(index == 0, index == count - 1);
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(26.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border,
+                                border_radius: radius,
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            SelectionLevelButton { level: *level },
+                            Name::new(format!("SelectionLevel_{label}")),
+                        ))
+                        .with_child((
+                            Text::new(*label),
+                            TextFont { font_size: FontSize::Px(10.5), ..default() },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+
+            toolbar
+                .spawn((
                     Node {
-                        flex_grow: 1.0,
-                        height: px(26.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border,
-                        border_radius: radius,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(4.0),
+                        width: percent(100.0),
                         ..default()
                     },
-                    BackgroundColor(BUTTON_NORMAL),
-                    BorderColor::all(PANEL_BORDER),
-                    SelectionLevelButton { level: *level },
-                    Name::new(format!("SelectionLevel_{label}")),
+                    Visibility::Visible,
+                    SurfaceSelectionControls,
+                    Name::new("SurfaceSelectionControls"),
                 ))
-                .with_child((
-                    Text::new(*label),
-                    TextFont {
-                        font_size: FontSize::Px(10.5),
-                        ..default()
-                    },
-                    TextColor(TEXT_MAIN),
-                ));
-            }
+                .with_children(|surface| {
+                    surface.spawn((
+                        Text::new("SURFACE GROWTH — FACE / ELEMENT"),
+                        TextFont { font_size: FontSize::Px(9.2), ..default() },
+                        TextColor(TEXT_MUTED),
+                    ));
+                    surface
+                        .spawn((Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: px(4.0),
+                            width: percent(100.0),
+                            ..default()
+                        },))
+                        .with_children(|row| {
+                            for mode in [
+                                SurfaceSelectionMode::Single,
+                                SurfaceSelectionMode::Coplanar,
+                                SurfaceSelectionMode::Smooth,
+                            ] {
+                                row.spawn((
+                                    Button,
+                                    Node {
+                                        flex_grow: 1.0,
+                                        padding: UiRect::axes(px(6.0), px(4.0)),
+                                        border: UiRect::all(px(1.0)),
+                                        border_radius: BorderRadius::all(px(5.0)),
+                                        justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    },
+                                    BackgroundColor(BUTTON_NORMAL),
+                                    BorderColor::all(PANEL_BORDER),
+                                    SurfaceSelectionModeButton { mode },
+                                    Name::new(format!("SurfaceSelection_{}", mode.label())),
+                                ))
+                                .with_child((
+                                    Text::new(mode.label()),
+                                    TextFont { font_size: FontSize::Px(10.5), ..default() },
+                                    TextColor(TEXT_MAIN),
+                                ));
+                            }
+                        });
+                    surface
+                        .spawn((
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                display: Display::None,
+                                ..default()
+                            },
+                            SurfaceAngleControls,
+                        ))
+                        .with_children(|controls| {
+                            spawn_slider(controls, SliderConfig {
+                                width: 272.0,
+                                min: 0.0,
+                                max: 90.0,
+                                value: DEFAULT_SMOOTH_ANGLE_DEG,
+                                label: "Smooth angle threshold (deg)",
+                                id: SliderId::SurfaceAngle,
+                            });
+                        });
+                    surface.spawn((
+                        Text::new("Element keeps volume targets; growth follows the visible surface"),
+                        TextFont { font_size: FontSize::Px(9.4), ..default() },
+                        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+                        SurfaceSelectionHint,
+                    ));
+                });
+
+            toolbar.spawn((
+                Text::new("Node / Edge use Single; double/triple click expands connectivity"),
+                TextFont { font_size: FontSize::Px(9.4), ..default() },
+                TextColor(Color::srgba(0.58, 0.70, 0.76, 0.88)),
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+                SurfaceSelectionUnavailableHint,
+            ));
+
+            toolbar.spawn((
+                Text::new("Action: REPLACE — click or drag starts a new selection"),
+                TextFont { font_size: FontSize::Px(10.2), ..default() },
+                TextColor(Color::srgba(0.50, 0.78, 0.95, 0.95)),
+                SelectionOperationHint,
+            ));
+            spawn_selection_guide(toolbar);
         });
+}
+
+fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                width: percent(100.0),
+                min_height: px(24.0),
+                padding: UiRect::axes(px(8.0), px(3.0)),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.08, 0.14, 0.18, 0.96)),
+            BorderColor::all(Color::srgba(0.30, 0.58, 0.72, 0.90)),
+            SelectionGuideToggle,
+            Name::new("SelectionGuideToggle"),
+        ))
+        .with_child((
+            Text::new("Selection guide  [hide]"),
+            TextFont { font_size: FontSize::Px(10.5), ..default() },
+            TextColor(Color::srgb(0.72, 0.88, 0.96)),
+        ));
+    parent
+        .spawn((
+            Node {
+                width: percent(100.0),
+                padding: UiRect::all(px(7.0)),
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.045, 0.075, 0.095, 0.94)),
+            BorderColor::all(Color::srgba(0.22, 0.40, 0.50, 0.78)),
+            SelectionGuidePanel,
+            Name::new("SelectionGuidePanel"),
+        ))
+        .with_child((
+            Text::new(SELECTION_GUIDE_TEXT),
+            TextFont { font_size: FontSize::Px(9.6), ..default() },
+            TextColor(Color::srgba(0.70, 0.78, 0.82, 0.94)),
+        ));
 }
 
 fn sidebar_page_button(parent: &mut ChildSpawnerCommands, page: SidebarPage, label: &'static str) {
@@ -1764,6 +1935,28 @@ fn action_button(
             },
             TextColor(TEXT_MAIN),
         ));
+}
+
+fn assembly_action_row(
+    parent: &mut ChildSpawnerCommands,
+    actions: [(&'static str, AssemblyTransformAction); 3],
+) {
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(5.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (label, action) in actions {
+                action_button(
+                    row,
+                    label,
+                    AssemblyTransformButton { action },
+                    "AssemblyTransformButton",
+                );
+            }
+        });
 }
 
 fn constraint_preset_button(
@@ -2429,6 +2622,7 @@ pub(crate) fn mesh_load_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
     mut version: ResMut<FemModelVersion>,
+    mut camera_fit: ResMut<CameraFitRequest>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
 ) {
     let Some((path, import)) = request.take() else {
@@ -2451,6 +2645,7 @@ pub(crate) fn mesh_load_system(
                     &mut model,
                     &mut status,
                     &mut version,
+                    &mut camera_fit,
                     &mut setup,
                 );
             }
@@ -2467,6 +2662,7 @@ pub(crate) fn mesh_load_system(
                     &mut model,
                     &mut status,
                     &mut version,
+                    &mut camera_fit,
                     &mut setup,
                 );
             }
@@ -2485,6 +2681,7 @@ pub(crate) fn mesh_load_system(
                         &mut model,
                         &mut status,
                         &mut version,
+                        &mut camera_fit,
                         &mut setup,
                     );
                     // Merge embedded material/section blocks into AnalysisSetup,
@@ -2513,6 +2710,7 @@ pub(crate) fn mesh_load_system(
                             &mut model,
                             &mut status,
                             &mut version,
+                            &mut camera_fit,
                             &mut setup,
                         );
                     }
@@ -2532,6 +2730,7 @@ fn apply_mesh(
     model: &mut FemModel,
     status: &mut MeshLoadStatus,
     version: &mut FemModelVersion,
+    camera_fit: &mut CameraFitRequest,
     setup: &mut fem_core::AnalysisSetup,
 ) {
     let name = path
@@ -2551,20 +2750,22 @@ fn apply_mesh(
     }
     status.loaded(path.clone());
     version.bump();
+    camera_fit.request();
 }
 
-/// Recenters and re-scales the orbit camera to fit the model's bounds
-/// whenever [`FemModelVersion`] changes (e.g. after a mesh file is loaded).
+/// Recenters and re-scales the orbit camera after a mesh file is loaded.
+/// Assembly transforms intentionally do not request a fit, preserving the
+/// view while a part is nudged repeatedly.
 ///
 /// The first invocation (at startup) is skipped, since the app's startup
 /// `setup` system already places the camera for the initial model.
 pub(crate) fn camera_refit_on_reload(
     model: Option<Res<FemModel>>,
-    version: Res<FemModelVersion>,
+    request: Res<CameraFitRequest>,
     mut last_version: Local<Option<u64>>,
     mut camera_query: Query<(&mut Transform, &mut OrbitCamera)>,
 ) {
-    let current = version.value;
+    let current = request.revision;
 
     if *last_version == Some(current) {
         return;
@@ -2934,6 +3135,7 @@ pub(crate) fn rebuild_boundary_loads_list(
 // ── surface selection growth ─────────────────────────────────────────────────
 
 pub(crate) fn surface_selection_mode_button_system(
+    filter: Res<SelectionFilter>,
     mut settings: ResMut<SurfaceSelectionSettings>,
     mut buttons: Query<
         (
@@ -2943,8 +3145,26 @@ pub(crate) fn surface_selection_mode_button_system(
             &mut BorderColor,
         ),
     >,
-    mut angle_controls: Query<&mut Visibility, With<SurfaceAngleControls>>,
+    mut angle_controls: Query<&mut Node, With<SurfaceAngleControls>>,
+    mut surface_controls: Query<
+        &mut Node,
+        (
+            With<SurfaceSelectionControls>,
+            Without<SurfaceAngleControls>,
+            Without<SurfaceSelectionUnavailableHint>,
+        ),
+    >,
+    mut unavailable_hints: Query<
+        (&mut Node, &mut Text),
+        (
+            With<SurfaceSelectionUnavailableHint>,
+            Without<SurfaceSelectionControls>,
+            Without<SurfaceAngleControls>,
+        ),
+    >,
 ) {
+    let supports_growth = supports_surface_growth(filter.level);
+
     for (interaction, button, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             settings.mode = button.mode;
@@ -2965,13 +3185,43 @@ pub(crate) fn surface_selection_mode_button_system(
         };
     }
 
-    for mut visibility in &mut angle_controls {
-        *visibility = if settings.mode == SurfaceSelectionMode::Smooth {
-            Visibility::Visible
+    for mut node in &mut surface_controls {
+        node.display = if supports_growth {
+            Display::Flex
         } else {
-            Visibility::Hidden
+            Display::None
         };
     }
+
+    for (mut node, mut text) in &mut unavailable_hints {
+        node.display = if supports_growth {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        **text = match filter.level {
+            SelectionLevel::Node => {
+                "Node: single item; double/triple click expands connectivity".to_string()
+            }
+            SelectionLevel::Edge => {
+                "Edge: click follows a continuous feature line; double click includes branches"
+                    .to_string()
+            }
+            SelectionLevel::Face | SelectionLevel::Element => String::new(),
+        };
+    }
+
+    for mut node in &mut angle_controls {
+        node.display = if supports_growth && settings.mode == SurfaceSelectionMode::Smooth {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
+const fn supports_surface_growth(level: SelectionLevel) -> bool {
+    matches!(level, SelectionLevel::Face | SelectionLevel::Element)
 }
 
 /// Computes the live "what would clicking select right now" preview group
@@ -2992,6 +3242,28 @@ pub(crate) fn update_hover_preview_group(
 ) {
     let (new_targets, new_highlight_targets): (Vec<_>, Vec<_>) = match hover.hit {
         None => (Vec::new(), Vec::new()),
+
+        Some(hit) if matches!(hit.target.entity, FemEntityId::Edge(_)) => {
+            let target = hit.target;
+            let FemEntityId::Edge(edge_id) = target.entity else {
+                unreachable!();
+            };
+            let edge_targets: Vec<_> = model
+                .as_deref()
+                .and_then(|model| model.meshes.get(target.mesh_index))
+                .map(|mesh| {
+                    fem_core::expand_continuous_feature_edges(
+                        mesh,
+                        edge_id,
+                        fem_core::DEFAULT_FEATURE_EDGE_ANGLE_DEG,
+                    )
+                    .into_iter()
+                    .map(|id| FemEntityRef::edge(target.mesh_index, id))
+                    .collect()
+                })
+                .unwrap_or_else(|| vec![target]);
+            (edge_targets.clone(), edge_targets)
+        }
 
         Some(hit) if settings.mode == SurfaceSelectionMode::Single => {
             (vec![hit.target], vec![hit.target])
@@ -4150,46 +4422,261 @@ pub(crate) fn update_mesh_stats_text(
     );
 }
 
-/// Lists each loaded [`fem_core::Part`] with its node/element counts,
-/// one line per part, so an assembly built up via [`import_mesh_button_system`]
-/// shows what's been added so far.
-///
-/// Hidden (empty text) when there's a single part, since the main mesh
-/// stats text already covers that case.
-pub(crate) fn update_parts_list_text(
+/// Rebuilds the assembly part picker when the imported part list changes.
+/// Coordinate edits do not rebuild it because its signature contains only
+/// names and mesh counts, avoiding button churn during repeated nudges.
+pub(crate) fn rebuild_assembly_parts(
+    mut commands: Commands,
     model: Option<Res<FemModel>>,
-    mut query: Query<&mut Text, With<PartsListText>>,
+    mut state: ResMut<AssemblyEditorState>,
+    mut last_signature: Local<Vec<(String, usize, usize)>>,
+    container_query: Query<Entity, With<AssemblyPartsContainer>>,
+    children_query: Query<&Children>,
+) {
+    let signature: Vec<_> = model
+        .as_deref()
+        .map(|model| {
+            model
+                .parts
+                .iter()
+                .map(|part| {
+                    let (nodes, elements) = model
+                        .meshes
+                        .get(part.mesh_index)
+                        .map(|mesh| (mesh.nodes.len(), mesh.elements.len()))
+                        .unwrap_or_default();
+                    (part.name.clone(), nodes, elements)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if *last_signature == signature {
+        return;
+    }
+    *last_signature = signature.clone();
+
+    state.selected_part = match (state.selected_part, signature.len()) {
+        (_, 0) => None,
+        (Some(index), len) if index < len => Some(index),
+        _ => Some(0),
+    };
+
+    let Ok(container) = container_query.single() else {
+        return;
+    };
+    if let Ok(children) = children_query.get(container) {
+        for &child in children {
+            commands.entity(child).despawn();
+        }
+    }
+
+    commands.entity(container).with_children(|list| {
+        for (part_index, (name, nodes, elements)) in signature.iter().enumerate() {
+            let label = format!("[{}] {}   {} N / {} E", part_index + 1, name, nodes, elements);
+            list.spawn((
+                Button,
+                Node {
+                    width: percent(100.0),
+                    padding: UiRect::axes(px(8.0), px(5.0)),
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::all(PANEL_BORDER),
+                AssemblyPartButton { part_index },
+                Name::new(format!("AssemblyPartButton_{part_index}")),
+            ))
+            .with_child((
+                Text::new(label),
+                TextFont { font_size: FontSize::Px(10.5), ..default() },
+                TextColor(TEXT_MAIN),
+            ));
+        }
+    });
+}
+
+pub(crate) fn assembly_part_button_system(
+    mut state: ResMut<AssemblyEditorState>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyPartButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.selected_part = Some(button.part_index);
+        }
+
+        let active = state.selected_part == Some(button.part_index);
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+}
+
+pub(crate) fn assembly_mode_button_system(
+    mut commands: Commands,
+    mut tool: ResMut<ViewportTool>,
+    mut state: ResMut<AssemblyEditorState>,
+    mut hover: ResMut<HoverResult>,
+    mut selection: ResMut<SelectionState>,
+    selected_query: Query<Entity, With<Selected>>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    ), With<AssemblyModeButton>>,
+    mut labels: Query<&mut Text, With<AssemblyModeButtonLabel>>,
+) {
+    let Ok((interaction, mut background, mut border)) = buttons.single_mut() else {
+        return;
+    };
+
+    if *interaction == Interaction::Pressed && interaction.is_changed() {
+        *tool = match *tool {
+            ViewportTool::Selection => ViewportTool::Assembly,
+            ViewportTool::Assembly => ViewportTool::Selection,
+        };
+        state.hovered_part = None;
+        state.hovered_axis = None;
+
+        if *tool == ViewportTool::Assembly {
+            hover.clear();
+            selection.clear();
+            for entity in &selected_query {
+                commands.entity(entity).remove::<Selected>();
+            }
+        }
+    }
+
+    let active = *tool == ViewportTool::Assembly;
+    *background = BackgroundColor(match (*interaction, active) {
+        (Interaction::Pressed, _) => BUTTON_PRESSED,
+        (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+        (Interaction::Hovered, false) => BUTTON_HOVERED,
+        (Interaction::None, false) => BUTTON_NORMAL,
+    });
+    *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+
+    if let Ok(mut label) = labels.single_mut() {
+        **label = if active {
+            "Edit in viewport: ON"
+        } else {
+            "Edit in viewport: OFF"
+        }
+        .to_string();
+    }
+}
+
+fn assembly_slider_value(
+    sliders: &Query<&SliderState, With<SliderTrack>>,
+    id: SliderId,
+    default_value: f32,
+) -> f32 {
+    sliders
+        .iter()
+        .find(|state| state.id == id)
+        .map(|state| state.value)
+        .unwrap_or(default_value)
+}
+
+pub(crate) fn assembly_transform_button_system(
+    mut model: ResMut<FemModel>,
+    state: Res<AssemblyEditorState>,
+    mut version: ResMut<FemModelVersion>,
+    mut contact_candidates: ResMut<ContactCandidateState>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyTransformButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        let mut changed = false;
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            if let Some(part_index) = state.selected_part {
+                changed = match button.action {
+                    AssemblyTransformAction::Translate(direction) => {
+                        let percent = assembly_slider_value(
+                            &sliders,
+                            SliderId::AssemblyMovePercent,
+                            1.0,
+                        );
+                        let step = assembly_reference_size(&model, part_index) * percent / 100.0;
+                        model.translate_part(part_index, direction * step)
+                    }
+                    AssemblyTransformAction::Rotate(axis) => {
+                        let degrees = assembly_slider_value(
+                            &sliders,
+                            SliderId::AssemblyRotationDegrees,
+                            5.0,
+                        );
+                        model.rotate_part_about_centroid(
+                            part_index,
+                            Quat::from_axis_angle(axis.normalize(), degrees.to_radians()),
+                        )
+                    }
+                    AssemblyTransformAction::Reset => model.reset_part_pose(part_index),
+                };
+            }
+        }
+
+        if changed {
+            contact_candidates.candidates.clear();
+            contact_candidates.selected = None;
+            version.bump();
+        }
+
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn update_assembly_status_text(
+    model: Res<FemModel>,
+    state: Res<AssemblyEditorState>,
+    tool: Res<ViewportTool>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut query: Query<&mut Text, With<AssemblyStatusText>>,
 ) {
     let Ok(mut text) = query.single_mut() else {
         return;
     };
-
-    let Some(model) = model else {
-        **text = String::new();
+    let Some(part_index) = state.selected_part else {
+        **text = "No part selected".to_string();
+        return;
+    };
+    let Some(part) = model.parts.get(part_index) else {
+        **text = "No part selected".to_string();
         return;
     };
 
-    if model.parts.len() <= 1 {
-        **text = String::new();
-        return;
-    }
-
-    let lines: Vec<String> = model
-        .parts
-        .iter()
-        .enumerate()
-        .map(|(index, part)| {
-            let counts = model
-                .meshes
-                .get(part.mesh_index)
-                .map(|mesh| format!("{}N / {}E", mesh.nodes.len(), mesh.elements.len()))
-                .unwrap_or_default();
-
-            format!("  [{}] {}  ({counts})", index + 1, part.name)
-        })
-        .collect();
-
-    **text = format!("Parts:\n{}", lines.join("\n"));
+    let center = model.part_centroid(part_index).unwrap_or(Vec3::ZERO);
+    let percent = assembly_slider_value(&sliders, SliderId::AssemblyMovePercent, 1.0);
+    let step = assembly_reference_size(&model, part_index) * percent / 100.0;
+    let viewport_hint = if *tool == ViewportTool::Assembly {
+        "Viewport: click part / drag axis   Shift=fine Ctrl=snap"
+    } else {
+        "Viewport edit is OFF; panel nudges remain available"
+    };
+    **text = format!(
+        "Selected: {}\nCenter: ({:.4}, {:.4}, {:.4})   Move: {:.4}\n{}",
+        part.name, center.x, center.y, center.z, step, viewport_hint,
+    );
 }
 
 pub(crate) fn update_selection_stats_text(
@@ -5428,7 +5915,9 @@ pub(crate) fn apply_slider_to_results(
             | SliderId::SectionThickness
             | SliderId::SurfaceAngle
             | SliderId::DloadMagnitude
-            | SliderId::PlaybackSpeed => {}
+            | SliderId::PlaybackSpeed
+            | SliderId::AssemblyMovePercent
+            | SliderId::AssemblyRotationDegrees => {}
         }
     }
 
@@ -5555,14 +6044,17 @@ mod sidebar_page_tests {
     use std::path::PathBuf;
 
     use super::{
-        SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
-        SurfaceSelectionSettings, apply_mesh, selected_nodes_by_mesh,
-        selection_operation_hint, surface_selection_hint, update_hover_preview_group,
+        CameraFitRequest, SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage,
+        SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings, apply_mesh,
+        selected_nodes_by_mesh,
+        selection_operation_hint, supports_surface_growth, surface_selection_hint,
+        update_hover_preview_group,
     };
     use bevy::prelude::{App, Update, Vec3};
     use fem_core::{
-        AnalysisSetup, FemEntityId, FemEntityRef, FemMesh, FemModel, FemModelVersion,
-        HoverPreviewTargets, MeshLoadStatus, NodeId, SelectionHit, SelectionLevel,
+        AnalysisSetup, ElementId, ElementType, FemElement, FemEntityId, FemEntityRef, FemMesh,
+        FemModel, FemModelVersion, FemNode, HoverPreviewTargets, MeshLoadStatus, NodeId,
+        SelectionHit, SelectionLevel,
     };
     use interaction::HoverResult;
     use selection::{SelectionOperation, SelectionState};
@@ -5605,6 +6097,7 @@ mod sidebar_page_tests {
         setup.add_constraint(0, vec![NodeId(0)], 1, 3, 0.0);
         let mut status = MeshLoadStatus::default();
         let mut version = FemModelVersion::default();
+        let mut camera_fit = CameraFitRequest::default();
 
         apply_mesh(
             FemMesh::demo_hex8(),
@@ -5613,11 +6106,13 @@ mod sidebar_page_tests {
             &mut model,
             &mut status,
             &mut version,
+            &mut camera_fit,
             &mut setup,
         );
 
         assert!(setup.is_empty());
         assert_eq!(version.value, 1);
+        assert_eq!(camera_fit.revision, 1);
     }
 
     #[test]
@@ -5627,6 +6122,7 @@ mod sidebar_page_tests {
         setup.add_constraint(0, vec![NodeId(0)], 1, 3, 0.0);
         let mut status = MeshLoadStatus::default();
         let mut version = FemModelVersion::default();
+        let mut camera_fit = CameraFitRequest::default();
 
         apply_mesh(
             FemMesh::demo_hex8(),
@@ -5635,6 +6131,7 @@ mod sidebar_page_tests {
             &mut model,
             &mut status,
             &mut version,
+            &mut camera_fit,
             &mut setup,
         );
 
@@ -5671,8 +6168,18 @@ mod sidebar_page_tests {
     }
 
     #[test]
+    fn surface_growth_controls_only_apply_to_face_and_element() {
+        assert!(!supports_surface_growth(SelectionLevel::Node));
+        assert!(!supports_surface_growth(SelectionLevel::Edge));
+        assert!(supports_surface_growth(SelectionLevel::Face));
+        assert!(supports_surface_growth(SelectionLevel::Element));
+    }
+
+    #[test]
     fn selection_guide_starts_open_and_names_every_modifier_operation() {
         assert!(SelectionGuideState::default().expanded);
+        assert!(SELECTION_GUIDE_TEXT.contains("Double click"));
+        assert!(SELECTION_GUIDE_TEXT.contains("Triple click"));
         assert!(selection_operation_hint(SelectionOperation::Replace).0.contains("REPLACE"));
         assert!(selection_operation_hint(SelectionOperation::Add).0.contains("ADD"));
         assert!(selection_operation_hint(SelectionOperation::Toggle).0.contains("TOGGLE"));
@@ -5716,5 +6223,61 @@ mod sidebar_page_tests {
             .all(|target| matches!(target.entity, FemEntityId::Face(_))));
         assert!(!preview.targets.is_empty());
         assert!(!preview.highlight_targets.is_empty());
+    }
+
+    #[test]
+    fn edge_hover_previews_a_continuous_feature_chain() {
+        let mesh = FemMesh::new(
+            vec![
+                FemNode::new(NodeId(0), Vec3::new(0.0, 0.0, 0.0)),
+                FemNode::new(NodeId(1), Vec3::new(1.0, 0.0, 0.0)),
+                FemNode::new(NodeId(2), Vec3::new(1.0, 1.0, 0.0)),
+                FemNode::new(NodeId(3), Vec3::new(0.0, 1.0, 0.0)),
+                FemNode::new(NodeId(4), Vec3::new(2.0, 0.0, 0.0)),
+                FemNode::new(NodeId(5), Vec3::new(2.0, 1.0, 0.0)),
+            ],
+            vec![
+                FemElement::new(
+                    ElementId(0),
+                    ElementType::ShellQuad4,
+                    vec![NodeId(0), NodeId(1), NodeId(2), NodeId(3)],
+                ),
+                FemElement::new(
+                    ElementId(1),
+                    ElementType::ShellQuad4,
+                    vec![NodeId(1), NodeId(4), NodeId(5), NodeId(2)],
+                ),
+            ],
+        );
+        let seed = mesh
+            .cached_boundary_edges()
+            .iter()
+            .find(|edge| edge.nodes.contains(&NodeId(0)) && edge.nodes.contains(&NodeId(1)))
+            .expect("bottom-left edge")
+            .id;
+        let model = FemModel::single_mesh("shells", mesh);
+        let hit = SelectionHit::new(FemEntityRef::edge(0, seed), Vec3::ZERO, 0.0);
+
+        let mut app = App::new();
+        app.insert_resource(model);
+        app.insert_resource(HoverResult {
+            entity: None,
+            hit: Some(hit),
+        });
+        app.insert_resource(SurfaceSelectionSettings {
+            mode: SurfaceSelectionMode::Smooth,
+        });
+        app.init_resource::<HoverPreviewTargets>();
+        app.add_systems(Update, update_hover_preview_group);
+
+        app.update();
+
+        let preview = app.world().resource::<HoverPreviewTargets>();
+        assert_eq!(preview.targets.len(), 2);
+        assert_eq!(preview.highlight_targets, preview.targets);
+        assert!(preview
+            .targets
+            .iter()
+            .all(|target| matches!(target.entity, FemEntityId::Edge(_))));
     }
 }

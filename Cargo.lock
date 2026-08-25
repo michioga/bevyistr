@@ -5525,6 +5525,7 @@ dependencies = [
  "gmsh",
  "hecmw",
  "interaction",
+ "picking",
  "rfd",
  "selection",
  "visualization",

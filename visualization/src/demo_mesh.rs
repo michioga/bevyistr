@@ -175,6 +175,14 @@ pub(crate) struct TopologyHighlightCache {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct FemMeshVisual;
 
+/// Identifies which assembly mesh produced a visual entity. During a direct
+/// manipulation drag, every visual for one part receives the same temporary
+/// transform and the FEM node coordinates are updated only on release.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct FemPartVisual {
+    pub mesh_index: usize,
+}
+
 #[derive(Component)]
 pub struct NormalMaterial(pub Handle<StandardMaterial>);
 
@@ -315,7 +323,14 @@ pub(crate) fn spawn_model_visuals(
         );
 
         if use_aggregate_rendering(fem_mesh) {
-            spawn_aggregate_surface_visual(commands, meshes, materials, fem_mesh, hue_shift);
+            spawn_aggregate_surface_visual(
+                commands,
+                meshes,
+                materials,
+                mesh_index,
+                fem_mesh,
+                hue_shift,
+            );
 
             continue;
         }
@@ -387,10 +402,11 @@ fn spawn_aggregate_surface_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     hue_shift: f32,
 ) {
-    if let Some(mesh) = build_boundary_surface_mesh(fem_mesh) {
+    if let Some(mesh) = build_part_surface_mesh(fem_mesh) {
         let normal_mat = materials.add(StandardMaterial {
             base_color: tint_hue(Color::srgb(0.35, 0.52, 0.68), hue_shift),
             perceptual_roughness: 0.82,
@@ -426,12 +442,13 @@ fn spawn_aggregate_surface_visual(
             NormalMaterial(normal_mat),
             FlatMaterial(flat_mat),
             TransparentMaterial(transparent_mat),
+            FemPartVisual { mesh_index },
             FemMeshVisual,
             Name::new("Aggregated boundary surface"),
         ));
     }
 
-    if let Some(mesh) = build_boundary_edge_mesh(fem_mesh) {
+    if let Some(mesh) = build_part_edge_mesh(fem_mesh) {
         let material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.04, 0.05, 0.055),
             unlit: true,
@@ -444,6 +461,7 @@ fn spawn_aggregate_surface_visual(
             Transform::default(),
             VisualLayer::Edge,
             Visibility::Visible,
+            FemPartVisual { mesh_index },
             FemMeshVisual,
             Name::new("Aggregated boundary edges"),
         ));
@@ -985,14 +1003,9 @@ pub(crate) fn update_contact_candidate_highlights(
 
 /// Renders `targets` as one highlight overlay.
 ///
-/// A pure Node or Edge selection still highlights only the most recent
-/// target (a small cube / bar marker) — multi-node/edge selections are
-/// uncommon in this workflow and merging many small markers into one mesh
-/// would need a fair amount of extra geometry code for little benefit. A
-/// Face/Element selection, though, is merged into a single mesh covering
-/// *every* targeted face — this is what makes a hover preview of a curved
-/// (coplanar-grouped) surface, or a multi-face `Selected` highlight, show
-/// the whole group rather than just one facet of it.
+/// Edge and Face/Element groups are merged into one overlay so multi-click
+/// growth shows the complete group while preserving its topology kind.
+/// Node selection still highlights only the most recent target.
 fn apply_topology_highlight(
     model: &FemModel,
     targets: &[FemEntityRef],
@@ -1012,31 +1025,13 @@ fn apply_topology_highlight(
             mesh.0 = meshes.add(Cuboid::new(scale * 0.012, scale * 0.012, scale * 0.012));
             *transform = Transform::from_translation(position);
         }
-        FemEntityId::Edge(id) => {
-            let edge = fem_mesh
-                .cached_boundary_edges()
+        FemEntityId::Edge(_) => {
+            let edge_targets = targets
                 .iter()
-                .find(|edge| edge.id == id)?;
-            let start = fem_mesh.node_position(edge.nodes[0])?;
-            let end = fem_mesh.node_position(edge.nodes[1])?;
-            let delta = end - start;
-            let length = delta.length();
-
-            if length <= f32::EPSILON {
-                return None;
-            }
-
-            // Cross-section scales with the *edge's own length* (capped by
-            // a small model-relative ceiling for very short edges) so a
-            // purely model-relative thickness doesn't dwarf a short edge
-            // on a finely meshed model.
-            let r = (length * 0.08).min(scale * 0.010);
-            mesh.0 = meshes.add(Cuboid::new(length, r, r));
-            *transform = Transform {
-                translation: (start + end) * 0.5,
-                rotation: Quat::from_rotation_arc(Vec3::X, delta / length),
-                ..default()
-            };
+                .copied()
+                .filter(|target| matches!(target.entity, FemEntityId::Edge(_)));
+            mesh.0 = meshes.add(build_multi_edge_highlight_mesh(model, edge_targets, scale)?);
+            *transform = Transform::default();
         }
         FemEntityId::Face(_) | FemEntityId::Element(_) => {
             let face_targets = targets.iter().copied()
@@ -1050,6 +1045,98 @@ fn apply_topology_highlight(
     *visibility = Visibility::Visible;
 
     Some(())
+}
+
+fn build_multi_edge_highlight_mesh(
+    model: &FemModel,
+    targets: impl Iterator<Item = FemEntityRef>,
+    model_scale: f32,
+) -> Option<Mesh> {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+
+    for target in targets {
+        let FemEntityId::Edge(edge_id) = target.entity else {
+            continue;
+        };
+        let Some(fem_mesh) = model.meshes.get(target.mesh_index) else {
+            continue;
+        };
+        let Some(edge) = fem_mesh
+            .cached_boundary_edges()
+            .iter()
+            .find(|edge| edge.id == edge_id)
+        else {
+            continue;
+        };
+        let (Some(start), Some(end)) = (
+            fem_mesh.node_position(edge.nodes[0]),
+            fem_mesh.node_position(edge.nodes[1]),
+        ) else {
+            continue;
+        };
+        let length = start.distance(end);
+        if length <= f32::EPSILON {
+            continue;
+        }
+
+        // Keep short mesh edges legible without letting their marker become
+        // wider than the surrounding finite elements.
+        let thickness = (length * 0.08).min(model_scale * 0.010);
+        append_edge_prism(
+            &mut positions,
+            &mut normals,
+            start,
+            end,
+            thickness * 0.5,
+        );
+    }
+
+    (!positions.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    })
+}
+
+fn append_edge_prism(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    start: Vec3,
+    end: Vec3,
+    half_width: f32,
+) {
+    let direction = (end - start).normalize();
+    let helper = if direction.dot(Vec3::Y).abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let side = direction.cross(helper).normalize() * half_width;
+    let up = direction.cross(side).normalize() * half_width;
+
+    let s00 = start - side - up;
+    let s10 = start + side - up;
+    let s11 = start + side + up;
+    let s01 = start - side + up;
+    let e00 = end - side - up;
+    let e10 = end + side - up;
+    let e11 = end + side + up;
+    let e01 = end - side + up;
+
+    for face in [
+        [s00, s01, s11, s10],
+        [e00, e10, e11, e01],
+        [s00, s10, e10, e00],
+        [s10, s11, e11, e10],
+        [s11, s01, e01, e11],
+        [s01, s00, e00, e01],
+    ] {
+        append_face_triangles(positions, normals, &face);
+    }
 }
 
 /// Builds one merged highlight mesh from `targets`. A `Face` target
@@ -1260,6 +1347,7 @@ fn spawn_solid_element_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Element {}", element.id.0)),
     ));
@@ -1394,6 +1482,7 @@ fn spawn_shell_element_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Shell element {}", element.id.0)),
     ));
@@ -1479,6 +1568,7 @@ fn spawn_beam_element_visual(
             TransparentMaterial(materials.transparent.clone()),
             HoverMaterial(materials.hover.clone()),
             SelectedMaterial(materials.selected.clone()),
+            FemPartVisual { mesh_index },
             FemMeshVisual,
             Name::new(format!(
                 "Line element {} segment {}",
@@ -1517,6 +1607,7 @@ fn spawn_face_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Face {}", face.id.0)),
     ));
@@ -1602,6 +1693,7 @@ fn spawn_edge_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Edge {}", edge.id.0)),
     ));
@@ -1627,12 +1719,15 @@ fn spawn_node_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Node {}", node.id.0)),
     ));
 }
 
-fn build_boundary_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
+/// Builds one merged triangle mesh for a part's exterior surface. Assembly
+/// tools reuse this geometry for whole-part hover and selected overlays.
+pub fn build_part_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
 
@@ -1658,7 +1753,7 @@ fn build_boundary_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     )
 }
 
-/// Like [`build_boundary_surface_mesh`] but colours each vertex according to
+/// Like [`build_part_surface_mesh`] but colours each vertex according to
 /// the supplied `contour` field (rainbow palette) and optionally offsets
 /// node positions by a displacement field.
 ///
@@ -1770,7 +1865,8 @@ pub(crate) fn build_contour_surface_mesh(
     )
 }
 
-fn build_boundary_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
+/// Builds a merged line mesh for a part's boundary and beam edges.
+pub fn build_part_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut seen = BTreeSet::new();
@@ -2001,6 +2097,25 @@ mod tests {
     }
 
     #[test]
+    fn multi_edge_highlight_contains_only_the_requested_edges() {
+        let model = FemModel::demo_hex8();
+        let edges = model.meshes[0].cached_boundary_edges();
+        let rendered = build_multi_edge_highlight_mesh(
+            &model,
+            [
+                FemEntityRef::edge(0, edges[0].id),
+                FemEntityRef::edge(0, edges[1].id),
+            ]
+            .into_iter(),
+            model_visual_scale(&model),
+        )
+        .unwrap();
+
+        assert_eq!(rendered.primitive_topology(), PrimitiveTopology::TriangleList);
+        assert_eq!(rendered.count_vertices(), 72);
+    }
+
+    #[test]
     fn builds_actual_tetrahedron_surface_instead_of_a_bounding_box() {
         let mesh = FemMesh::new(
             vec![
@@ -2038,7 +2153,7 @@ mod tests {
 
         assert!(mesh.cached_boundary_edges().is_empty());
 
-        let rendered = build_boundary_edge_mesh(&mesh).unwrap();
+        let rendered = build_part_edge_mesh(&mesh).unwrap();
 
         assert_eq!(rendered.count_vertices(), 4);
     }

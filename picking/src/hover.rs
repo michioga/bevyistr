@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use fem_core::{
     ElementId, FaceId, FemEntityId, FemEntityRef, FemMesh, FemModel, SelectionFilter,
-    SelectionHit, SelectionLevel, UiPointerState,
+    SelectionHit, SelectionLevel, UiPointerState, ViewportTool,
 };
 
 use interaction::HoverResult;
@@ -18,7 +18,14 @@ pub fn hover_system(
     ui_pointer: Res<UiPointerState>,
     model: Option<Res<FemModel>>,
     mut hover_result: ResMut<HoverResult>,
+    viewport_tool: Res<ViewportTool>,
 ) {
+    if *viewport_tool != ViewportTool::Selection {
+        clear_hovered(&mut commands, &hovered_query);
+        hover_result.clear();
+        return;
+    }
+
     if ui_pointer.over_ui {
         clear_hovered(&mut commands, &hovered_query);
         hover_result.clear();
@@ -158,6 +165,63 @@ fn pick_model(
     best
 }
 
+/// Picks a part independently of the active topology filter. Solid and
+/// shell surfaces are preferred; line-only and point-only parts fall back
+/// to their edges and nodes so every supported model dimension remains
+/// directly selectable in assembly mode.
+pub fn pick_part(
+    model: &FemModel,
+    origin: Vec3,
+    direction: Vec3,
+) -> Option<SelectionHit> {
+    pick_model(model, origin, direction, SelectionLevel::Element)
+        .or_else(|| pick_line_parts(model, origin, direction))
+        .or_else(|| pick_model(model, origin, direction, SelectionLevel::Edge))
+        .or_else(|| pick_model(model, origin, direction, SelectionLevel::Node))
+}
+
+fn pick_line_parts(model: &FemModel, origin: Vec3, direction: Vec3) -> Option<SelectionHit> {
+    let threshold = model.bounds().map(selection_threshold).unwrap_or(0.05);
+    let mut best: Option<(SelectionHit, f32)> = None;
+
+    for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+        for element in &mesh.elements {
+            if !element.element_type.is_beam() {
+                continue;
+            }
+            for nodes in element.edge_node_ids() {
+                let (Some(start), Some(end)) =
+                    (mesh.node_position(nodes[0]), mesh.node_position(nodes[1]))
+                else {
+                    continue;
+                };
+                let Some((distance_to_ray, depth, point)) =
+                    ray_segment_distance(origin, direction, start, end)
+                else {
+                    continue;
+                };
+                if distance_to_ray > threshold {
+                    continue;
+                }
+
+                let hit = SelectionHit::new(
+                    FemEntityRef::element(mesh_index, element.id),
+                    point,
+                    depth,
+                );
+                if best.as_ref().is_none_or(|(best_hit, best_distance)| {
+                    distance_to_ray < *best_distance
+                        || (distance_to_ray == *best_distance && depth < best_hit.depth)
+                }) {
+                    best = Some((hit, distance_to_ray));
+                }
+            }
+        }
+    }
+
+    best.map(|(hit, _)| hit)
+}
+
 /// Picks the mesh node closest to the ray's origin among nodes within
 /// `threshold` of the ray.
 ///
@@ -211,7 +275,8 @@ fn pick_edge(
     direction: Vec3,
     threshold: f32,
 ) -> Option<(FemEntityId, Vec3, f32)> {
-    let mut best = None;
+    let mut best_feature = None;
+    let mut best_regular = None;
     let edges = mesh.cached_boundary_edges();
 
     for edge_index in mesh.boundary_edge_indices_along_ray(origin, direction, threshold) {
@@ -229,16 +294,27 @@ fn pick_edge(
             continue;
         };
 
-        if distance_to_ray <= threshold
-            && best
-                .as_ref()
-                .is_none_or(|(_, _, distance)| projected < *distance)
-        {
-            best = Some((FemEntityId::Edge(edge.id), point, projected));
+        if distance_to_ray > threshold {
+            continue;
+        }
+
+        let candidate = (FemEntityId::Edge(edge.id), point, projected, distance_to_ray);
+        let best = if mesh.cached_feature_edge_ids().binary_search(&edge.id).is_ok() {
+            &mut best_feature
+        } else {
+            &mut best_regular
+        };
+        if best.as_ref().is_none_or(|(_, _, best_depth, best_distance)| {
+            distance_to_ray < *best_distance
+                || (distance_to_ray == *best_distance && projected < *best_depth)
+        }) {
+            *best = Some(candidate);
         }
     }
 
-    best
+    best_feature
+        .or(best_regular)
+        .map(|(target, point, projected, _)| (target, point, projected))
 }
 
 /// Picks the boundary face (or its owning element, if `select_element`)
@@ -385,7 +461,7 @@ fn selection_threshold((min, max): (Vec3, Vec3)) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fem_core::ElementId;
+    use fem_core::{ElementId, ElementType, FemElement, FemNode, NodeId};
 
     #[test]
     fn element_pick_retains_the_boundary_face_hit_by_the_ray() {
@@ -429,5 +505,44 @@ mod tests {
         assert_eq!(hit.target, FemEntityRef::element(1, ElementId(0)));
         assert!(hit.surface_face.is_some());
         assert_eq!(hit.element, Some(ElementId(0)));
+    }
+
+    #[test]
+    fn edge_filter_returns_an_edge_without_falling_back_to_a_face() {
+        let model = FemModel::demo_hex8();
+
+        let hit = pick_model(
+            &model,
+            Vec3::new(0.0, 0.5, 5.0),
+            Vec3::NEG_Z,
+            SelectionLevel::Edge,
+        )
+        .expect("ray should hit the top edge of the demo hex");
+
+        assert!(matches!(hit.target.entity, FemEntityId::Edge(_)));
+        assert!(hit.surface_face.is_none());
+        assert!(hit.element.is_none());
+    }
+
+    #[test]
+    fn assembly_part_pick_falls_back_to_a_line_element() {
+        let mesh = FemMesh::new(
+            vec![
+                FemNode::new(NodeId(0), Vec3::new(-1.0, 0.0, 0.0)),
+                FemNode::new(NodeId(1), Vec3::new(1.0, 0.0, 0.0)),
+            ],
+            vec![FemElement::new(
+                ElementId(0),
+                ElementType::Beam611,
+                vec![NodeId(0), NodeId(1)],
+            )],
+        );
+        let model = FemModel::single_mesh("Beam", mesh);
+
+        let hit = pick_part(&model, Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z)
+            .expect("line-only part should remain selectable");
+
+        assert_eq!(hit.target.mesh_index, 0);
+        assert_eq!(hit.target.entity, FemEntityId::Element(ElementId(0)));
     }
 }

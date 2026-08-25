@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use fem_core::{
     Aabb, FemEntityId, FemEntityRef, FemMesh, FemModel, InteractionMode, NodeId, SelectionFilter,
-    SelectionLevel, UiPointerState,
+    SelectionLevel, UiPointerState, ViewportTool,
 };
 use selection::{Selectable, Selected, SelectionOperation, SelectionState};
 use std::collections::HashMap;
@@ -53,8 +53,12 @@ pub fn begin_box_select(
     mut state: ResMut<BoxSelectState>,
     mut mode: ResMut<InteractionMode>,
     ui_pointer: Res<UiPointerState>,
+    viewport_tool: Res<ViewportTool>,
 ) {
-    if !buttons.just_pressed(MouseButton::Left) || ui_pointer.over_ui {
+    if !buttons.just_pressed(MouseButton::Left)
+        || ui_pointer.over_ui
+        || *viewport_tool != ViewportTool::Selection
+    {
         return;
     }
 
@@ -159,6 +163,7 @@ pub fn perform_box_selection(
     filter: Res<SelectionFilter>,
     ui_pointer: Res<UiPointerState>,
     mut selection: ResMut<SelectionState>,
+    mut click_sequence: ResMut<selection::ClickSequence>,
 
     camera_query: Query<(&Camera, &GlobalTransform)>,
 
@@ -166,8 +171,12 @@ pub fn perform_box_selection(
     selected_query: Query<Entity, With<Selected>>,
 
     model: Option<Res<FemModel>>,
+    viewport_tool: Res<ViewportTool>,
 ) {
-    if !buttons.just_released(MouseButton::Left) || ui_pointer.over_ui {
+    if !buttons.just_released(MouseButton::Left)
+        || ui_pointer.over_ui
+        || *viewport_tool != ViewportTool::Selection
+    {
         return;
     }
 
@@ -180,6 +189,11 @@ pub fn perform_box_selection(
         // `click_selection_system` did on the preceding press untouched.
         return;
     }
+
+    // The press that began this drag was already observed by the click
+    // system. Do not let it combine with the next real click into a false
+    // double-click gesture.
+    click_sequence.reset();
 
     let Ok((camera, camera_transform)) = camera_query.single() else {
         return;

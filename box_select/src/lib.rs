@@ -10,7 +10,9 @@ impl Plugin for BoxSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<fem_core::SelectionFilter>();
         app.init_resource::<fem_core::UiPointerState>();
+        app.init_resource::<fem_core::ViewportTool>();
         app.init_resource::<BoxSelectState>();
+        app.init_resource::<selection::ClickSequence>();
 
         app.add_systems(Startup, spawn_selection_rect);
 

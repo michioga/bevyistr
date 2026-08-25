@@ -17,7 +17,9 @@ impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<fem_core::SelectionFilter>();
         app.init_resource::<fem_core::UiPointerState>();
+        app.init_resource::<fem_core::ViewportTool>();
         app.init_resource::<SelectionState>();
+        app.init_resource::<ClickSequence>();
 
         app.add_systems(
             Update,

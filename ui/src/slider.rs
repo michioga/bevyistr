@@ -21,6 +21,10 @@ pub enum SliderId {
     DloadMagnitude,
     /// Animation playback speed: value is steps/second (0.5 – 10).
     PlaybackSpeed,
+    /// Translation increment as a percentage of the selected part's size.
+    AssemblyMovePercent,
+    /// Rotation increment in degrees for assembly part editing.
+    AssemblyRotationDegrees,
 }
 
 #[derive(Component, Debug, Clone)]
