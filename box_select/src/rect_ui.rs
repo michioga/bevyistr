@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use fem_core::{
     Aabb, FemEntityId, FemEntityRef, FemMesh, FemModel, InteractionMode, NodeId, SelectionFilter,
-    SelectionLevel, UiPointerState,
+    SelectionLevel, UiPointerState, ViewportTool,
 };
 use selection::{Selectable, Selected, SelectionOperation, SelectionState};
 use std::collections::HashMap;
@@ -53,8 +53,12 @@ pub fn begin_box_select(
     mut state: ResMut<BoxSelectState>,
     mut mode: ResMut<InteractionMode>,
     ui_pointer: Res<UiPointerState>,
+    viewport_tool: Res<ViewportTool>,
 ) {
-    if !buttons.just_pressed(MouseButton::Left) || ui_pointer.over_ui {
+    if !buttons.just_pressed(MouseButton::Left)
+        || ui_pointer.over_ui
+        || *viewport_tool != ViewportTool::Selection
+    {
         return;
     }
 
@@ -167,8 +171,12 @@ pub fn perform_box_selection(
     selected_query: Query<Entity, With<Selected>>,
 
     model: Option<Res<FemModel>>,
+    viewport_tool: Res<ViewportTool>,
 ) {
-    if !buttons.just_released(MouseButton::Left) || ui_pointer.over_ui {
+    if !buttons.just_released(MouseButton::Left)
+        || ui_pointer.over_ui
+        || *viewport_tool != ViewportTool::Selection
+    {
         return;
     }
 

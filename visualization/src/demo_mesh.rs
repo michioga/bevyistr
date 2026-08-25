@@ -175,6 +175,14 @@ pub(crate) struct TopologyHighlightCache {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct FemMeshVisual;
 
+/// Identifies which assembly mesh produced a visual entity. During a direct
+/// manipulation drag, every visual for one part receives the same temporary
+/// transform and the FEM node coordinates are updated only on release.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct FemPartVisual {
+    pub mesh_index: usize,
+}
+
 #[derive(Component)]
 pub struct NormalMaterial(pub Handle<StandardMaterial>);
 
@@ -315,7 +323,14 @@ pub(crate) fn spawn_model_visuals(
         );
 
         if use_aggregate_rendering(fem_mesh) {
-            spawn_aggregate_surface_visual(commands, meshes, materials, fem_mesh, hue_shift);
+            spawn_aggregate_surface_visual(
+                commands,
+                meshes,
+                materials,
+                mesh_index,
+                fem_mesh,
+                hue_shift,
+            );
 
             continue;
         }
@@ -387,10 +402,11 @@ fn spawn_aggregate_surface_visual(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    mesh_index: usize,
     fem_mesh: &FemMesh,
     hue_shift: f32,
 ) {
-    if let Some(mesh) = build_boundary_surface_mesh(fem_mesh) {
+    if let Some(mesh) = build_part_surface_mesh(fem_mesh) {
         let normal_mat = materials.add(StandardMaterial {
             base_color: tint_hue(Color::srgb(0.35, 0.52, 0.68), hue_shift),
             perceptual_roughness: 0.82,
@@ -426,12 +442,13 @@ fn spawn_aggregate_surface_visual(
             NormalMaterial(normal_mat),
             FlatMaterial(flat_mat),
             TransparentMaterial(transparent_mat),
+            FemPartVisual { mesh_index },
             FemMeshVisual,
             Name::new("Aggregated boundary surface"),
         ));
     }
 
-    if let Some(mesh) = build_boundary_edge_mesh(fem_mesh) {
+    if let Some(mesh) = build_part_edge_mesh(fem_mesh) {
         let material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.04, 0.05, 0.055),
             unlit: true,
@@ -444,6 +461,7 @@ fn spawn_aggregate_surface_visual(
             Transform::default(),
             VisualLayer::Edge,
             Visibility::Visible,
+            FemPartVisual { mesh_index },
             FemMeshVisual,
             Name::new("Aggregated boundary edges"),
         ));
@@ -1329,6 +1347,7 @@ fn spawn_solid_element_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Element {}", element.id.0)),
     ));
@@ -1463,6 +1482,7 @@ fn spawn_shell_element_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Shell element {}", element.id.0)),
     ));
@@ -1548,6 +1568,7 @@ fn spawn_beam_element_visual(
             TransparentMaterial(materials.transparent.clone()),
             HoverMaterial(materials.hover.clone()),
             SelectedMaterial(materials.selected.clone()),
+            FemPartVisual { mesh_index },
             FemMeshVisual,
             Name::new(format!(
                 "Line element {} segment {}",
@@ -1586,6 +1607,7 @@ fn spawn_face_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Face {}", face.id.0)),
     ));
@@ -1671,6 +1693,7 @@ fn spawn_edge_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Edge {}", edge.id.0)),
     ));
@@ -1696,12 +1719,15 @@ fn spawn_node_visual(
         TransparentMaterial(materials.transparent.clone()),
         HoverMaterial(materials.hover.clone()),
         SelectedMaterial(materials.selected.clone()),
+        FemPartVisual { mesh_index },
         FemMeshVisual,
         Name::new(format!("Node {}", node.id.0)),
     ));
 }
 
-fn build_boundary_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
+/// Builds one merged triangle mesh for a part's exterior surface. Assembly
+/// tools reuse this geometry for whole-part hover and selected overlays.
+pub fn build_part_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
 
@@ -1727,7 +1753,7 @@ fn build_boundary_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     )
 }
 
-/// Like [`build_boundary_surface_mesh`] but colours each vertex according to
+/// Like [`build_part_surface_mesh`] but colours each vertex according to
 /// the supplied `contour` field (rainbow palette) and optionally offsets
 /// node positions by a displacement field.
 ///
@@ -1839,7 +1865,8 @@ pub(crate) fn build_contour_surface_mesh(
     )
 }
 
-fn build_boundary_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
+/// Builds a merged line mesh for a part's boundary and beam edges.
+pub fn build_part_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut seen = BTreeSet::new();
@@ -2126,7 +2153,7 @@ mod tests {
 
         assert!(mesh.cached_boundary_edges().is_empty());
 
-        let rendered = build_boundary_edge_mesh(&mesh).unwrap();
+        let rendered = build_part_edge_mesh(&mesh).unwrap();
 
         assert_eq!(rendered.count_vertices(), 4);
     }

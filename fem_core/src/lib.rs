@@ -34,6 +34,18 @@ pub enum InteractionMode {
     BoxSelect,
 
     Pan,
+
+    AssemblyDrag,
+}
+
+/// Persistent tool chosen for left-button interaction in the 3-D viewport.
+/// Navigation remains available with the middle mouse button in either mode.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewportTool {
+    #[default]
+    Selection,
+
+    Assembly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use fem_core::{
     ElementId, FemEntityId, FemEntityRef, FemMesh, FemModel, NodeId, SelectionFilter,
-    SelectionHit, SelectionLevel, UiPointerState, DEFAULT_FEATURE_EDGE_ANGLE_DEG,
+    SelectionHit, SelectionLevel, UiPointerState, ViewportTool, DEFAULT_FEATURE_EDGE_ANGLE_DEG,
     expand_connected_boundary_edges, expand_connected_boundary_faces, expand_connected_elements,
     expand_connected_feature_edges,
 };
@@ -24,7 +24,12 @@ pub fn selection_filter_shortcut_system(
 
     hovered_query: Query<Entity, With<Hovered>>,
     selected_query: Query<Entity, With<Selected>>,
+    viewport_tool: Res<ViewportTool>,
 ) {
+    if *viewport_tool != ViewportTool::Selection {
+        return;
+    }
+
     let requested_level = if keyboard.just_pressed(KeyCode::Digit1) {
         Some(SelectionLevel::Node)
     } else if keyboard.just_pressed(KeyCode::Digit2) {
@@ -70,6 +75,7 @@ pub fn click_selection_system(
     filter: Res<SelectionFilter>,
     ui_pointer: Res<UiPointerState>,
     model: Option<Res<FemModel>>,
+    viewport_tool: Res<ViewportTool>,
 
     mut selection: ResMut<SelectionState>,
     mut click_sequence: ResMut<ClickSequence>,
@@ -77,6 +83,11 @@ pub fn click_selection_system(
     selected_query: Query<Entity, With<Selected>>,
     selectable_query: Query<&Selectable>,
 ) {
+    if *viewport_tool != ViewportTool::Selection {
+        click_sequence.reset();
+        return;
+    }
+
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }

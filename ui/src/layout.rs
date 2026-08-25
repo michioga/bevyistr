@@ -1,4 +1,5 @@
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
+use crate::assembly::{AssemblyEditorState, reference_size as assembly_reference_size};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -6,7 +7,7 @@ use camera::OrbitCamera;
 use fem_core::{
     ContactCandidateState, ContactType, FemEntityId, FemEntityRef, FemModel, FemModelVersion,
     FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel,
-    UiPointerState,
+    UiPointerState, ViewportTool,
 };
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
@@ -287,7 +288,46 @@ impl UndoStack {
 }
 
 #[derive(Component)]
-pub(crate) struct PartsListText;
+pub(crate) struct AssemblyPartsContainer;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AssemblyPartButton {
+    part_index: usize,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AssemblyTransformButton {
+    action: AssemblyTransformAction,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AssemblyTransformAction {
+    Translate(Vec3),
+    Rotate(Vec3),
+    Reset,
+}
+
+#[derive(Component)]
+pub(crate) struct AssemblyStatusText;
+
+#[derive(Component)]
+pub(crate) struct AssemblyModeButton;
+
+#[derive(Component)]
+pub(crate) struct AssemblyModeButtonLabel;
+
+/// Explicit camera-fit request, kept separate from [`FemModelVersion`] so
+/// assembly edits can rebuild geometry without disrupting the current view.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub(crate) struct CameraFitRequest {
+    revision: u64,
+}
+
+impl CameraFitRequest {
+    fn request(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
+}
 
 #[derive(Component)]
 pub(crate) struct OpenSetupButton;
@@ -640,12 +680,6 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     MeshStatsText,
                 ));
                 sec.spawn((
-                    Text::new(""),
-                    TextFont { font_size: FontSize::Px(11.0), ..default() },
-                    TextColor(TEXT_MUTED),
-                    PartsListText,
-                ));
-                sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
@@ -675,6 +709,99 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     ));
                 });
                 hint_text(sec, "Open Project = load .msh + .cnt together   Open Mesh / + Import = mesh only");
+            });
+            divider(panel);
+
+            // ── § Assembly ──────────────────────────────────────────────
+            section(panel, "ASSEMBLY", |sec| {
+                sec.spawn((
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        height: px(30.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    AssemblyModeButton,
+                    Name::new("AssemblyModeButton"),
+                ))
+                .with_child((
+                    Text::new("Edit in viewport: OFF"),
+                    TextFont { font_size: FontSize::Px(11.5), ..default() },
+                    TextColor(TEXT_MAIN),
+                    AssemblyModeButtonLabel,
+                ));
+                hint_text(sec, "Viewport edit: click a part, then drag its X/Y/Z arrow");
+                sec.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(4.0),
+                        max_height: px(110.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    ScrollPosition::default(),
+                    ScrollableList,
+                    AssemblyPartsContainer,
+                    Name::new("AssemblyPartsContainer"),
+                ));
+                sec.spawn((
+                    Text::new("No part selected"),
+                    TextFont { font_size: FontSize::Px(10.5), ..default() },
+                    TextColor(TEXT_MUTED),
+                    AssemblyStatusText,
+                ));
+
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 0.1,
+                    max: 10.0,
+                    value: 1.0,
+                    label: "Move step (% of part size)",
+                    id: SliderId::AssemblyMovePercent,
+                });
+                assembly_action_row(sec, [
+                    ("-X", AssemblyTransformAction::Translate(-Vec3::X)),
+                    ("-Y", AssemblyTransformAction::Translate(-Vec3::Y)),
+                    ("-Z", AssemblyTransformAction::Translate(-Vec3::Z)),
+                ]);
+                assembly_action_row(sec, [
+                    ("+X", AssemblyTransformAction::Translate(Vec3::X)),
+                    ("+Y", AssemblyTransformAction::Translate(Vec3::Y)),
+                    ("+Z", AssemblyTransformAction::Translate(Vec3::Z)),
+                ]);
+
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 1.0,
+                    max: 45.0,
+                    value: 5.0,
+                    label: "Rotate step (deg)",
+                    id: SliderId::AssemblyRotationDegrees,
+                });
+                assembly_action_row(sec, [
+                    ("-RX", AssemblyTransformAction::Rotate(-Vec3::X)),
+                    ("-RY", AssemblyTransformAction::Rotate(-Vec3::Y)),
+                    ("-RZ", AssemblyTransformAction::Rotate(-Vec3::Z)),
+                ]);
+                assembly_action_row(sec, [
+                    ("+RX", AssemblyTransformAction::Rotate(Vec3::X)),
+                    ("+RY", AssemblyTransformAction::Rotate(Vec3::Y)),
+                    ("+RZ", AssemblyTransformAction::Rotate(Vec3::Z)),
+                ]);
+
+                action_button(
+                    sec,
+                    "Reset selected part pose",
+                    AssemblyTransformButton { action: AssemblyTransformAction::Reset },
+                    "AssemblyResetPoseButton",
+                );
+                hint_text(sec, "The transformed mesh coordinates are used for selection, contact search, and export");
             });
             divider(panel);
 
@@ -1810,6 +1937,28 @@ fn action_button(
         ));
 }
 
+fn assembly_action_row(
+    parent: &mut ChildSpawnerCommands,
+    actions: [(&'static str, AssemblyTransformAction); 3],
+) {
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(5.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (label, action) in actions {
+                action_button(
+                    row,
+                    label,
+                    AssemblyTransformButton { action },
+                    "AssemblyTransformButton",
+                );
+            }
+        });
+}
+
 fn constraint_preset_button(
     parent: &mut ChildSpawnerCommands,
     label: &'static str,
@@ -2473,6 +2622,7 @@ pub(crate) fn mesh_load_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
     mut version: ResMut<FemModelVersion>,
+    mut camera_fit: ResMut<CameraFitRequest>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
 ) {
     let Some((path, import)) = request.take() else {
@@ -2495,6 +2645,7 @@ pub(crate) fn mesh_load_system(
                     &mut model,
                     &mut status,
                     &mut version,
+                    &mut camera_fit,
                     &mut setup,
                 );
             }
@@ -2511,6 +2662,7 @@ pub(crate) fn mesh_load_system(
                     &mut model,
                     &mut status,
                     &mut version,
+                    &mut camera_fit,
                     &mut setup,
                 );
             }
@@ -2529,6 +2681,7 @@ pub(crate) fn mesh_load_system(
                         &mut model,
                         &mut status,
                         &mut version,
+                        &mut camera_fit,
                         &mut setup,
                     );
                     // Merge embedded material/section blocks into AnalysisSetup,
@@ -2557,6 +2710,7 @@ pub(crate) fn mesh_load_system(
                             &mut model,
                             &mut status,
                             &mut version,
+                            &mut camera_fit,
                             &mut setup,
                         );
                     }
@@ -2576,6 +2730,7 @@ fn apply_mesh(
     model: &mut FemModel,
     status: &mut MeshLoadStatus,
     version: &mut FemModelVersion,
+    camera_fit: &mut CameraFitRequest,
     setup: &mut fem_core::AnalysisSetup,
 ) {
     let name = path
@@ -2595,20 +2750,22 @@ fn apply_mesh(
     }
     status.loaded(path.clone());
     version.bump();
+    camera_fit.request();
 }
 
-/// Recenters and re-scales the orbit camera to fit the model's bounds
-/// whenever [`FemModelVersion`] changes (e.g. after a mesh file is loaded).
+/// Recenters and re-scales the orbit camera after a mesh file is loaded.
+/// Assembly transforms intentionally do not request a fit, preserving the
+/// view while a part is nudged repeatedly.
 ///
 /// The first invocation (at startup) is skipped, since the app's startup
 /// `setup` system already places the camera for the initial model.
 pub(crate) fn camera_refit_on_reload(
     model: Option<Res<FemModel>>,
-    version: Res<FemModelVersion>,
+    request: Res<CameraFitRequest>,
     mut last_version: Local<Option<u64>>,
     mut camera_query: Query<(&mut Transform, &mut OrbitCamera)>,
 ) {
-    let current = version.value;
+    let current = request.revision;
 
     if *last_version == Some(current) {
         return;
@@ -4265,46 +4422,261 @@ pub(crate) fn update_mesh_stats_text(
     );
 }
 
-/// Lists each loaded [`fem_core::Part`] with its node/element counts,
-/// one line per part, so an assembly built up via [`import_mesh_button_system`]
-/// shows what's been added so far.
-///
-/// Hidden (empty text) when there's a single part, since the main mesh
-/// stats text already covers that case.
-pub(crate) fn update_parts_list_text(
+/// Rebuilds the assembly part picker when the imported part list changes.
+/// Coordinate edits do not rebuild it because its signature contains only
+/// names and mesh counts, avoiding button churn during repeated nudges.
+pub(crate) fn rebuild_assembly_parts(
+    mut commands: Commands,
     model: Option<Res<FemModel>>,
-    mut query: Query<&mut Text, With<PartsListText>>,
+    mut state: ResMut<AssemblyEditorState>,
+    mut last_signature: Local<Vec<(String, usize, usize)>>,
+    container_query: Query<Entity, With<AssemblyPartsContainer>>,
+    children_query: Query<&Children>,
+) {
+    let signature: Vec<_> = model
+        .as_deref()
+        .map(|model| {
+            model
+                .parts
+                .iter()
+                .map(|part| {
+                    let (nodes, elements) = model
+                        .meshes
+                        .get(part.mesh_index)
+                        .map(|mesh| (mesh.nodes.len(), mesh.elements.len()))
+                        .unwrap_or_default();
+                    (part.name.clone(), nodes, elements)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if *last_signature == signature {
+        return;
+    }
+    *last_signature = signature.clone();
+
+    state.selected_part = match (state.selected_part, signature.len()) {
+        (_, 0) => None,
+        (Some(index), len) if index < len => Some(index),
+        _ => Some(0),
+    };
+
+    let Ok(container) = container_query.single() else {
+        return;
+    };
+    if let Ok(children) = children_query.get(container) {
+        for &child in children {
+            commands.entity(child).despawn();
+        }
+    }
+
+    commands.entity(container).with_children(|list| {
+        for (part_index, (name, nodes, elements)) in signature.iter().enumerate() {
+            let label = format!("[{}] {}   {} N / {} E", part_index + 1, name, nodes, elements);
+            list.spawn((
+                Button,
+                Node {
+                    width: percent(100.0),
+                    padding: UiRect::axes(px(8.0), px(5.0)),
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::all(PANEL_BORDER),
+                AssemblyPartButton { part_index },
+                Name::new(format!("AssemblyPartButton_{part_index}")),
+            ))
+            .with_child((
+                Text::new(label),
+                TextFont { font_size: FontSize::Px(10.5), ..default() },
+                TextColor(TEXT_MAIN),
+            ));
+        }
+    });
+}
+
+pub(crate) fn assembly_part_button_system(
+    mut state: ResMut<AssemblyEditorState>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyPartButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.selected_part = Some(button.part_index);
+        }
+
+        let active = state.selected_part == Some(button.part_index);
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+}
+
+pub(crate) fn assembly_mode_button_system(
+    mut commands: Commands,
+    mut tool: ResMut<ViewportTool>,
+    mut state: ResMut<AssemblyEditorState>,
+    mut hover: ResMut<HoverResult>,
+    mut selection: ResMut<SelectionState>,
+    selected_query: Query<Entity, With<Selected>>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    ), With<AssemblyModeButton>>,
+    mut labels: Query<&mut Text, With<AssemblyModeButtonLabel>>,
+) {
+    let Ok((interaction, mut background, mut border)) = buttons.single_mut() else {
+        return;
+    };
+
+    if *interaction == Interaction::Pressed && interaction.is_changed() {
+        *tool = match *tool {
+            ViewportTool::Selection => ViewportTool::Assembly,
+            ViewportTool::Assembly => ViewportTool::Selection,
+        };
+        state.hovered_part = None;
+        state.hovered_axis = None;
+
+        if *tool == ViewportTool::Assembly {
+            hover.clear();
+            selection.clear();
+            for entity in &selected_query {
+                commands.entity(entity).remove::<Selected>();
+            }
+        }
+    }
+
+    let active = *tool == ViewportTool::Assembly;
+    *background = BackgroundColor(match (*interaction, active) {
+        (Interaction::Pressed, _) => BUTTON_PRESSED,
+        (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+        (Interaction::Hovered, false) => BUTTON_HOVERED,
+        (Interaction::None, false) => BUTTON_NORMAL,
+    });
+    *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+
+    if let Ok(mut label) = labels.single_mut() {
+        **label = if active {
+            "Edit in viewport: ON"
+        } else {
+            "Edit in viewport: OFF"
+        }
+        .to_string();
+    }
+}
+
+fn assembly_slider_value(
+    sliders: &Query<&SliderState, With<SliderTrack>>,
+    id: SliderId,
+    default_value: f32,
+) -> f32 {
+    sliders
+        .iter()
+        .find(|state| state.id == id)
+        .map(|state| state.value)
+        .unwrap_or(default_value)
+}
+
+pub(crate) fn assembly_transform_button_system(
+    mut model: ResMut<FemModel>,
+    state: Res<AssemblyEditorState>,
+    mut version: ResMut<FemModelVersion>,
+    mut contact_candidates: ResMut<ContactCandidateState>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyTransformButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        let mut changed = false;
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            if let Some(part_index) = state.selected_part {
+                changed = match button.action {
+                    AssemblyTransformAction::Translate(direction) => {
+                        let percent = assembly_slider_value(
+                            &sliders,
+                            SliderId::AssemblyMovePercent,
+                            1.0,
+                        );
+                        let step = assembly_reference_size(&model, part_index) * percent / 100.0;
+                        model.translate_part(part_index, direction * step)
+                    }
+                    AssemblyTransformAction::Rotate(axis) => {
+                        let degrees = assembly_slider_value(
+                            &sliders,
+                            SliderId::AssemblyRotationDegrees,
+                            5.0,
+                        );
+                        model.rotate_part_about_centroid(
+                            part_index,
+                            Quat::from_axis_angle(axis.normalize(), degrees.to_radians()),
+                        )
+                    }
+                    AssemblyTransformAction::Reset => model.reset_part_pose(part_index),
+                };
+            }
+        }
+
+        if changed {
+            contact_candidates.candidates.clear();
+            contact_candidates.selected = None;
+            version.bump();
+        }
+
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn update_assembly_status_text(
+    model: Res<FemModel>,
+    state: Res<AssemblyEditorState>,
+    tool: Res<ViewportTool>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut query: Query<&mut Text, With<AssemblyStatusText>>,
 ) {
     let Ok(mut text) = query.single_mut() else {
         return;
     };
-
-    let Some(model) = model else {
-        **text = String::new();
+    let Some(part_index) = state.selected_part else {
+        **text = "No part selected".to_string();
+        return;
+    };
+    let Some(part) = model.parts.get(part_index) else {
+        **text = "No part selected".to_string();
         return;
     };
 
-    if model.parts.len() <= 1 {
-        **text = String::new();
-        return;
-    }
-
-    let lines: Vec<String> = model
-        .parts
-        .iter()
-        .enumerate()
-        .map(|(index, part)| {
-            let counts = model
-                .meshes
-                .get(part.mesh_index)
-                .map(|mesh| format!("{}N / {}E", mesh.nodes.len(), mesh.elements.len()))
-                .unwrap_or_default();
-
-            format!("  [{}] {}  ({counts})", index + 1, part.name)
-        })
-        .collect();
-
-    **text = format!("Parts:\n{}", lines.join("\n"));
+    let center = model.part_centroid(part_index).unwrap_or(Vec3::ZERO);
+    let percent = assembly_slider_value(&sliders, SliderId::AssemblyMovePercent, 1.0);
+    let step = assembly_reference_size(&model, part_index) * percent / 100.0;
+    let viewport_hint = if *tool == ViewportTool::Assembly {
+        "Viewport: click part / drag axis   Shift=fine Ctrl=snap"
+    } else {
+        "Viewport edit is OFF; panel nudges remain available"
+    };
+    **text = format!(
+        "Selected: {}\nCenter: ({:.4}, {:.4}, {:.4})   Move: {:.4}\n{}",
+        part.name, center.x, center.y, center.z, step, viewport_hint,
+    );
 }
 
 pub(crate) fn update_selection_stats_text(
@@ -5543,7 +5915,9 @@ pub(crate) fn apply_slider_to_results(
             | SliderId::SectionThickness
             | SliderId::SurfaceAngle
             | SliderId::DloadMagnitude
-            | SliderId::PlaybackSpeed => {}
+            | SliderId::PlaybackSpeed
+            | SliderId::AssemblyMovePercent
+            | SliderId::AssemblyRotationDegrees => {}
         }
     }
 
@@ -5670,8 +6044,9 @@ mod sidebar_page_tests {
     use std::path::PathBuf;
 
     use super::{
-        SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
-        SurfaceSelectionSettings, apply_mesh, selected_nodes_by_mesh,
+        CameraFitRequest, SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage,
+        SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings, apply_mesh,
+        selected_nodes_by_mesh,
         selection_operation_hint, supports_surface_growth, surface_selection_hint,
         update_hover_preview_group,
     };
@@ -5722,6 +6097,7 @@ mod sidebar_page_tests {
         setup.add_constraint(0, vec![NodeId(0)], 1, 3, 0.0);
         let mut status = MeshLoadStatus::default();
         let mut version = FemModelVersion::default();
+        let mut camera_fit = CameraFitRequest::default();
 
         apply_mesh(
             FemMesh::demo_hex8(),
@@ -5730,11 +6106,13 @@ mod sidebar_page_tests {
             &mut model,
             &mut status,
             &mut version,
+            &mut camera_fit,
             &mut setup,
         );
 
         assert!(setup.is_empty());
         assert_eq!(version.value, 1);
+        assert_eq!(camera_fit.revision, 1);
     }
 
     #[test]
@@ -5744,6 +6122,7 @@ mod sidebar_page_tests {
         setup.add_constraint(0, vec![NodeId(0)], 1, 3, 0.0);
         let mut status = MeshLoadStatus::default();
         let mut version = FemModelVersion::default();
+        let mut camera_fit = CameraFitRequest::default();
 
         apply_mesh(
             FemMesh::demo_hex8(),
@@ -5752,6 +6131,7 @@ mod sidebar_page_tests {
             &mut model,
             &mut status,
             &mut version,
+            &mut camera_fit,
             &mut setup,
         );
 
