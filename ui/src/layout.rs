@@ -1,5 +1,6 @@
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use crate::assembly::{AssemblyEditorState, reference_size as assembly_reference_size};
+use crate::measurement::MeasurementBoxState;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -2138,6 +2139,8 @@ fn segment_style(is_first: bool, is_last: bool) -> (BorderRadius, UiRect) {
 /// the content scroll position whenever the task changes.
 pub(crate) fn sidebar_page_button_system(
     mut page: ResMut<SidebarPage>,
+    mut tool: ResMut<ViewportTool>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -2152,6 +2155,10 @@ pub(crate) fn sidebar_page_button_system(
     for (interaction, mut background, mut border, button) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             *page = button.page;
+            if button.page != SidebarPage::Model {
+                *tool = ViewportTool::Selection;
+                measurement.clear();
+            }
             for mut scroll in &mut scroll_areas {
                 scroll.0.y = 0.0;
             }
@@ -4429,6 +4436,7 @@ pub(crate) fn rebuild_assembly_parts(
     mut commands: Commands,
     model: Option<Res<FemModel>>,
     mut state: ResMut<AssemblyEditorState>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut last_signature: Local<Vec<(String, usize, usize)>>,
     container_query: Query<Entity, With<AssemblyPartsContainer>>,
     children_query: Query<&Children>,
@@ -4455,6 +4463,7 @@ pub(crate) fn rebuild_assembly_parts(
         return;
     }
     *last_signature = signature.clone();
+    measurement.clear();
 
     state.selected_part = match (state.selected_part, signature.len()) {
         (_, 0) => None,
@@ -4499,6 +4508,7 @@ pub(crate) fn rebuild_assembly_parts(
 
 pub(crate) fn assembly_part_button_system(
     mut state: ResMut<AssemblyEditorState>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<(
         Ref<Interaction>,
         &AssemblyPartButton,
@@ -4509,6 +4519,7 @@ pub(crate) fn assembly_part_button_system(
     for (interaction, button, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             state.selected_part = Some(button.part_index);
+            measurement.clear();
         }
 
         let active = state.selected_part == Some(button.part_index);
@@ -4526,6 +4537,7 @@ pub(crate) fn assembly_mode_button_system(
     mut commands: Commands,
     mut tool: ResMut<ViewportTool>,
     mut state: ResMut<AssemblyEditorState>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut hover: ResMut<HoverResult>,
     mut selection: ResMut<SelectionState>,
     selected_query: Query<Entity, With<Selected>>,
@@ -4547,6 +4559,7 @@ pub(crate) fn assembly_mode_button_system(
         };
         state.hovered_part = None;
         state.hovered_axis = None;
+        measurement.clear();
 
         if *tool == ViewportTool::Assembly {
             hover.clear();
@@ -4591,6 +4604,7 @@ fn assembly_slider_value(
 pub(crate) fn assembly_transform_button_system(
     mut model: ResMut<FemModel>,
     state: Res<AssemblyEditorState>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut version: ResMut<FemModelVersion>,
     mut contact_candidates: ResMut<ContactCandidateState>,
     sliders: Query<&SliderState, With<SliderTrack>>,
@@ -4604,6 +4618,7 @@ pub(crate) fn assembly_transform_button_system(
     for (interaction, button, mut background, mut border) in &mut buttons {
         let mut changed = false;
         if *interaction == Interaction::Pressed && interaction.is_changed() {
+            measurement.clear();
             if let Some(part_index) = state.selected_part {
                 changed = match button.action {
                     AssemblyTransformAction::Translate(direction) => {
@@ -5786,10 +5801,14 @@ pub(crate) fn playback_advance_system(
 /// [`UndoStack::push(setup.clone())`] *before* making their change.
 pub(crate) fn undo_redo_system(
     keys: Res<ButtonInput<KeyCode>>,
+    keyboard_state: Res<fem_core::UiKeyboardState>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
     mut stack: ResMut<UndoStack>,
     mut in_progress: ResMut<UndoInProgress>,
 ) {
+    if keyboard_state.text_editing {
+        return;
+    }
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
@@ -5837,10 +5856,11 @@ pub(crate) fn push_undo_before_setup_change(
 
 pub(crate) fn step_keyboard_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
+    keyboard_state: Res<fem_core::UiKeyboardState>,
     results: Res<FemResultSet>,
     mut slider_query: Query<&mut SliderState, With<SliderTrack>>,
 ) {
-    if !results.has_results() {
+    if keyboard_state.text_editing || !results.has_results() {
         return;
     }
 

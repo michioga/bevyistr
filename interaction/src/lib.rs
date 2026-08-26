@@ -29,6 +29,7 @@ impl Plugin for InteractionPlugin {
         app.init_resource::<HoverResult>();
 
         app.init_resource::<InteractionMode>();
+        app.init_resource::<fem_core::UiKeyboardState>();
 
         app.configure_sets(
             Update,

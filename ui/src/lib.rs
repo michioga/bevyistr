@@ -1,5 +1,6 @@
 mod assembly;
 mod layout;
+mod measurement;
 pub mod slider;
 
 use bevy::prelude::*;
@@ -46,6 +47,10 @@ use layout::{
     SelectedEgrp, SelectedLoadDirection, SelectedMaterialForSection, SelectedSectionType,
     SidebarPage, UndoInProgress, UndoStack,
 };
+use measurement::{
+    MeasurementBoxState, measurement_box_input_system, spawn_measurement_box,
+    update_measurement_box_visuals, update_ui_keyboard_state,
+};
 
 pub use slider::{SliderConfig, SliderId, SliderState, SliderTrack, SliderThumb, spawn_slider};
 
@@ -58,6 +63,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::FemModelVersion>();
         app.init_resource::<fem_core::PendingCntLoad>();
         app.init_resource::<fem_core::UiPointerState>();
+        app.init_resource::<fem_core::UiKeyboardState>();
         app.init_resource::<fem_core::ViewportTool>();
         app.init_resource::<fem_core::ContactCandidateState>();
         app.init_resource::<fem_core::FemResultSet>();
@@ -67,6 +73,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<visualization::BoundaryVisualSettings>();
         app.init_resource::<SidebarPage>();
         app.init_resource::<AssemblyEditorState>();
+        app.init_resource::<MeasurementBoxState>();
         app.init_resource::<CameraFitRequest>();
         app.init_resource::<SelectionGuideState>();
         app.init_resource::<SelectedLoadDirection>();
@@ -78,7 +85,23 @@ impl Plugin for UiPlugin {
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
         app.init_resource::<UndoInProgress>();
-        app.add_systems(Startup, (spawn_ui, spawn_assembly_viewport_visuals));
+        app.add_systems(
+            Startup,
+            (spawn_ui, spawn_assembly_viewport_visuals, spawn_measurement_box),
+        );
+
+        // Shared text-input capture and exact viewport value submission.
+        app.add_systems(
+            Update,
+            (
+                update_ui_keyboard_state
+                    .before(measurement_box_input_system)
+                    .before(selection::selection_filter_shortcut_system)
+                    .before(selection::clear_selection_shortcut_system),
+                measurement_box_input_system,
+            )
+                .in_set(InteractionSystems::UiInput),
+        );
 
         // Group 1: pointer, navigation, mesh loading (≤16 systems)
         app.add_systems(Update, (
@@ -152,13 +175,15 @@ impl Plugin for UiPlugin {
         // Group 5: undo/redo, surface selection, sliders, text updates (≤16 systems)
         app.add_systems(Update, (
             push_undo_before_setup_change,
-            undo_redo_system.after(push_undo_before_setup_change),
+            undo_redo_system
+                .after(push_undo_before_setup_change)
+                .after(update_ui_keyboard_state),
             update_selection_info_text,
             update_surface_selection_hint,
             update_constraint_button_labels,
             update_apply_load_label,
             update_apply_dload_label,
-            step_keyboard_navigation,
+            step_keyboard_navigation.after(update_ui_keyboard_state),
             slider::update_sliders.after(step_keyboard_navigation),
             apply_slider_to_results.after(slider::update_sliders),
             update_mesh_stats_text,
@@ -192,7 +217,11 @@ impl Plugin for UiPlugin {
         );
         app.add_systems(
             Update,
-            (update_assembly_part_overlays, update_assembly_gizmo_visuals)
+            (
+                update_assembly_part_overlays,
+                update_assembly_gizmo_visuals,
+                update_measurement_box_visuals,
+            )
                 .after(assembly_viewport_input_system),
         );
     }

@@ -80,6 +80,16 @@ pub struct UiPointerState {
     pub over_ui: bool,
 }
 
+/// Whether an editable UI text field currently owns keyboard input.
+///
+/// Viewport and application shortcuts use this to avoid interpreting text
+/// entry as commands (for example `1` changing the selection filter or
+/// Ctrl+Z undoing the analysis setup while editing a numeric value).
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct UiKeyboardState {
+    pub text_editing: bool,
+}
+
 #[derive(Resource, Debug, Clone, Default)]
 pub struct MeshLoadRequest {
     pub path: Option<PathBuf>,

@@ -5,14 +5,15 @@
 //! world-axis arrows. During a drag only render transforms are updated; FEM
 //! coordinates and topology are rebuilt once, when the gesture is committed.
 
+use crate::measurement::MeasurementBoxState;
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::math::primitives::{Cone, Cuboid, Cylinder};
 use bevy::mesh::Mesh3d;
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use fem_core::{
-    ContactCandidateState, FemModel, FemModelVersion, InteractionMode, UiPointerState,
-    ViewportTool,
+    ContactCandidateState, FemModel, FemModelVersion, InteractionMode, UiKeyboardState,
+    UiPointerState, ViewportTool,
 };
 use visualization::{FemPartVisual, build_part_edge_mesh, build_part_surface_mesh};
 
@@ -259,6 +260,7 @@ pub(crate) fn assembly_viewport_hover_system(
 pub(crate) fn assembly_viewport_input_system(
     buttons: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keyboard_state: Res<UiKeyboardState>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     tool: Res<ViewportTool>,
@@ -269,6 +271,7 @@ pub(crate) fn assembly_viewport_input_system(
     mut contact_candidates: ResMut<ContactCandidateState>,
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut state: ResMut<AssemblyEditorState>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut part_visuals: Query<(&FemPartVisual, &mut Transform)>,
 ) {
     if *tool != ViewportTool::Assembly {
@@ -276,8 +279,9 @@ pub(crate) fn assembly_viewport_input_system(
         return;
     }
 
-    if keyboard.just_pressed(KeyCode::Escape) {
+    if !keyboard_state.text_editing && keyboard.just_pressed(KeyCode::Escape) {
         cancel_drag(&mut state, &mut part_visuals, &mut mode);
+        measurement.clear();
         return;
     }
 
@@ -316,6 +320,7 @@ pub(crate) fn assembly_viewport_input_system(
                 accumulated_scalar: 0.0,
                 preview_delta: Vec3::ZERO,
             });
+            measurement.begin_assembly_translation(part_index, axis);
             *mode = InteractionMode::AssemblyDrag;
         } else {
             state.selected_part = state.hovered_part;
@@ -354,6 +359,7 @@ pub(crate) fn assembly_viewport_input_system(
             active.accumulated_scalar = accumulated_scalar;
             active.preview_delta = preview_delta;
         }
+        measurement.preview_translation(scalar);
     }
 
     if buttons.just_released(MouseButton::Left) {
@@ -363,14 +369,17 @@ pub(crate) fn assembly_viewport_input_system(
         *mode = InteractionMode::Idle;
 
         if drag.preview_delta.length_squared() <= 1.0e-18 {
+            measurement.clear();
             return;
         }
         if model.translate_part(drag.part_index, drag.preview_delta) {
             contact_candidates.candidates.clear();
             contact_candidates.selected = None;
             version.bump();
+            measurement.commit_translation(drag.preview_delta.dot(drag.axis));
         } else {
             apply_visual_delta(drag.mesh_index, -drag.preview_delta, &mut part_visuals);
+            measurement.clear();
         }
     }
 }
