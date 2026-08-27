@@ -21,6 +21,36 @@ use crate::demo_mesh::model_visual_scale;
 #[derive(Component)]
 pub struct BoundaryVisual;
 
+/// Type of provisional load currently being authored in the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryLoadPreviewKind {
+    Nodal,
+
+    Pressure,
+
+    Gravity,
+}
+
+/// One view-only arrow pointing toward its application point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundaryLoadPreviewArrow {
+    pub origin: Vec3,
+
+    pub direction: Vec3,
+}
+
+/// View-only load feedback assembled by the UI from the current selection.
+/// It never becomes solver input until the user presses an Apply button.
+#[derive(Resource, Debug, Clone, PartialEq, Default)]
+pub struct BoundaryLoadPreview {
+    pub kind: Option<BoundaryLoadPreviewKind>,
+
+    pub arrows: Vec<BoundaryLoadPreviewArrow>,
+}
+
+#[derive(Component)]
+pub struct BoundaryLoadPreviewVisual;
+
 /// Toggle for whether boundary condition / load symbols are drawn at all.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct BoundaryVisualSettings {
@@ -41,6 +71,134 @@ const CONSTRAINT_COLOR: Color = Color::srgb(0.95, 0.30, 0.20);
 const LOAD_COLOR: Color = Color::srgb(0.95, 0.65, 0.10);
 const PRESSURE_COLOR: Color = Color::srgb(0.35, 0.75, 0.95);
 const GRAVITY_COLOR: Color = Color::srgb(0.70, 0.55, 0.95);
+const MAX_PREVIEW_ARROWS: usize = 2_000;
+
+/// Rebuilds one combined provisional-arrow mesh when the current selection
+/// or load authoring settings change. Combining arrows keeps previewing a
+/// large node group or pressure surface from creating thousands of entities.
+pub fn spawn_boundary_load_preview(
+    mut commands: Commands,
+    model: Option<Res<FemModel>>,
+    preview: Res<BoundaryLoadPreview>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    existing: Query<Entity, With<BoundaryLoadPreviewVisual>>,
+) {
+    let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
+    if !preview.is_changed() && !model_changed {
+        return;
+    }
+
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+
+    let Some(kind) = preview.kind else {
+        return;
+    };
+    let Some(model) = model.as_deref() else {
+        return;
+    };
+    let size = boundary_symbol_size(model);
+    let Some(mesh) = build_load_preview_mesh(&preview.arrows, size) else {
+        return;
+    };
+    let color = match kind {
+        BoundaryLoadPreviewKind::Nodal => LOAD_COLOR,
+        BoundaryLoadPreviewKind::Pressure => PRESSURE_COLOR,
+        BoundaryLoadPreviewKind::Gravity => GRAVITY_COLOR,
+    };
+    let material = materials.add(StandardMaterial {
+        base_color: color.with_alpha(0.88),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        cull_mode: None,
+        depth_bias: 4.0,
+        ..default()
+    });
+
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(material),
+        Transform::default(),
+        BoundaryLoadPreviewVisual,
+        Name::new("Boundary load preview"),
+    ));
+}
+
+fn build_load_preview_mesh(arrows: &[BoundaryLoadPreviewArrow], size: f32) -> Option<Mesh> {
+    if arrows.is_empty() {
+        return None;
+    }
+
+    let stride = arrows.len().div_ceil(MAX_PREVIEW_ARROWS).max(1);
+    let sampled = arrows.iter().step_by(stride).take(MAX_PREVIEW_ARROWS);
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+
+    for arrow in sampled {
+        append_load_preview_arrow(
+            &mut positions,
+            &mut normals,
+            arrow.origin,
+            arrow.direction,
+            size,
+            6,
+        );
+    }
+
+    (!positions.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    })
+}
+
+fn append_load_preview_arrow(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    target: Vec3,
+    direction: Vec3,
+    size: f32,
+    sides: usize,
+) {
+    let Some(direction) = direction.try_normalize() else {
+        return;
+    };
+    let helper = if direction.dot(Vec3::Y).abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let tangent = direction.cross(helper).normalize();
+    let bitangent = direction.cross(tangent).normalize();
+    let length = size * 2.4;
+    let head_length = length * 0.35;
+    let shaft_start = target - direction * length;
+    let head_base = target - direction * head_length;
+    let shaft_radius = size * 0.12;
+    let head_radius = size * 0.32;
+
+    for side in 0..sides {
+        let angle0 = std::f32::consts::TAU * side as f32 / sides as f32;
+        let angle1 = std::f32::consts::TAU * (side + 1) as f32 / sides as f32;
+        let radial0 = tangent * angle0.cos() + bitangent * angle0.sin();
+        let radial1 = tangent * angle1.cos() + bitangent * angle1.sin();
+        let shaft_a0 = shaft_start + radial0 * shaft_radius;
+        let shaft_a1 = shaft_start + radial1 * shaft_radius;
+        let shaft_b0 = head_base + radial0 * shaft_radius;
+        let shaft_b1 = head_base + radial1 * shaft_radius;
+        let head0 = head_base + radial0 * head_radius;
+        let head1 = head_base + radial1 * head_radius;
+
+        append_triangle(positions, normals, shaft_a0, shaft_b0, shaft_b1);
+        append_triangle(positions, normals, shaft_a0, shaft_b1, shaft_a1);
+        append_triangle(positions, normals, target, head0, head1);
+    }
+}
 
 /// (Re)spawns constraint cones and load arrows whenever [`AnalysisSetup`]
 /// or [`BoundaryVisualSettings`] changes.
@@ -625,5 +783,28 @@ mod tests {
         assert_eq!(positions[0][0], -2.0);
         assert_eq!(positions[1][0], 0.0);
         assert_eq!(positions[2][0], 0.0);
+    }
+
+    #[test]
+    fn load_preview_combines_arrow_geometry_into_one_mesh() {
+        let arrows = [BoundaryLoadPreviewArrow {
+            origin: Vec3::ZERO,
+            direction: Vec3::X,
+        }];
+
+        let mesh = build_load_preview_mesh(&arrows, 1.0).unwrap();
+
+        // Six sides: 12 shaft triangles + 6 head triangles.
+        assert_eq!(mesh.count_vertices(), 18 * 3);
+    }
+
+    #[test]
+    fn load_preview_skips_zero_length_directions() {
+        let arrows = [BoundaryLoadPreviewArrow {
+            origin: Vec3::ZERO,
+            direction: Vec3::ZERO,
+        }];
+
+        assert!(build_load_preview_mesh(&arrows, 1.0).is_none());
     }
 }

@@ -22,8 +22,8 @@
 //! ranges (offsetting by the running totals of all earlier parts) and
 //! prefixing every group name with the part name (`PART2_EGRP1`) so that
 //! identically-named groups from different source files don't collide.
-//! Contact surface pairs are mesh definitions in FrontISTR, so accepted
-//! contacts are exported as `TYPE=SURF-SURF` pairs after their surface
+//! Contact pairs are mesh definitions in FrontISTR, so accepted contacts are
+//! exported as `TYPE=NODE-SURF` or `TYPE=SURF-SURF` after their referenced
 //! groups. Their interaction law is written to the analysis `.cnt` file.
 
 use std::fmt::Write as FmtWrite;
@@ -31,13 +31,14 @@ use std::io;
 use std::path::Path;
 
 use fem_core::{
-    AnalysisSetup, ElementId, ElementType, FemMaterial, FemMesh, FemModel, NodeId, Section,
-    SectionKind, SurfaceSetRef,
+    AnalysisSetup, ContactSlaveRef, ElementId, ElementType, FemMaterial, FemMesh, FemModel, NodeId,
+    NodeSetRef, Section, SectionKind, SurfaceSetRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExportContactPair {
     name: String,
+    node_surface: bool,
     slave_group: String,
     master_group: String,
 }
@@ -356,6 +357,40 @@ fn exported_surface_group_name(
     }
 }
 
+fn exported_node_group_name(
+    model: &FemModel,
+    node_set: NodeSetRef,
+    prefix_part: bool,
+) -> io::Result<String> {
+    let mesh_index = node_set.mesh_index;
+    let node_set_index = node_set.node_set_index;
+    let mesh = model.meshes.get(mesh_index).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("contact references missing mesh {mesh_index}"),
+        )
+    })?;
+    let node_set = mesh.node_sets.get(node_set_index).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "contact references missing node set {} on mesh {}",
+                node_set_index, mesh_index
+            ),
+        )
+    })?;
+
+    if prefix_part {
+        Ok(format!(
+            "{}_{}",
+            part_group_prefix(model, mesh_index),
+            node_set.name
+        ))
+    } else {
+        Ok(node_set.name.clone())
+    }
+}
+
 fn resolve_contact_pairs(
     model: &FemModel,
     selected_mesh: Option<usize>,
@@ -366,7 +401,7 @@ fn resolve_contact_pairs(
     for contact in &model.contacts {
         if let Some(mesh_index) = selected_mesh {
             let master_selected = contact.master.mesh_index == mesh_index;
-            let slave_selected = contact.slave.mesh_index == mesh_index;
+            let slave_selected = contact.slave.mesh_index() == mesh_index;
 
             if !master_selected && !slave_selected {
                 continue;
@@ -383,9 +418,20 @@ fn resolve_contact_pairs(
             }
         }
 
+        let (slave_group, node_surface) = match contact.slave {
+            ContactSlaveRef::Nodes(reference) => (
+                exported_node_group_name(model, reference, prefix_parts)?,
+                true,
+            ),
+            ContactSlaveRef::Surface(reference) => (
+                exported_surface_group_name(model, reference, prefix_parts)?,
+                false,
+            ),
+        };
         resolved.push(ExportContactPair {
             name: contact.name.clone(),
-            slave_group: exported_surface_group_name(model, contact.slave, prefix_parts)?,
+            node_surface,
+            slave_group,
             master_group: exported_surface_group_name(model, contact.master, prefix_parts)?,
         });
     }
@@ -395,7 +441,17 @@ fn resolve_contact_pairs(
 
 fn write_contact_pairs(out: &mut String, contacts: &[ExportContactPair]) {
     for contact in contacts {
-        writeln!(out, "!CONTACT PAIR, NAME={}, TYPE=SURF-SURF", contact.name).unwrap();
+        let pair_type = if contact.node_surface {
+            "NODE-SURF"
+        } else {
+            "SURF-SURF"
+        };
+        writeln!(
+            out,
+            "!CONTACT PAIR, NAME={}, TYPE={pair_type}",
+            contact.name
+        )
+        .unwrap();
         writeln!(out, " {},{}", contact.slave_group, contact.master_group).unwrap();
     }
 }
@@ -707,8 +763,8 @@ fn build_msh(
 #[cfg(test)]
 mod tests {
     use fem_core::{
-        ContactPair, ContactType, ElementFaceRef, ElementId, FemMesh, FemSurfaceSet, LocalFaceId,
-        SurfaceSetRef,
+        ContactPair, ContactType, ElementFaceRef, ElementId, FemMesh, FemNodeSet, FemSurfaceSet,
+        LocalFaceId, NodeId, NodeSetRef, SurfaceSetRef,
     };
 
     use super::*;
@@ -748,7 +804,7 @@ mod tests {
             "GEAR_SHAFT",
             SurfaceSetRef::new(0, 0),
             SurfaceSetRef::new(1, 0),
-            ContactType::Frictionless,
+            ContactType::SmallSliding,
         ));
 
         let contacts = resolve_contact_pairs(&model, None, true).unwrap();
@@ -757,10 +813,32 @@ mod tests {
             contacts,
             vec![ExportContactPair {
                 name: "GEAR_SHAFT".into(),
+                node_surface: false,
                 slave_group: "SHAFT_OUTER".into(),
                 master_group: "GEAR_TEETH".into(),
             }]
         );
+    }
+
+    #[test]
+    fn writes_node_to_surface_contact_pair_from_tutorial_style_groups() {
+        let mut model = FemModel::demo_hex8();
+        model.meshes[0].node_sets.push(FemNodeSet {
+            name: "SLAVE".into(),
+            nodes: vec![NodeId(0)],
+        });
+        add_surface(&mut model.meshes[0], "MASTER", 1);
+        model.contacts.push(ContactPair::new_node_surface(
+            "CP1",
+            SurfaceSetRef::new(0, 0),
+            NodeSetRef::new(0, 0),
+            ContactType::FiniteSliding,
+        ));
+
+        let contacts = resolve_contact_pairs(&model, Some(0), false).unwrap();
+        let text = build_msh(&model.meshes[0], 0, &contacts, None);
+
+        assert!(text.contains("!CONTACT PAIR, NAME=CP1, TYPE=NODE-SURF\n SLAVE,MASTER\n"));
     }
 
     #[test]

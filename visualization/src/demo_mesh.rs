@@ -4,8 +4,9 @@ use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use fem_core::{
-    ContactCandidateState, FaceId, FemEdge, FemElement, FemEntityId, FemEntityRef, FemFace,
-    FemMesh, FemModel, FemNode, FemResultSet, rainbow_color,
+    ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, FaceId, FemEdge,
+    FemElement, FemEntityId, FemEntityRef, FemFace, FemMesh, FemModel, FemNode, FemResultSet,
+    NodeId, SurfaceSetRef, rainbow_color,
 };
 use interaction::HoverResult;
 use std::collections::BTreeSet;
@@ -20,6 +21,7 @@ const EDGE_THICKNESS: f32 = 0.04;
 const FACE_THICKNESS: f32 = 0.012;
 const MIN_VISUAL_SIZE: f32 = 0.01;
 const ENTITY_RENDER_LIMIT: usize = 30_000;
+const MAX_DEFINED_CONTACT_NODE_MARKERS: usize = 20_000;
 
 #[derive(Resource, Debug, Clone)]
 pub struct VisualizationSettings {
@@ -34,6 +36,71 @@ impl Default for VisualizationSettings {
         Self {
             mode: VisualizationMode::ShadedWithEdges,
             contour: None,
+        }
+    }
+}
+
+/// View-only aids for reviewing an automatically detected contact pair.
+///
+/// Separation is deliberately expressed as a percentage of the model's
+/// bounding-box diagonal and is applied only to render transforms. FEM node
+/// coordinates, contact search geometry, and exported data remain unchanged.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct ContactReviewSettings {
+    pub active: bool,
+
+    pub ghost_others: bool,
+
+    pub separation_percent: f32,
+}
+
+impl Default for ContactReviewSettings {
+    fn default() -> Self {
+        Self {
+            active: false,
+            ghost_others: true,
+            separation_percent: 8.0,
+        }
+    }
+}
+
+/// View-only selection of a contact pair already defined in the model.
+///
+/// This is separate from [`ContactReviewSettings`], which controls the
+/// exploded review of automatically detected candidates. Defined contacts
+/// never move parts: they only colour the master side blue and the slave
+/// side orange while the Contact page is active.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DefinedContactPreview {
+    pub selected: Option<usize>,
+
+    pub active: bool,
+}
+
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ContactReviewPose {
+    active: bool,
+
+    ghost_others: bool,
+
+    mesh_a: usize,
+
+    mesh_b: usize,
+
+    offset_a: Vec3,
+
+    offset_b: Vec3,
+}
+
+impl Default for ContactReviewPose {
+    fn default() -> Self {
+        Self {
+            active: false,
+            ghost_others: true,
+            mesh_a: 0,
+            mesh_b: 0,
+            offset_a: Vec3::ZERO,
+            offset_b: Vec3::ZERO,
         }
     }
 }
@@ -94,11 +161,11 @@ impl VisualizationMode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::ShadedWithEdges => "Both",
-            Self::Shaded          => "Shaded",
-            Self::Flat            => "Flat",
-            Self::Wireframe       => "Wire",
-            Self::Transparent     => "X-ray",
-            Self::Edges           => "Edges",
+            Self::Shaded => "Shaded",
+            Self::Flat => "Flat",
+            Self::Wireframe => "Wire",
+            Self::Transparent => "X-ray",
+            Self::Edges => "Edges",
         }
     }
 }
@@ -116,18 +183,24 @@ impl VisualLayer {
     const fn visible_in(self, mode: VisualizationMode) -> bool {
         match (self, mode) {
             // Shaded surface visible in all modes that show a solid mesh.
-            (Self::Shaded, VisualizationMode::Shaded
+            (
+                Self::Shaded,
+                VisualizationMode::Shaded
                 | VisualizationMode::ShadedWithEdges
                 | VisualizationMode::Flat
                 | VisualizationMode::Wireframe
-                | VisualizationMode::Transparent) => true,
+                | VisualizationMode::Transparent,
+            ) => true,
             // Boundary-edge cuboids visible alongside shading or alone.
             // In Wireframe mode we suppress them: the GPU wireframe already
             // shows every triangle edge so adding boundary-edge cuboids on
             // top creates a double-edge artefact.
-            (Self::Edge, VisualizationMode::Edges
+            (
+                Self::Edge,
+                VisualizationMode::Edges
                 | VisualizationMode::ShadedWithEdges
-                | VisualizationMode::Transparent) => true,
+                | VisualizationMode::Transparent,
+            ) => true,
             // Nodes only in Both mode.
             (Self::Node, VisualizationMode::ShadedWithEdges) => true,
             _ => false,
@@ -142,19 +215,22 @@ pub(crate) enum TopologyHighlight {
     Selected,
 }
 
-/// Marks the overlay entities that highlight the master/slave faces of the
-/// currently selected [`fem_core::ContactCandidate`].
+/// Marks the overlay entities that highlight the master/slave sides of the
+/// active contact review.
 ///
 /// Unlike [`TopologyHighlight`], each of these covers an arbitrary number of
-/// boundary faces at once (the candidate's whole `faces_a`/`faces_b` set),
-/// so its mesh is rebuilt from scratch whenever the selected candidate
-/// changes rather than being a single fixed primitive.
+/// The same two entities are reused for both an automatically detected
+/// candidate and a contact pair already defined in the model. Their meshes
+/// are rebuilt from scratch whenever the active review changes.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContactCandidateHighlight {
     Master,
 
     Slave,
 }
+
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub(crate) struct ContactHighlightAvailability(bool);
 
 #[derive(Default)]
 pub(crate) struct TopologyHighlightCache {
@@ -236,7 +312,11 @@ pub fn spawn_demo_mesh(
     }
 
     spawn_model_visuals(
-        &mut commands, &mut meshes, &mut materials, &fem_model, analysis_setup.as_deref(),
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &fem_model,
+        analysis_setup.as_deref(),
     );
 }
 
@@ -264,46 +344,70 @@ pub(crate) fn spawn_model_visuals(
     // consistent when something is selected. Selection must write depth;
     // otherwise rear faces can show through when the camera moves.
     let selected_element = Color::srgb(0.10, 1.0, 0.45);
-    let selected_face    = Color::srgb(0.10, 1.0, 0.45);
-    let selected_edge    = Color::srgb(0.10, 1.0, 0.45);
-    let selected_node    = Color::srgb(0.10, 1.0, 0.45);
+    let selected_face = Color::srgb(0.10, 1.0, 0.45);
+    let selected_edge = Color::srgb(0.10, 1.0, 0.45);
+    let selected_node = Color::srgb(0.10, 1.0, 0.45);
 
     let hover_element = Color::srgba(1.0, 0.75, 0.15, 0.70);
-    let hover_face    = Color::srgba(1.0, 0.88, 0.15, 0.70);
-    let hover_edge    = Color::srgb(1.0, 0.82, 0.15);
-    let hover_node    = Color::srgb(1.0, 0.82, 0.18);
+    let hover_face = Color::srgba(1.0, 0.88, 0.15, 0.70);
+    let hover_edge = Color::srgb(1.0, 0.82, 0.15);
+    let hover_node = Color::srgb(1.0, 0.82, 0.18);
 
     let multi_part = fem_model.meshes.len() > 1;
     let model_scale = model_visual_scale(fem_model);
 
     for (mesh_index, fem_mesh) in fem_model.meshes.iter().enumerate() {
-        let hue_shift = if multi_part { part_hue_shift(mesh_index) } else { 0.0 };
+        let hue_shift = if multi_part {
+            part_hue_shift(mesh_index)
+        } else {
+            0.0
+        };
 
         // Base (normal) colours, hue-shifted per part.
         let normal_element = tint_hue(Color::srgba(0.25, 0.45, 0.95, 0.22), hue_shift);
-        let normal_face    = tint_hue(Color::srgba(0.20, 0.70, 0.65, 0.18), hue_shift);
-        let normal_edge    = tint_hue(Color::srgb(0.12, 0.14, 0.16), hue_shift);
-        let normal_node    = tint_hue(Color::srgb(0.82, 0.88, 0.95), hue_shift);
+        let normal_face = tint_hue(Color::srgba(0.20, 0.70, 0.65, 0.18), hue_shift);
+        let normal_edge = tint_hue(Color::srgb(0.12, 0.14, 0.16), hue_shift);
+        let normal_node = tint_hue(Color::srgb(0.82, 0.88, 0.95), hue_shift);
 
         // Flat colours: unlit, slightly lighter than the corresponding
         // normal colour so the same object is still recognisable in Flat
         // mode, also hue-shifted per part.
         let flat_element = tint_hue(Color::srgba(0.45, 0.62, 0.92, 0.45), hue_shift);
-        let flat_face    = tint_hue(Color::srgba(0.46, 0.72, 0.68, 0.45), hue_shift);
-        let flat_edge    = tint_hue(Color::srgb(0.30, 0.34, 0.38), hue_shift);
-        let flat_node    = tint_hue(Color::srgb(0.90, 0.93, 0.97), hue_shift);
+        let flat_face = tint_hue(Color::srgba(0.46, 0.72, 0.68, 0.45), hue_shift);
+        let flat_edge = tint_hue(Color::srgb(0.30, 0.34, 0.38), hue_shift);
+        let flat_node = tint_hue(Color::srgb(0.90, 0.93, 0.97), hue_shift);
 
         let element_materials = material_set(
-            materials, normal_element, hover_element, selected_element, flat_element, true,
+            materials,
+            normal_element,
+            hover_element,
+            selected_element,
+            flat_element,
+            true,
         );
         let face_materials = material_set(
-            materials, normal_face, hover_face, selected_face, flat_face, true,
+            materials,
+            normal_face,
+            hover_face,
+            selected_face,
+            flat_face,
+            true,
         );
         let edge_materials = material_set(
-            materials, normal_edge, hover_edge, selected_edge, flat_edge, false,
+            materials,
+            normal_edge,
+            hover_edge,
+            selected_edge,
+            flat_edge,
+            false,
         );
         let node_materials = material_set(
-            materials, normal_node, hover_node, selected_node, flat_node, false,
+            materials,
+            normal_node,
+            hover_node,
+            selected_node,
+            flat_node,
+            false,
         );
 
         // Bright, unmistakably-not-a-normal-colour magenta for element
@@ -324,12 +428,7 @@ pub(crate) fn spawn_model_visuals(
 
         if use_aggregate_rendering(fem_mesh) {
             spawn_aggregate_surface_visual(
-                commands,
-                meshes,
-                materials,
-                mesh_index,
-                fem_mesh,
-                hue_shift,
+                commands, meshes, materials, mesh_index, fem_mesh, hue_shift,
             );
 
             continue;
@@ -341,21 +440,45 @@ pub(crate) fn spawn_model_visuals(
 
         for element in &fem_mesh.elements {
             let section = section_map.get(&element.id).copied();
-            let materials_for_element = if matches!(element.element_type, fem_core::ElementType::Unsupported(_)) {
-                &warning_materials
-            } else {
-                &element_materials
-            };
+            let materials_for_element =
+                if matches!(element.element_type, fem_core::ElementType::Unsupported(_)) {
+                    &warning_materials
+                } else {
+                    &element_materials
+                };
 
-            spawn_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials_for_element, section, model_scale);
+            spawn_element_visual(
+                commands,
+                meshes,
+                mesh_index,
+                fem_mesh,
+                element,
+                materials_for_element,
+                section,
+                model_scale,
+            );
         }
 
         for face in fem_mesh.cached_boundary_faces() {
-            spawn_face_visual(commands, meshes, mesh_index, fem_mesh, face, &face_materials);
+            spawn_face_visual(
+                commands,
+                meshes,
+                mesh_index,
+                fem_mesh,
+                face,
+                &face_materials,
+            );
         }
 
         for edge in fem_mesh.cached_edges() {
-            spawn_edge_visual(commands, meshes, mesh_index, fem_mesh, edge, &edge_materials);
+            spawn_edge_visual(
+                commands,
+                meshes,
+                mesh_index,
+                fem_mesh,
+                edge,
+                &edge_materials,
+            );
         }
 
         for node in &fem_mesh.nodes {
@@ -387,7 +510,10 @@ fn tint_hue(color: Color, shift_deg: f32) -> Color {
     let hsla: Hsla = color.into();
     let new_hue = (hsla.hue + shift_deg).rem_euclid(360.0);
 
-    Color::Hsla(Hsla { hue: new_hue, ..hsla })
+    Color::Hsla(Hsla {
+        hue: new_hue,
+        ..hsla
+    })
 }
 
 fn use_aggregate_rendering(fem_mesh: &FemMesh) -> bool {
@@ -566,6 +692,7 @@ pub(crate) fn spawn_contact_candidate_highlights(
         Transform::default(),
         Visibility::Hidden,
         ContactCandidateHighlight::Master,
+        ContactHighlightAvailability::default(),
         Name::new("Contact candidate master highlight"),
     ));
 
@@ -575,6 +702,7 @@ pub(crate) fn spawn_contact_candidate_highlights(
         Transform::default(),
         Visibility::Hidden,
         ContactCandidateHighlight::Slave,
+        ContactHighlightAvailability::default(),
         Name::new("Contact candidate slave highlight"),
     ));
 }
@@ -666,7 +794,10 @@ pub(crate) fn update_topology_highlights(
     // green) overlay show. Without this both overlays render at the same
     // position and blend into a confusing colour.
     let hover_is_redundant = !hover_preview.targets.is_empty()
-        && hover_preview.targets.iter().all(|t| selection.targets.contains(t));
+        && hover_preview
+            .targets
+            .iter()
+            .all(|t| selection.targets.contains(t));
 
     let preview_highlights: &[FemEntityRef] = if hover_preview.highlight_targets.is_empty() {
         &hover_preview.targets
@@ -693,7 +824,7 @@ pub(crate) fn update_topology_highlights(
 
     for (highlight, mut mesh, mut transform, mut visibility) in &mut query {
         let targets: &[FemEntityRef] = match highlight {
-            TopologyHighlight::Hover    => hover_targets,
+            TopologyHighlight::Hover => hover_targets,
             TopologyHighlight::Selected => selected_highlights,
         };
 
@@ -702,7 +833,16 @@ pub(crate) fn update_topology_highlights(
             continue;
         }
 
-        if apply_topology_highlight(&model, targets, &mut meshes, &mut mesh, &mut transform, &mut visibility).is_none() {
+        if apply_topology_highlight(
+            &model,
+            targets,
+            &mut meshes,
+            &mut mesh,
+            &mut transform,
+            &mut visibility,
+        )
+        .is_none()
+        {
             *visibility = Visibility::Hidden;
         }
     }
@@ -763,22 +903,186 @@ pub(crate) fn apply_visualization_mode(
         match settings.mode {
             VisualizationMode::Flat => {
                 mat.0 = flat.0.clone();
-                commands.entity(entity).remove::<bevy::pbr::wireframe::Wireframe>();
+                commands
+                    .entity(entity)
+                    .remove::<bevy::pbr::wireframe::Wireframe>();
             }
             VisualizationMode::Wireframe => {
                 mat.0 = normal.0.clone();
-                commands.entity(entity).insert(bevy::pbr::wireframe::Wireframe);
+                commands
+                    .entity(entity)
+                    .insert(bevy::pbr::wireframe::Wireframe);
             }
             VisualizationMode::Transparent => {
                 mat.0 = transparent.0.clone();
-                commands.entity(entity).remove::<bevy::pbr::wireframe::Wireframe>();
+                commands
+                    .entity(entity)
+                    .remove::<bevy::pbr::wireframe::Wireframe>();
             }
             _ => {
                 mat.0 = normal.0.clone();
-                commands.entity(entity).remove::<bevy::pbr::wireframe::Wireframe>();
+                commands
+                    .entity(entity)
+                    .remove::<bevy::pbr::wireframe::Wireframe>();
             }
         }
     }
+}
+
+/// Resolves the selected contact candidate into render-only part offsets.
+/// This is kept separate from [`apply_contact_review`] so face-centroid
+/// calculations run only when the candidate, model, or review settings
+/// change rather than on every frame.
+pub(crate) fn update_contact_review_pose(
+    model: Option<Res<FemModel>>,
+    candidates: Res<ContactCandidateState>,
+    settings: Res<ContactReviewSettings>,
+    mut pose: ResMut<ContactReviewPose>,
+) {
+    let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
+
+    if !model_changed && !candidates.is_changed() && !settings.is_changed() {
+        return;
+    }
+
+    let next = model
+        .as_deref()
+        .zip(candidates.selected_candidate())
+        .filter(|_| settings.active)
+        .map(|(model, candidate)| {
+            let (offset_a, offset_b) =
+                contact_review_offsets(model, candidate, settings.separation_percent);
+
+            ContactReviewPose {
+                active: true,
+                ghost_others: settings.ghost_others,
+                mesh_a: candidate.mesh_a,
+                mesh_b: candidate.mesh_b,
+                offset_a,
+                offset_b,
+            }
+        })
+        .unwrap_or_default();
+
+    if *pose != next {
+        *pose = next;
+    }
+}
+
+/// Applies contact-review ghosting and exploded offsets to model visuals.
+///
+/// When review is inactive this system only runs once on the active→inactive
+/// transition, restoring the ordinary render state. That is important because
+/// the assembly editor uses the same render transforms for its drag preview.
+pub(crate) fn apply_contact_review(
+    pose: Res<ContactReviewPose>,
+    settings: Res<VisualizationSettings>,
+    mut visuals: Query<(
+        &FemPartVisual,
+        &VisualLayer,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut MeshMaterial3d<StandardMaterial>>,
+        Option<&TransparentMaterial>,
+    )>,
+) {
+    if !pose.active && !pose.is_changed() {
+        return;
+    }
+
+    for (part, layer, mut transform, mut visibility, material, transparent) in &mut visuals {
+        let relevant =
+            pose.active && (part.mesh_index == pose.mesh_a || part.mesh_index == pose.mesh_b);
+
+        transform.translation = if !pose.active {
+            Vec3::ZERO
+        } else if part.mesh_index == pose.mesh_a {
+            pose.offset_a
+        } else if part.mesh_index == pose.mesh_b {
+            pose.offset_b
+        } else {
+            Vec3::ZERO
+        };
+        transform.rotation = Quat::IDENTITY;
+        transform.scale = Vec3::ONE;
+
+        *visibility = if layer.visible_in(settings.mode) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+
+        if pose.active && pose.ghost_others && !relevant {
+            match (*layer, material, transparent) {
+                (VisualLayer::Shaded, Some(mut material), Some(transparent)) => {
+                    material.0 = transparent.0.clone();
+                    *visibility = Visibility::Visible;
+                }
+                _ => {
+                    *visibility = Visibility::Hidden;
+                }
+            }
+        }
+    }
+}
+
+fn contact_review_offsets(
+    model: &FemModel,
+    candidate: &ContactCandidate,
+    separation_percent: f32,
+) -> (Vec3, Vec3) {
+    if candidate.is_self_contact() {
+        return (Vec3::ZERO, Vec3::ZERO);
+    }
+
+    let Some(mesh_a) = model.meshes.get(candidate.mesh_a) else {
+        return (Vec3::ZERO, Vec3::ZERO);
+    };
+    let Some(mesh_b) = model.meshes.get(candidate.mesh_b) else {
+        return (Vec3::ZERO, Vec3::ZERO);
+    };
+
+    let contact_a = face_group_centroid(mesh_a, &candidate.faces_a);
+    let contact_b = face_group_centroid(mesh_b, &candidate.faces_b);
+    let part_a = mesh_a.bounds().map(|(min, max)| (min + max) * 0.5);
+    let part_b = mesh_b.bounds().map(|(min, max)| (min + max) * 0.5);
+
+    let direction = contact_a
+        .zip(contact_b)
+        .and_then(|(a, b)| (b - a).try_normalize())
+        .or_else(|| {
+            part_a
+                .zip(part_b)
+                .and_then(|(a, b)| (b - a).try_normalize())
+        })
+        .unwrap_or(Vec3::X);
+
+    let diagonal = model
+        .bounds()
+        .map(|(min, max)| (max - min).length())
+        .unwrap_or(0.0);
+    let half_separation = diagonal * separation_percent.clamp(0.0, 30.0) * 0.005;
+
+    (-direction * half_separation, direction * half_separation)
+}
+
+fn face_group_centroid(mesh: &FemMesh, face_ids: &[FaceId]) -> Option<Vec3> {
+    let ids: BTreeSet<FaceId> = face_ids.iter().copied().collect();
+    let mut total = Vec3::ZERO;
+    let mut count = 0usize;
+
+    for face in mesh
+        .cached_boundary_faces()
+        .iter()
+        .filter(|face| ids.contains(&face.id))
+    {
+        if let Some(geometry) = mesh.face_geometry(face) {
+            total += geometry.centroid;
+            count += 1;
+        }
+    }
+
+    (count > 0).then(|| total / count as f32)
 }
 
 /// Despawns and respawns all [`FemMeshVisual`] entities whenever
@@ -840,7 +1144,11 @@ pub(crate) fn respawn_visuals_on_reload(
     contact_candidates.selected = None;
 
     spawn_model_visuals(
-        &mut commands, &mut meshes, &mut materials, &model, Some(&analysis_setup),
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &model,
+        Some(&analysis_setup),
     );
 }
 
@@ -878,13 +1186,21 @@ pub(crate) fn respawn_elements_on_setup_change(
         return;
     }
 
-    let Some(model) = model else { return; };
+    let Some(model) = model else {
+        return;
+    };
 
     for entity in &visual_query {
         commands.entity(entity).despawn();
     }
 
-    spawn_model_visuals(&mut commands, &mut meshes, &mut materials, &model, Some(&setup));
+    spawn_model_visuals(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &model,
+        Some(&setup),
+    );
 }
 
 /// Rebuilds the aggregate surface mesh with rainbow vertex colours whenever
@@ -938,7 +1254,7 @@ pub(crate) fn update_contour_surface(
     });
 
     for (mut mesh, mut material) in &mut surface_query {
-        mesh.0     = meshes.add(new_mesh.clone());
+        mesh.0 = meshes.add(new_mesh.clone());
         material.0 = unlit_material.clone();
     }
 }
@@ -959,45 +1275,170 @@ fn hide_topology_highlights(
     }
 }
 
-/// Rebuilds the master/slave overlays from [`update_contact_candidate_highlights`]
-/// whenever the selected contact candidate changes, showing the proposed
-/// master surface in blue and the slave surface in orange (or hiding both
-/// if no candidate is selected).
+/// Rebuilds the master/slave overlays for either the selected automatic
+/// candidate or the selected contact pair already defined in the model.
+/// Candidate review takes precedence. Defined NODE-SURF pairs render slave
+/// nodes as orange markers; SURF-SURF pairs render both sides as surfaces.
 pub(crate) fn update_contact_candidate_highlights(
     model: Option<Res<FemModel>>,
     state: Res<ContactCandidateState>,
+    pose: Res<ContactReviewPose>,
+    defined: Res<DefinedContactPreview>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut query: Query<(&ContactCandidateHighlight, &mut Mesh3d, &mut Visibility)>,
+    mut query: Query<(
+        &ContactCandidateHighlight,
+        &mut Mesh3d,
+        &mut Transform,
+        &mut Visibility,
+        &mut ContactHighlightAvailability,
+    )>,
 ) {
-    if !state.is_changed() {
-        return;
-    }
+    let rebuild = state.is_changed()
+        || defined.is_changed()
+        || model.as_ref().is_some_and(|model| model.is_changed());
+    let candidate = pose.active.then(|| state.selected_candidate()).flatten();
+    let defined_contact = if candidate.is_none() && defined.active {
+        model
+            .as_deref()
+            .and_then(|model| defined.selected.and_then(|index| model.contacts.get(index)))
+    } else {
+        None
+    };
+    let source_active = candidate.is_some() || defined_contact.is_some();
 
-    let candidate = state.selected_candidate();
-
-    for (highlight, mut mesh, mut visibility) in &mut query {
-        let built = candidate.and_then(|candidate| {
-            let model = model.as_deref()?;
-
-            let (mesh_index, face_ids) = match highlight {
-                ContactCandidateHighlight::Master => (candidate.mesh_a, &candidate.faces_a),
-                ContactCandidateHighlight::Slave => (candidate.mesh_b, &candidate.faces_b),
+    for (highlight, mut mesh, mut transform, mut visibility, mut availability) in &mut query {
+        if rebuild {
+            let built = if let Some(candidate) = candidate {
+                model.as_deref().and_then(|model| {
+                    let (mesh_index, face_ids) = match highlight {
+                        ContactCandidateHighlight::Master => (candidate.mesh_a, &candidate.faces_a),
+                        ContactCandidateHighlight::Slave => (candidate.mesh_b, &candidate.faces_b),
+                    };
+                    let fem_mesh = model.meshes.get(mesh_index)?;
+                    build_highlight_faces_mesh(fem_mesh, face_ids)
+                })
+            } else {
+                model.as_deref().and_then(|model| {
+                    build_defined_contact_highlight(model, defined_contact?, *highlight)
+                })
             };
 
-            let fem_mesh = model.meshes.get(mesh_index)?;
-
-            build_highlight_faces_mesh(fem_mesh, face_ids)
-        });
-
-        match built {
-            Some(built) => {
-                mesh.0 = meshes.add(built);
-                *visibility = Visibility::Visible;
-            }
-            None => {
+            let Some(built) = built else {
+                availability.0 = false;
                 *visibility = Visibility::Hidden;
-            }
+                continue;
+            };
+
+            mesh.0 = meshes.add(built);
+            availability.0 = true;
         }
+
+        transform.translation = match (candidate.is_some(), highlight) {
+            (true, ContactCandidateHighlight::Master) => pose.offset_a,
+            (true, ContactCandidateHighlight::Slave) => pose.offset_b,
+            (false, _) => Vec3::ZERO,
+        };
+        transform.rotation = Quat::IDENTITY;
+        transform.scale = Vec3::ONE;
+        *visibility = if source_active && availability.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+fn build_defined_contact_highlight(
+    model: &FemModel,
+    contact: &ContactPair,
+    highlight: ContactCandidateHighlight,
+) -> Option<Mesh> {
+    match highlight {
+        ContactCandidateHighlight::Master => {
+            build_surface_set_highlight_mesh(model, contact.master)
+        }
+        ContactCandidateHighlight::Slave => match contact.slave {
+            ContactSlaveRef::Surface(reference) => {
+                build_surface_set_highlight_mesh(model, reference)
+            }
+            ContactSlaveRef::Nodes(reference) => {
+                let fem_mesh = model.meshes.get(reference.mesh_index)?;
+                let node_set = fem_mesh.node_sets.get(reference.node_set_index)?;
+                build_highlight_nodes_mesh(
+                    fem_mesh,
+                    &node_set.nodes,
+                    model_visual_scale(model) * 0.006,
+                )
+            }
+        },
+    }
+}
+
+fn build_surface_set_highlight_mesh(model: &FemModel, reference: SurfaceSetRef) -> Option<Mesh> {
+    let fem_mesh = model.meshes.get(reference.mesh_index)?;
+    let surface_set = fem_mesh.surface_sets.get(reference.surface_set_index)?;
+    let element_faces: BTreeSet<_> = surface_set.surfaces.iter().copied().collect();
+    let face_ids: Vec<_> = fem_mesh
+        .cached_boundary_faces()
+        .iter()
+        .filter(|face| {
+            face.element_face_ref()
+                .is_some_and(|reference| element_faces.contains(&reference))
+        })
+        .map(|face| face.id)
+        .collect();
+
+    build_highlight_faces_mesh(fem_mesh, &face_ids)
+}
+
+fn build_highlight_nodes_mesh(
+    fem_mesh: &FemMesh,
+    node_ids: &[NodeId],
+    radius: f32,
+) -> Option<Mesh> {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let stride = node_ids
+        .len()
+        .div_ceil(MAX_DEFINED_CONTACT_NODE_MARKERS)
+        .max(1);
+
+    for node_id in node_ids.iter().step_by(stride) {
+        let Some(center) = fem_mesh.node_position(*node_id) else {
+            continue;
+        };
+        append_octahedron(&mut positions, &mut normals, center, radius);
+    }
+
+    (!positions.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    })
+}
+
+fn append_octahedron(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    center: Vec3,
+    radius: f32,
+) {
+    let top = center + Vec3::Y * radius;
+    let bottom = center - Vec3::Y * radius;
+    let ring = [
+        center + Vec3::X * radius,
+        center + Vec3::Z * radius,
+        center - Vec3::X * radius,
+        center - Vec3::Z * radius,
+    ];
+
+    for index in 0..ring.len() {
+        let next = (index + 1) % ring.len();
+        append_face_triangles(positions, normals, &[top, ring[index], ring[next]]);
+        append_face_triangles(positions, normals, &[bottom, ring[next], ring[index]]);
     }
 }
 
@@ -1034,7 +1475,9 @@ fn apply_topology_highlight(
             *transform = Transform::default();
         }
         FemEntityId::Face(_) | FemEntityId::Element(_) => {
-            let face_targets = targets.iter().copied()
+            let face_targets = targets
+                .iter()
+                .copied()
                 .filter(|t| matches!(t.entity, FemEntityId::Face(_) | FemEntityId::Element(_)));
 
             mesh.0 = meshes.add(build_multi_face_highlight_mesh(model, face_targets)?);
@@ -1083,13 +1526,7 @@ fn build_multi_edge_highlight_mesh(
         // Keep short mesh edges legible without letting their marker become
         // wider than the surrounding finite elements.
         let thickness = (length * 0.08).min(model_scale * 0.010);
-        append_edge_prism(
-            &mut positions,
-            &mut normals,
-            start,
-            end,
-            thickness * 0.5,
-        );
+        append_edge_prism(&mut positions, &mut normals, start, end, thickness * 0.5);
     }
 
     (!positions.is_empty()).then(|| {
@@ -1296,9 +1733,27 @@ fn spawn_element_visual(
     model_scale: f32,
 ) {
     if element.element_type.is_shell() {
-        spawn_shell_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials, section, model_scale);
+        spawn_shell_element_visual(
+            commands,
+            meshes,
+            mesh_index,
+            fem_mesh,
+            element,
+            materials,
+            section,
+            model_scale,
+        );
     } else if element.element_type.is_beam() {
-        spawn_beam_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials, section, model_scale);
+        spawn_beam_element_visual(
+            commands,
+            meshes,
+            mesh_index,
+            fem_mesh,
+            element,
+            materials,
+            section,
+            model_scale,
+        );
     } else {
         spawn_solid_element_visual(commands, meshes, mesh_index, fem_mesh, element, materials);
     }
@@ -1422,7 +1877,9 @@ fn spawn_shell_element_visual(
     let thickness = match section.map(|s| &s.kind) {
         Some(fem_core::SectionKind::Shell { thickness }) => *thickness,
         _ => {
-            let Some((min, max)) = bounds(corners) else { return; };
+            let Some((min, max)) = bounds(corners) else {
+                return;
+            };
             let element_size = (max - min).length();
 
             // Clamp against the *model's* scale, not just the element's
@@ -1519,9 +1976,7 @@ fn spawn_beam_element_visual(
                 fem_mesh.node_position(nodes[1])?,
             ))
         })
-        .filter(|(start, end)| {
-            start.distance_squared(*end) > f32::EPSILON * f32::EPSILON
-        })
+        .filter(|(start, end)| start.distance_squared(*end) > f32::EPSILON * f32::EPSILON)
         .collect();
 
     if segments.is_empty() {
@@ -1781,8 +2236,8 @@ pub(crate) fn build_contour_surface_mesh(
         .collect();
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
-    let mut normals:   Vec<[f32; 3]> = Vec::new();
-    let mut colors:    Vec<[f32; 4]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut colors: Vec<[f32; 4]> = Vec::new();
 
     for face in fem_mesh.cached_boundary_faces() {
         let Some(node_indices_in_mesh): Option<Vec<usize>> = face
@@ -1800,9 +2255,9 @@ pub(crate) fn build_contour_surface_mesh(
             .map(|node| {
                 if let (Some(disp), true) = (&disp_field, settings.show_deformation) {
                     if let fem_core::ResultField::NodeVector { values, .. } = disp {
-                        if let Some(&disp_vec) = values.get(
-                            *node_index_map.get(&node.id).unwrap_or(&usize::MAX)
-                        ) {
+                        if let Some(&disp_vec) =
+                            values.get(*node_index_map.get(&node.id).unwrap_or(&usize::MAX))
+                        {
                             return node.position + disp_vec * settings.deformation_scale;
                         }
                     }
@@ -2064,7 +2519,9 @@ fn face_normal(points: &[Vec3]) -> Option<Vec3> {
 #[cfg(test)]
 mod tests {
     use bevy::mesh::VertexAttributeValues;
-    use fem_core::{ElementId, ElementType, FemElement, FemMesh, FemNode, NodeId};
+    use fem_core::{
+        ElementId, ElementType, FemElement, FemMesh, FemNode, FemSurfaceSet, NodeId, SurfaceSetRef,
+    };
 
     use super::*;
 
@@ -2077,15 +2534,68 @@ mod tests {
     }
 
     #[test]
+    fn contact_review_separates_parts_symmetrically_without_editing_nodes() {
+        let mut model = FemModel::demo_hex8();
+        let original_positions: Vec<Vec3> = model.meshes[0]
+            .nodes
+            .iter()
+            .map(|node| node.position)
+            .collect();
+        let mut second = FemMesh::demo_hex8();
+        for node in &mut second.nodes {
+            node.position += Vec3::X * 3.0;
+        }
+        model.add_mesh("Second", second);
+
+        let candidate = ContactCandidate {
+            mesh_a: 0,
+            mesh_b: 1,
+            faces_a: Vec::new(),
+            faces_b: Vec::new(),
+            pair_count: 1,
+            average_gap: 0.0,
+        };
+        let (offset_a, offset_b) = contact_review_offsets(&model, &candidate, 10.0);
+
+        assert!(offset_a.x < 0.0);
+        assert!(offset_b.x > 0.0);
+        assert!((offset_a + offset_b).length() < 1.0e-6);
+        assert_eq!(
+            model.meshes[0]
+                .nodes
+                .iter()
+                .map(|node| node.position)
+                .collect::<Vec<_>>(),
+            original_positions
+        );
+    }
+
+    #[test]
+    fn self_contact_review_does_not_explode_one_part() {
+        let model = FemModel::demo_hex8();
+        let candidate = ContactCandidate {
+            mesh_a: 0,
+            mesh_b: 0,
+            faces_a: Vec::new(),
+            faces_b: Vec::new(),
+            pair_count: 1,
+            average_gap: 0.0,
+        };
+
+        assert_eq!(
+            contact_review_offsets(&model, &candidate, 30.0),
+            (Vec3::ZERO, Vec3::ZERO)
+        );
+    }
+
+    #[test]
     fn element_highlight_contains_the_whole_element_not_one_boundary_face() {
         let model = FemModel::demo_hex8();
         let face_id = model.meshes[0].cached_boundary_faces()[0].id;
 
-        let face = build_multi_face_highlight_mesh(
-            &model,
-            [FemEntityRef::face(0, face_id)].into_iter(),
-        )
-        .unwrap();
+        let face =
+            build_multi_face_highlight_mesh(&model, [FemEntityRef::face(0, face_id)].into_iter())
+                .unwrap();
         let element = build_multi_face_highlight_mesh(
             &model,
             [FemEntityRef::element(0, ElementId(0))].into_iter(),
@@ -2111,8 +2621,36 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(rendered.primitive_topology(), PrimitiveTopology::TriangleList);
+        assert_eq!(
+            rendered.primitive_topology(),
+            PrimitiveTopology::TriangleList
+        );
         assert_eq!(rendered.count_vertices(), 72);
+    }
+
+    #[test]
+    fn defined_surface_contact_highlight_uses_only_the_surface_set_faces() {
+        let mut model = FemModel::demo_hex8();
+        let surface = model.meshes[0].cached_boundary_faces()[0]
+            .element_face_ref()
+            .unwrap();
+        model.meshes[0].surface_sets.push(FemSurfaceSet {
+            name: "MASTER".to_string(),
+            surfaces: vec![surface],
+        });
+
+        let rendered = build_surface_set_highlight_mesh(&model, SurfaceSetRef::new(0, 0)).unwrap();
+
+        assert_eq!(rendered.count_vertices(), 6);
+    }
+
+    #[test]
+    fn node_surface_slave_highlight_draws_one_marker_per_node() {
+        let model = FemModel::demo_hex8();
+        let rendered =
+            build_highlight_nodes_mesh(&model.meshes[0], &[NodeId(0), NodeId(1)], 0.01).unwrap();
+
+        assert_eq!(rendered.count_vertices(), 48);
     }
 
     #[test]
@@ -2176,9 +2714,7 @@ mod tests {
         };
 
         assert!(positions.iter().all(|position| {
-            position[0] >= 0.0
-                && position[1] >= 0.0
-                && position[0] + position[1] <= 1.0
+            position[0] >= 0.0 && position[1] >= 0.0 && position[0] + position[1] <= 1.0
         }));
     }
 }

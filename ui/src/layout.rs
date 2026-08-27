@@ -1,21 +1,26 @@
+use crate::assembly::{
+    AssemblyEditorState, AssemblyGizmoMode, reference_size as assembly_reference_size,
+};
+use crate::measurement::{MeasurementBoxState, MeasurementTarget};
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
-use crate::assembly::{AssemblyEditorState, reference_size as assembly_reference_size};
-use crate::measurement::MeasurementBoxState;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use camera::OrbitCamera;
 use fem_core::{
-    ContactCandidateState, ContactType, FemEntityId, FemEntityRef, FemModel, FemModelVersion,
-    FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter, SelectionLevel,
-    UiPointerState, ViewportTool,
+    ContactCandidateState, ContactSlaveRef, ContactType, FemEntityId, FemEntityRef, FemModel,
+    FemModelVersion, FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter,
+    SelectionLevel, UiPointerState, ViewportTool,
 };
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use visualization::ContourSettings;
-use visualization::{VisualizationMode, VisualizationSettings};
+use visualization::{
+    BoundaryLoadPreview, BoundaryLoadPreviewArrow, BoundaryLoadPreviewKind, ContactReviewSettings,
+    DefinedContactPreview, VisualizationMode, VisualizationSettings,
+};
 
 const PANEL_BG: Color = Color::srgba(0.035, 0.04, 0.045, 0.88);
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -59,6 +64,12 @@ pub(crate) struct SelectionGuideToggle;
 
 #[derive(Component)]
 pub(crate) struct SelectionGuidePanel;
+
+#[derive(Component)]
+pub(crate) struct SelectionToolbar;
+
+#[derive(Component)]
+pub(crate) struct SelectionContextText;
 
 #[derive(Component)]
 pub(crate) struct SelectionOperationHint;
@@ -199,6 +210,24 @@ pub(crate) struct DetectContactsButton;
 #[derive(Component)]
 pub(crate) struct AcceptContactButton;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContactCandidateAction {
+    Previous,
+
+    Next,
+
+    Reject,
+}
+
+#[derive(Component)]
+pub(crate) struct ContactCandidateActionButton(pub ContactCandidateAction);
+
+#[derive(Component)]
+pub(crate) struct ContactGhostToggleButton;
+
+#[derive(Component)]
+pub(crate) struct ContactGhostToggleLabel;
+
 #[derive(Component)]
 pub(crate) struct MeshStatsText;
 
@@ -207,6 +236,18 @@ pub(crate) struct SelectionStatsText;
 
 #[derive(Component)]
 pub(crate) struct ContactCandidateText;
+
+#[derive(Component)]
+pub(crate) struct ContactDefinitionsText;
+
+#[derive(Component)]
+pub(crate) struct ContactDefinitionsListContainer;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct DefinedContactButton(pub usize);
+
+#[derive(Component)]
+pub(crate) struct ContactReviewControls;
 
 #[derive(Component)]
 pub(crate) struct OpenResultButton;
@@ -317,6 +358,11 @@ pub(crate) struct AssemblyModeButton;
 #[derive(Component)]
 pub(crate) struct AssemblyModeButtonLabel;
 
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AssemblyGizmoModeButton {
+    mode: AssemblyGizmoMode,
+}
+
 /// Explicit camera-fit request, kept separate from [`FemModelVersion`] so
 /// assembly edits can rebuild geometry without disrupting the current view.
 #[derive(Resource, Debug, Clone, Copy, Default)]
@@ -373,6 +419,16 @@ pub(crate) struct LoadDirectionButton {
 /// `None` until the person picks a direction.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub(crate) struct SelectedLoadDirection(pub Option<(u8, f32)>);
+
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ActiveLoadEditor {
+    #[default]
+    None,
+
+    Nodal,
+
+    Distributed,
+}
 
 #[derive(Component)]
 pub(crate) struct ApplyLoadButton;
@@ -605,6 +661,8 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
 
             // Task navigation stays visible while the active page scrolls.
             spawn_sidebar_navigation(panel);
+            spawn_view_toolbar(panel);
+            divider(panel);
             spawn_selection_level_bar(panel);
             divider(panel);
 
@@ -737,7 +795,45 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     TextColor(TEXT_MAIN),
                     AssemblyModeButtonLabel,
                 ));
-                hint_text(sec, "Viewport edit: click a part, then drag its X/Y/Z arrow");
+                sec.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        ..default()
+                    },
+                ))
+                .with_children(|row| {
+                    for (index, mode) in AssemblyGizmoMode::ALL.into_iter().enumerate() {
+                        let (radius, border) = segment_style(index == 0, index == 1);
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(27.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border,
+                                border_radius: radius,
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            AssemblyGizmoModeButton { mode },
+                            Name::new(format!("AssemblyGizmoMode_{}", mode.label())),
+                        ))
+                        .with_child((
+                            Text::new(mode.label()),
+                            TextFont {
+                                font_size: FontSize::Px(11.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+                hint_text(
+                    sec,
+                    "Move: drag X/Y/Z arrow   Rotate: drag RX/RY/RZ ring",
+                );
                 sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Column,
@@ -806,40 +902,6 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             });
             divider(panel);
 
-            // ── § View ──────────────────────────────────────────────────
-            section(panel, "VIEW", |sec| {
-                sec.spawn((
-                    Node { flex_direction: FlexDirection::Row, ..default() },
-                )).with_children(|row| {
-                    for (i, mode) in VisualizationMode::ALL.iter().enumerate() {
-                        let n = VisualizationMode::ALL.len();
-                        let (radius, border) = segment_style(i == 0, i == n - 1);
-                        row.spawn((
-                            Button,
-                            Node {
-                                flex_grow: 1.0,
-                                height: px(28.0),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                border,
-                                border_radius: radius,
-                                ..default()
-                            },
-                            BackgroundColor(BUTTON_NORMAL),
-                            BorderColor::all(PANEL_BORDER),
-                            RenderModeButton { mode: *mode },
-                            Name::new(format!("RenderMode_{}", mode.label())),
-                        )).with_child((
-                            Text::new(mode.label()),
-                            TextFont { font_size: FontSize::Px(11.5), ..default() },
-                            TextColor(TEXT_MAIN),
-                        ));
-                    }
-                });
-                hint_text(sec, "Middle drag = orbit   Shift+Middle = pan   Scroll = zoom   F = focus");
-            });
-            divider(panel);
-
             // ── § Selection ─────────────────────────────────────────────
             section(panel, "SELECTION", |sec| {
                 sec.spawn((
@@ -893,8 +955,31 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
 
             sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Contact), "ContactPage", |panel| {
 
-            // ── § Contact Setup ──────────────────────────────────────────
-            section(panel, "CONTACT SETUP", |sec| {
+            // ── § Contact definition ─────────────────────────────────────
+            section(panel, "CONTACT DEFINITION", |sec| {
+                sec.spawn((
+                    Text::new("Defined contacts: 0"),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(TEXT_MUTED),
+                    ContactDefinitionsText,
+                ));
+                sec.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(4.0),
+                        max_height: px(150.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    ScrollPosition::default(),
+                    ScrollableList,
+                    ContactDefinitionsListContainer,
+                    Name::new("ContactDefinitionsListContainer"),
+                ));
+                hint_text(sec, "Click a pair to review: master = blue, slave = orange");
                 sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Row,
@@ -905,22 +990,109 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     action_button(row, "Make Surface",    CreateSurfaceButton,  "CreateSurfaceButton");
                     action_button(row, "Make Contact",    CreateContactButton,  "CreateContactButton");
                 });
+                hint_text(sec, "Select contact faces, create surfaces, then define a pair manually");
+            });
+            divider(panel);
+
+            // ── § Contact detection ──────────────────────────────────────
+            section(panel, "CONTACT DETECTION", |sec| {
+                action_button(
+                    sec,
+                    "Detect Contact Candidates",
+                    DetectContactsButton,
+                    "DetectContactsButton",
+                );
+                hint_text(sec, "Searches nearby opposing or coincident boundary faces");
+            });
+            divider(panel);
+
+            // ── § Contact review ─────────────────────────────────────────
+            section(panel, "CONTACT REVIEW", |sec| {
                 sec.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: px(6.0),
-                        ..default()
-                    },
-                )).with_children(|row| {
-                    action_button(row, "Detect Contacts", DetectContactsButton, "DetectContactsButton");
-                    action_button(row, "Accept",          AcceptContactButton,  "AcceptContactButton");
-                });
-                sec.spawn((
-                    Text::new("Contacts: no candidates (press Detect)"),
+                    Text::new("No candidates — run Detect Contact Candidates"),
                     TextFont { font_size: FontSize::Px(11.5), ..default() },
                     TextColor(TEXT_MUTED),
                     ContactCandidateText,
                 ));
+                sec.spawn((
+                    Node {
+                        display: Display::None,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(7.0),
+                        ..default()
+                    },
+                    ContactReviewControls,
+                    Name::new("ContactReviewControls"),
+                )).with_children(|review| {
+                    review.spawn((
+                        Button,
+                        Node {
+                            width: percent(100.0),
+                            height: px(28.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(px(1.0)),
+                            border_radius: BorderRadius::all(px(5.0)),
+                            ..default()
+                        },
+                        BackgroundColor(BUTTON_ACTIVE),
+                        BorderColor::all(ACTIVE_BORDER),
+                        ContactGhostToggleButton,
+                        Name::new("ContactGhostToggleButton"),
+                    )).with_child((
+                        Text::new("Ghost others: ON"),
+                        TextFont { font_size: FontSize::Px(10.5), ..default() },
+                        TextColor(TEXT_MAIN),
+                        ContactGhostToggleLabel,
+                    ));
+                    review.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: px(6.0),
+                            ..default()
+                        },
+                    )).with_children(|row| {
+                        action_button(
+                            row,
+                            "Previous",
+                            ContactCandidateActionButton(ContactCandidateAction::Previous),
+                            "PreviousContactCandidateButton",
+                        );
+                        action_button(
+                            row,
+                            "Next",
+                            ContactCandidateActionButton(ContactCandidateAction::Next),
+                            "NextContactCandidateButton",
+                        );
+                    });
+                    spawn_slider(review, SliderConfig {
+                        width: 272.0,
+                        min: 0.0,
+                        max: 30.0,
+                        value: 8.0,
+                        label: "Review separation (% model size)",
+                        id: SliderId::ContactReviewSeparation,
+                    });
+                    review.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: px(6.0),
+                            ..default()
+                        },
+                    )).with_children(|row| {
+                        action_button(
+                            row,
+                            "Reject",
+                            ContactCandidateActionButton(ContactCandidateAction::Reject),
+                            "RejectContactCandidateButton",
+                        );
+                        action_button(row, "Accept", AcceptContactButton, "AcceptContactButton");
+                    });
+                });
+                hint_text(
+                    sec,
+                    "Review display only — analysis coordinates and export are unchanged",
+                );
             });
             divider(panel);
 
@@ -1063,6 +1235,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         label: "Load magnitude",
                         id: SliderId::LoadMagnitude,
                     });
+                    hint_text(
+                        panel,
+                        "Pick an axis to preview arrows; enter an exact value at lower right",
+                    );
                     panel.spawn((
                         Button,
                         Node {
@@ -1160,7 +1336,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             TextColor(TEXT_MAIN),
                             ApplyDloadLabel,
                         ));
-                        hint_text(dp, "Use Face filter, select faces, pick kind, Apply");
+                        hint_text(
+                            dp,
+                            "Pressure: select faces  Gravity: select elements  Apply commits",
+                        );
                     });
 
                     // Clear All BCs & Loads — one click to undo everything
@@ -1184,7 +1363,10 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         TextFont { font_size: FontSize::Px(9.5), ..default() },
                         TextColor(Color::srgb(0.95, 0.80, 0.80)),
                     ));
-                    hint_text(panel, "Select nodes first - buttons show count");
+                    hint_text(
+                        panel,
+                        "Constraints apply immediately; loads stay provisional until Apply",
+                    );
 
                 });
 
@@ -1597,6 +1779,67 @@ fn spawn_sidebar_navigation(parent: &mut ChildSpawnerCommands) {
         });
 }
 
+/// Persistent render controls shared by every workflow page. View style is
+/// a viewport concern, not a Model-page setting, so it stays available while
+/// defining contacts, loads, materials, solver settings, or reviewing results.
+fn spawn_view_toolbar(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(3.0),
+                padding: UiRect::axes(px(10.0), px(4.0)),
+                ..default()
+            },
+            Name::new("ViewToolbar"),
+        ))
+        .with_children(|toolbar| {
+            toolbar.spawn((
+                Text::new("VIEW"),
+                TextFont {
+                    font_size: FontSize::Px(9.2),
+                    ..default()
+                },
+                TextColor(TEXT_MUTED),
+            ));
+            toolbar
+                .spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    ..default()
+                },))
+                .with_children(|row| {
+                    let count = VisualizationMode::ALL.len();
+                    for (index, mode) in VisualizationMode::ALL.iter().enumerate() {
+                        let (radius, border) = segment_style(index == 0, index + 1 == count);
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(26.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border,
+                                border_radius: radius,
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            RenderModeButton { mode: *mode },
+                            Name::new(format!("RenderMode_{}", mode.label())),
+                        ))
+                        .with_child((
+                            Text::new(mode.label()),
+                            TextFont {
+                                font_size: FontSize::Px(10.5),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+        });
+}
+
 fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
     let levels = [
         (SelectionLevel::Node, "Node"),
@@ -1613,13 +1856,18 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                 padding: UiRect::axes(px(10.0), px(4.0)),
                 ..default()
             },
+            SelectionToolbar,
             Name::new("SelectionToolbar"),
         ))
         .with_children(|toolbar| {
             toolbar.spawn((
-                Text::new("SELECT TARGET"),
-                TextFont { font_size: FontSize::Px(9.2), ..default() },
+                Text::new("SELECT TARGET — MODEL"),
+                TextFont {
+                    font_size: FontSize::Px(9.2),
+                    ..default()
+                },
                 TextColor(TEXT_MUTED),
+                SelectionContextText,
             ));
             toolbar
                 .spawn((Node {
@@ -1648,7 +1896,10 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                         ))
                         .with_child((
                             Text::new(*label),
-                            TextFont { font_size: FontSize::Px(10.5), ..default() },
+                            TextFont {
+                                font_size: FontSize::Px(10.5),
+                                ..default()
+                            },
                             TextColor(TEXT_MAIN),
                         ));
                     }
@@ -1669,7 +1920,10 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                 .with_children(|surface| {
                     surface.spawn((
                         Text::new("SURFACE GROWTH — FACE / ELEMENT"),
-                        TextFont { font_size: FontSize::Px(9.2), ..default() },
+                        TextFont {
+                            font_size: FontSize::Px(9.2),
+                            ..default()
+                        },
                         TextColor(TEXT_MUTED),
                     ));
                     surface
@@ -1703,7 +1957,10 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                                 ))
                                 .with_child((
                                     Text::new(mode.label()),
-                                    TextFont { font_size: FontSize::Px(10.5), ..default() },
+                                    TextFont {
+                                        font_size: FontSize::Px(10.5),
+                                        ..default()
+                                    },
                                     TextColor(TEXT_MAIN),
                                 ));
                             }
@@ -1718,18 +1975,26 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                             SurfaceAngleControls,
                         ))
                         .with_children(|controls| {
-                            spawn_slider(controls, SliderConfig {
-                                width: 272.0,
-                                min: 0.0,
-                                max: 90.0,
-                                value: DEFAULT_SMOOTH_ANGLE_DEG,
-                                label: "Smooth angle threshold (deg)",
-                                id: SliderId::SurfaceAngle,
-                            });
+                            spawn_slider(
+                                controls,
+                                SliderConfig {
+                                    width: 272.0,
+                                    min: 0.0,
+                                    max: 90.0,
+                                    value: DEFAULT_SMOOTH_ANGLE_DEG,
+                                    label: "Smooth angle threshold (deg)",
+                                    id: SliderId::SurfaceAngle,
+                                },
+                            );
                         });
                     surface.spawn((
-                        Text::new("Element keeps volume targets; growth follows the visible surface"),
-                        TextFont { font_size: FontSize::Px(9.4), ..default() },
+                        Text::new(
+                            "Element keeps volume targets; growth follows the visible surface",
+                        ),
+                        TextFont {
+                            font_size: FontSize::Px(9.4),
+                            ..default()
+                        },
                         TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
                         SurfaceSelectionHint,
                     ));
@@ -1737,7 +2002,10 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
 
             toolbar.spawn((
                 Text::new("Node / Edge use Single; double/triple click expands connectivity"),
-                TextFont { font_size: FontSize::Px(9.4), ..default() },
+                TextFont {
+                    font_size: FontSize::Px(9.4),
+                    ..default()
+                },
                 TextColor(Color::srgba(0.58, 0.70, 0.76, 0.88)),
                 Node {
                     display: Display::None,
@@ -1748,7 +2016,10 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
 
             toolbar.spawn((
                 Text::new("Action: REPLACE — click or drag starts a new selection"),
-                TextFont { font_size: FontSize::Px(10.2), ..default() },
+                TextFont {
+                    font_size: FontSize::Px(10.2),
+                    ..default()
+                },
                 TextColor(Color::srgba(0.50, 0.78, 0.95, 0.95)),
                 SelectionOperationHint,
             ));
@@ -1777,7 +2048,10 @@ fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
         ))
         .with_child((
             Text::new("Selection guide  [hide]"),
-            TextFont { font_size: FontSize::Px(10.5), ..default() },
+            TextFont {
+                font_size: FontSize::Px(10.5),
+                ..default()
+            },
             TextColor(Color::srgb(0.72, 0.88, 0.96)),
         ));
     parent
@@ -1796,7 +2070,10 @@ fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
         ))
         .with_child((
             Text::new(SELECTION_GUIDE_TEXT),
-            TextFont { font_size: FontSize::Px(9.6), ..default() },
+            TextFont {
+                font_size: FontSize::Px(9.6),
+                ..default()
+            },
             TextColor(Color::srgba(0.70, 0.78, 0.82, 0.94)),
         ));
 }
@@ -1835,23 +2112,25 @@ fn sidebar_page_group(
     name: &'static str,
     children_fn: impl FnOnce(&mut ChildSpawnerCommands),
 ) {
-    let initial_visibility = if pages.contains(SidebarPage::Model) {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
-
     parent
         .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
+                display: sidebar_page_display(pages, SidebarPage::Model),
                 ..default()
             },
             pages,
-            initial_visibility,
             Name::new(name),
         ))
         .with_children(children_fn);
+}
+
+fn sidebar_page_display(pages: SidebarPageContent, page: SidebarPage) -> Display {
+    if pages.contains(page) {
+        Display::Flex
+    } else {
+        Display::None
+    }
 }
 
 fn page_hint_text(parent: &mut ChildSpawnerCommands, page: SidebarPage, text: &'static str) {
@@ -2154,10 +2433,13 @@ pub(crate) fn sidebar_page_button_system(
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let page_changed = *page != button.page;
             *page = button.page;
+            if page_changed {
+                measurement.clear();
+            }
             if button.page != SidebarPage::Model {
                 *tool = ViewportTool::Selection;
-                measurement.clear();
             }
             for mut scroll in &mut scroll_areas {
                 scroll.0.y = 0.0;
@@ -2179,23 +2461,155 @@ pub(crate) fn sidebar_page_button_system(
     }
 }
 
-/// Shows only content associated with the current sidebar task. Nested
-/// masks are supported: the analysis shell is visible for Loads, Materials,
-/// and Solve while its children select one of those pages.
+/// Shows only content associated with the current sidebar task. Inactive
+/// content uses `display: none` rather than [`Visibility::Hidden`]: hidden UI
+/// nodes still participate in layout and would otherwise push the active
+/// page below a large blank area. Nested masks are supported: the analysis
+/// shell is displayed for Loads, Materials, and Solve while its children
+/// select one of those pages.
 pub(crate) fn update_sidebar_page_visibility(
     page: Res<SidebarPage>,
-    mut content: Query<(&SidebarPageContent, &mut Visibility)>,
+    mut content: Query<(&SidebarPageContent, &mut Node)>,
 ) {
     if !page.is_changed() {
         return;
     }
 
-    for (pages, mut visibility) in &mut content {
-        *visibility = if pages.contains(*page) {
-            Visibility::Visible
+    for (pages, mut node) in &mut content {
+        node.display = sidebar_page_display(*pages, *page);
+    }
+}
+
+struct SelectionPageContext {
+    label: &'static str,
+
+    levels: &'static [SelectionLevel],
+
+    preferred: SelectionLevel,
+}
+
+const MODEL_SELECTION_LEVELS: &[SelectionLevel] = &[
+    SelectionLevel::Node,
+    SelectionLevel::Edge,
+    SelectionLevel::Face,
+    SelectionLevel::Element,
+];
+const CONTACT_SELECTION_LEVELS: &[SelectionLevel] =
+    &[SelectionLevel::Face, SelectionLevel::Element];
+const LOAD_SELECTION_LEVELS: &[SelectionLevel] = &[
+    SelectionLevel::Node,
+    SelectionLevel::Face,
+    SelectionLevel::Element,
+];
+const MATERIAL_SELECTION_LEVELS: &[SelectionLevel] = &[SelectionLevel::Element];
+const NO_SELECTION_LEVELS: &[SelectionLevel] = &[];
+
+fn selection_context_for_page(page: SidebarPage) -> SelectionPageContext {
+    match page {
+        SidebarPage::Model => SelectionPageContext {
+            label: "SELECT TARGET — MODEL",
+            levels: MODEL_SELECTION_LEVELS,
+            preferred: SelectionLevel::Element,
+        },
+        SidebarPage::Contact => SelectionPageContext {
+            label: "SELECT CONTACT SURFACE",
+            levels: CONTACT_SELECTION_LEVELS,
+            preferred: SelectionLevel::Face,
+        },
+        SidebarPage::Loads => SelectionPageContext {
+            label: "SELECT BC / LOAD TARGET",
+            levels: LOAD_SELECTION_LEVELS,
+            preferred: SelectionLevel::Node,
+        },
+        SidebarPage::Materials => SelectionPageContext {
+            label: "SELECT SECTION ELEMENTS",
+            levels: MATERIAL_SELECTION_LEVELS,
+            preferred: SelectionLevel::Element,
+        },
+        SidebarPage::Solve | SidebarPage::Results => SelectionPageContext {
+            label: "",
+            levels: NO_SELECTION_LEVELS,
+            preferred: SelectionLevel::Element,
+        },
+    }
+}
+
+/// Adapts the shared selection toolbar to the active workflow instead of
+/// presenting every topology target on every page.
+pub(crate) fn update_selection_context(
+    mut commands: Commands,
+    page: Res<SidebarPage>,
+    mut filter: ResMut<SelectionFilter>,
+    mut hover: ResMut<HoverResult>,
+    mut selection: ResMut<SelectionState>,
+    mut toolbars: Query<&mut Node, (With<SelectionToolbar>, Without<SelectionLevelButton>)>,
+    mut labels: Query<&mut Text, With<SelectionContextText>>,
+    mut level_buttons: Query<(&SelectionLevelButton, &mut Node), Without<SelectionToolbar>>,
+    hovered_query: Query<Entity, With<Hovered>>,
+    selected_query: Query<Entity, With<Selected>>,
+) {
+    let page_changed = page.is_changed();
+    let filter_changed = filter.is_changed();
+
+    if !page_changed && !filter_changed {
+        return;
+    }
+
+    let context = selection_context_for_page(*page);
+    let has_targets = !context.levels.is_empty();
+
+    for mut toolbar in &mut toolbars {
+        toolbar.display = if has_targets {
+            Display::Flex
         } else {
-            Visibility::Hidden
+            Display::None
         };
+    }
+    for mut label in &mut labels {
+        **label = context.label.to_string();
+    }
+    for (button, mut node) in &mut level_buttons {
+        let Some(index) = context
+            .levels
+            .iter()
+            .position(|level| *level == button.level)
+        else {
+            node.display = Display::None;
+            continue;
+        };
+
+        node.display = Display::Flex;
+        let (radius, border) = segment_style(index == 0, index + 1 == context.levels.len());
+        node.border_radius = radius;
+        node.border = border;
+    }
+
+    if !has_targets {
+        return;
+    }
+
+    let current_is_allowed = context.levels.contains(&filter.level);
+    let target_level = if current_is_allowed && (!page_changed || selection.len() > 0) {
+        filter.level
+    } else {
+        context.preferred
+    };
+
+    if target_level == filter.level {
+        return;
+    }
+
+    filter.level = target_level;
+    hover.clear();
+    for entity in &hovered_query {
+        commands.entity(entity).remove::<Hovered>();
+    }
+
+    if !current_is_allowed {
+        selection.clear();
+        for entity in &selected_query {
+            commands.entity(entity).remove::<Selected>();
+        }
     }
 }
 
@@ -2678,9 +3092,11 @@ pub(crate) fn mesh_load_system(
             }
         },
         _ => {
-            // .msh: HECMW extended loader captures !MATERIAL/!SECTION, then Gmsh fallback.
-            match hecmw::load_mesh_file_with_setup(&path) {
-                Ok((mesh, materials, sections)) => {
+            // .msh: HECMW project loader captures assignments and contact
+            // pairs, then falls back to Gmsh when this is not a HEC-MW file.
+            match hecmw::load_mesh_file_with_setup_and_contacts(&path) {
+                Ok((mesh, materials, sections, contact_pairs)) => {
+                    let mesh_index = if import { model.meshes.len() } else { 0 };
                     apply_mesh(
                         mesh,
                         &path,
@@ -2691,6 +3107,14 @@ pub(crate) fn mesh_load_system(
                         &mut camera_fit,
                         &mut setup,
                     );
+                    let loaded_contacts =
+                        merge_mesh_contact_pairs(&mut model, mesh_index, contact_pairs);
+                    if loaded_contacts > 0 {
+                        bevy::log::info!(
+                            "Loaded {loaded_contacts} contact pair(s) from {:?}",
+                            path.file_name()
+                        );
+                    }
                     // Merge embedded material/section blocks into AnalysisSetup,
                     // skipping duplicates by name.
                     let mut changed = false;
@@ -2728,6 +3152,78 @@ pub(crate) fn mesh_load_system(
             }
         }
     }
+}
+
+fn merge_mesh_contact_pairs(
+    model: &mut FemModel,
+    mesh_index: usize,
+    definitions: Vec<hecmw::HecmwContactPairDefinition>,
+) -> usize {
+    let Some(mesh) = model.meshes.get(mesh_index) else {
+        return 0;
+    };
+    let mut resolved = Vec::new();
+
+    for definition in definitions {
+        let master = mesh.surface_sets.iter().position(|set| {
+            set.name
+                .eq_ignore_ascii_case(&definition.master_surface_name)
+        });
+        let Some(master) = master else {
+            bevy::log::warn!(
+                "Contact pair '{}' refers to missing master surface '{}'",
+                definition.name,
+                definition.master_surface_name
+            );
+            continue;
+        };
+
+        let master = fem_core::SurfaceSetRef::new(mesh_index, master);
+        let contact =
+            match definition.pair_type {
+                hecmw::HecmwContactPairType::NodeSurface => {
+                    let Some(slave) = mesh.node_sets.iter().position(|set| {
+                        set.name.eq_ignore_ascii_case(&definition.slave_group_name)
+                    }) else {
+                        bevy::log::warn!(
+                            "Contact pair '{}' refers to missing slave node group '{}'",
+                            definition.name,
+                            definition.slave_group_name
+                        );
+                        continue;
+                    };
+                    fem_core::ContactPair::new_node_surface(
+                        definition.name,
+                        master,
+                        fem_core::NodeSetRef::new(mesh_index, slave),
+                        ContactType::SmallSliding,
+                    )
+                }
+                hecmw::HecmwContactPairType::SurfaceSurface => {
+                    let Some(slave) = mesh.surface_sets.iter().position(|set| {
+                        set.name.eq_ignore_ascii_case(&definition.slave_group_name)
+                    }) else {
+                        bevy::log::warn!(
+                            "Contact pair '{}' refers to missing slave surface '{}'",
+                            definition.name,
+                            definition.slave_group_name
+                        );
+                        continue;
+                    };
+                    fem_core::ContactPair::new(
+                        definition.name,
+                        master,
+                        fem_core::SurfaceSetRef::new(mesh_index, slave),
+                        ContactType::SmallSliding,
+                    )
+                }
+            };
+        resolved.push(contact);
+    }
+
+    let count = resolved.len();
+    model.contacts.extend(resolved);
+    count
 }
 
 fn apply_mesh(
@@ -2938,6 +3434,99 @@ pub(crate) fn accept_contact_button_system(
     }
 }
 
+/// Moves through detected contact candidates or rejects the current one
+/// without changing the analysis model.
+pub(crate) fn contact_candidate_action_button_system(
+    mut state: ResMut<ContactCandidateState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &ContactCandidateActionButton,
+        ),
+        With<ContactCandidateActionButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, action) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            match action.0 {
+                ContactCandidateAction::Previous => state.select_previous(),
+                ContactCandidateAction::Next => state.select_next(),
+                ContactCandidateAction::Reject => state.remove_selected(),
+            }
+        }
+
+        let color = match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        };
+
+        *background = BackgroundColor(color);
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+/// Toggles whether parts outside the reviewed pair are rendered as a quiet,
+/// transparent context shell.
+pub(crate) fn contact_ghost_toggle_button_system(
+    mut review: ResMut<ContactReviewSettings>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        With<ContactGhostToggleButton>,
+    >,
+    mut labels: Query<&mut Text, With<ContactGhostToggleLabel>>,
+) {
+    for (interaction, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            review.ghost_others = !review.ghost_others;
+        }
+
+        let active = review.ghost_others;
+        let color = match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        };
+
+        *background = BackgroundColor(color);
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+
+    for mut label in &mut labels {
+        **label = format!(
+            "Ghost others: {}",
+            if review.ghost_others { "ON" } else { "OFF" }
+        );
+    }
+}
+
+/// Keeps visualization review state synchronized with the Contact page and
+/// its view-only separation slider.
+pub(crate) fn update_contact_review_settings(
+    page: Res<SidebarPage>,
+    candidates: Res<ContactCandidateState>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut review: ResMut<ContactReviewSettings>,
+) {
+    let active = *page == SidebarPage::Contact && candidates.selected_candidate().is_some();
+    let separation_percent = sliders
+        .iter()
+        .find(|slider| slider.id == SliderId::ContactReviewSeparation)
+        .map(|slider| slider.value)
+        .unwrap_or(8.0);
+
+    if review.active != active {
+        review.active = active;
+    }
+    if (review.separation_percent - separation_percent).abs() > f32::EPSILON {
+        review.separation_percent = separation_percent;
+    }
+}
+
 /// Rebuilds the dynamic list of set buttons inside [`SetsListContainer`]
 /// whenever [`FemModelVersion`] changes (new mesh loaded / imported /
 /// reloaded).
@@ -3144,14 +3733,12 @@ pub(crate) fn rebuild_boundary_loads_list(
 pub(crate) fn surface_selection_mode_button_system(
     filter: Res<SelectionFilter>,
     mut settings: ResMut<SurfaceSelectionSettings>,
-    mut buttons: Query<
-        (
-            Ref<Interaction>,
-            &SurfaceSelectionModeButton,
-            &mut BackgroundColor,
-            &mut BorderColor,
-        ),
-    >,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &SurfaceSelectionModeButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
     mut angle_controls: Query<&mut Node, With<SurfaceAngleControls>>,
     mut surface_controls: Query<
         &mut Node,
@@ -3387,10 +3974,7 @@ pub(crate) fn update_surface_selection_hint(
     **text = surface_selection_hint(filter.level, settings.mode).to_string();
 }
 
-fn surface_selection_hint(
-    level: SelectionLevel,
-    mode: SurfaceSelectionMode,
-) -> &'static str {
+fn surface_selection_hint(level: SelectionLevel, mode: SurfaceSelectionMode) -> &'static str {
     match (level, mode) {
         (SelectionLevel::Face, SurfaceSelectionMode::Single) => {
             "Face Single = one boundary surface face"
@@ -3572,9 +4156,7 @@ pub(crate) fn clear_all_bc_loads_button_system(
     }
 }
 
-fn selected_nodes_by_mesh(
-    selection: &SelectionState,
-) -> BTreeMap<usize, Vec<fem_core::NodeId>> {
+fn selected_nodes_by_mesh(selection: &SelectionState) -> BTreeMap<usize, Vec<fem_core::NodeId>> {
     let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::NodeId>>::new();
 
     for target in &selection.targets {
@@ -3643,6 +4225,9 @@ pub(crate) fn constraint_preset_button_system(
 /// [`SelectedLoadDirection`] and highlights the active button.
 pub(crate) fn load_direction_button_system(
     mut selected: ResMut<SelectedLoadDirection>,
+    mut active_editor: ResMut<ActiveLoadEditor>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -3658,8 +4243,17 @@ pub(crate) fn load_direction_button_system(
             let new_dir = (btn.dof, btn.sign);
             if selected.0 == Some(new_dir) {
                 selected.0 = None; // toggle off
+                *active_editor = ActiveLoadEditor::None;
+                measurement.clear();
             } else {
                 selected.0 = Some(new_dir);
+                *active_editor = ActiveLoadEditor::Nodal;
+                measurement.begin_slider_value(
+                    SliderId::LoadMagnitude,
+                    nodal_load_measurement_label(btn.dof, btn.sign),
+                    "analysis force units",
+                    slider_value(&sliders, SliderId::LoadMagnitude, 100.0),
+                );
             }
         }
 
@@ -3674,6 +4268,30 @@ pub(crate) fn load_direction_button_system(
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
     }
+}
+
+fn nodal_load_measurement_label(dof: u8, sign: f32) -> &'static str {
+    match (dof, sign >= 0.0) {
+        (1, true) => "Nodal load +X",
+        (1, false) => "Nodal load -X",
+        (2, true) => "Nodal load +Y",
+        (2, false) => "Nodal load -Y",
+        (3, true) => "Nodal load +Z",
+        (3, false) => "Nodal load -Z",
+        _ => "Nodal load",
+    }
+}
+
+fn slider_value(
+    sliders: &Query<&SliderState, With<SliderTrack>>,
+    id: SliderId,
+    fallback: f32,
+) -> f32 {
+    sliders
+        .iter()
+        .find(|slider| slider.id == id)
+        .map(|slider| slider.value)
+        .unwrap_or(fallback)
 }
 
 /// Applies the selected direction + slider magnitude as a nodal load to
@@ -3744,6 +4362,9 @@ pub(crate) fn apply_load_button_system(
 /// Toggles the active [`SelectedDloadKind`] when [Pressure]/[Gravity] clicked.
 pub(crate) fn dload_kind_button_system(
     mut selected: ResMut<SelectedDloadKind>,
+    mut active_editor: ResMut<ActiveLoadEditor>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -3757,6 +4378,17 @@ pub(crate) fn dload_kind_button_system(
     for (interaction, mut bg, mut border, btn) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             *selected = btn.0;
+            *active_editor = ActiveLoadEditor::Distributed;
+            let (label, units) = match btn.0 {
+                SelectedDloadKind::Pressure => ("Pressure", "analysis pressure units"),
+                SelectedDloadKind::Gravity => ("Gravity acceleration", "analysis accel. units"),
+            };
+            measurement.begin_slider_value(
+                SliderId::DloadMagnitude,
+                label,
+                units,
+                slider_value(&sliders, SliderId::DloadMagnitude, 1.0),
+            );
         }
 
         let active = *selected == btn.0;
@@ -3768,6 +4400,237 @@ pub(crate) fn dload_kind_button_system(
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+/// Keeps the shared lower-right numeric field attached to whichever load
+/// authoring control was used most recently.
+pub(crate) fn sync_load_measurement_box(
+    page: Res<SidebarPage>,
+    active_editor: Res<ActiveLoadEditor>,
+    selected_direction: Res<SelectedLoadDirection>,
+    kind: Res<SelectedDloadKind>,
+    sliders: Query<Ref<SliderState>, With<SliderTrack>>,
+    mut measurement: ResMut<MeasurementBoxState>,
+) {
+    if *page != SidebarPage::Loads {
+        return;
+    }
+
+    let (slider_id, label, units, fallback) = match *active_editor {
+        ActiveLoadEditor::None => return,
+        ActiveLoadEditor::Nodal => {
+            let Some((dof, sign)) = selected_direction.0 else {
+                return;
+            };
+            (
+                SliderId::LoadMagnitude,
+                nodal_load_measurement_label(dof, sign),
+                "analysis force units",
+                100.0,
+            )
+        }
+        ActiveLoadEditor::Distributed => match *kind {
+            SelectedDloadKind::Pressure => (
+                SliderId::DloadMagnitude,
+                "Pressure",
+                "analysis pressure units",
+                1.0,
+            ),
+            SelectedDloadKind::Gravity => (
+                SliderId::DloadMagnitude,
+                "Gravity acceleration",
+                "analysis accel. units",
+                1.0,
+            ),
+        },
+    };
+
+    let slider = sliders.iter().find(|slider| slider.id == slider_id);
+    let value = slider
+        .as_ref()
+        .map(|slider| slider.value)
+        .unwrap_or(fallback);
+    let target_matches = matches!(
+        measurement.target,
+        Some(MeasurementTarget::SliderValue {
+            slider_id: target,
+            ..
+        }) if target == slider_id
+    );
+
+    if !target_matches {
+        measurement.begin_slider_value(slider_id, label, units, value);
+    } else if slider.is_some_and(|slider| slider.is_changed()) {
+        measurement.update_slider_value(slider_id, value);
+    }
+}
+
+/// Builds provisional load arrows from the live selection. The resulting
+/// resource is view-only; Apply remains the explicit commit boundary.
+pub(crate) fn update_boundary_load_preview(
+    page: Res<SidebarPage>,
+    active_editor: Res<ActiveLoadEditor>,
+    selected_direction: Res<SelectedLoadDirection>,
+    kind: Res<SelectedDloadKind>,
+    selection: Res<SelectionState>,
+    model: Option<Res<FemModel>>,
+    sliders: Query<Ref<SliderState>, With<SliderTrack>>,
+    mut preview: ResMut<BoundaryLoadPreview>,
+) {
+    let slider_changed = sliders.iter().any(|slider| {
+        matches!(
+            slider.id,
+            SliderId::LoadMagnitude | SliderId::DloadMagnitude
+        ) && slider.is_changed()
+    });
+    let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
+    if !page.is_changed()
+        && !active_editor.is_changed()
+        && !selected_direction.is_changed()
+        && !kind.is_changed()
+        && !selection.is_changed()
+        && !slider_changed
+        && !model_changed
+    {
+        return;
+    }
+
+    let Some(model) = model.as_deref() else {
+        if *preview != BoundaryLoadPreview::default() {
+            *preview = BoundaryLoadPreview::default();
+        }
+        return;
+    };
+    if *page != SidebarPage::Loads {
+        if *preview != BoundaryLoadPreview::default() {
+            *preview = BoundaryLoadPreview::default();
+        }
+        return;
+    }
+
+    let mut next = BoundaryLoadPreview::default();
+
+    match *active_editor {
+        ActiveLoadEditor::None => {}
+        ActiveLoadEditor::Nodal => {
+            let Some((dof, sign)) = selected_direction.0 else {
+                if *preview != next {
+                    *preview = next;
+                }
+                return;
+            };
+            let magnitude = sliders
+                .iter()
+                .find(|slider| slider.id == SliderId::LoadMagnitude)
+                .map(|slider| slider.value)
+                .unwrap_or(100.0);
+            let axis = match dof {
+                1 => Vec3::X,
+                2 => Vec3::Y,
+                3 => Vec3::Z,
+                _ => Vec3::ZERO,
+            };
+            let direction = signed_preview_direction(axis * sign, magnitude);
+            next.kind = Some(BoundaryLoadPreviewKind::Nodal);
+            next.arrows = selection
+                .targets
+                .iter()
+                .filter_map(|target| {
+                    let FemEntityId::Node(node_id) = target.entity else {
+                        return None;
+                    };
+                    Some(BoundaryLoadPreviewArrow {
+                        origin: model
+                            .meshes
+                            .get(target.mesh_index)?
+                            .node_position(node_id)?,
+                        direction,
+                    })
+                })
+                .collect();
+        }
+        ActiveLoadEditor::Distributed => {
+            let magnitude = sliders
+                .iter()
+                .find(|slider| slider.id == SliderId::DloadMagnitude)
+                .map(|slider| slider.value)
+                .unwrap_or(1.0);
+
+            match *kind {
+                SelectedDloadKind::Pressure => {
+                    next.kind = Some(BoundaryLoadPreviewKind::Pressure);
+                    for (mesh_index, face_refs) in
+                        selected_faces_from_faces_or_elements(&selection, model)
+                    {
+                        let Some(mesh) = model.meshes.get(mesh_index) else {
+                            continue;
+                        };
+                        let selected: BTreeSet<_> = face_refs.into_iter().collect();
+                        next.arrows.extend(
+                            mesh.cached_boundary_faces()
+                                .iter()
+                                .filter(|face| {
+                                    face.element_face_ref()
+                                        .is_some_and(|face_ref| selected.contains(&face_ref))
+                                })
+                                .filter_map(|face| mesh.face_geometry(face))
+                                .map(|geometry| BoundaryLoadPreviewArrow {
+                                    origin: geometry.centroid,
+                                    direction: signed_preview_direction(
+                                        -geometry.normal,
+                                        magnitude,
+                                    ),
+                                }),
+                        );
+                    }
+                }
+                SelectedDloadKind::Gravity => {
+                    next.kind = Some(BoundaryLoadPreviewKind::Gravity);
+                    for (mesh_index, element_ids) in
+                        selected_elements_from_faces_or_elements(&selection, model)
+                    {
+                        let Some(mesh) = model.meshes.get(mesh_index) else {
+                            continue;
+                        };
+                        let selected: BTreeSet<_> = element_ids.into_iter().collect();
+                        let mut centroid = Vec3::ZERO;
+                        let mut count = 0usize;
+                        for element in &mesh.elements {
+                            if !selected.contains(&element.id) {
+                                continue;
+                            }
+                            if let Some(positions) = mesh.node_positions(&element.nodes) {
+                                for position in positions {
+                                    centroid += position;
+                                    count += 1;
+                                }
+                            }
+                        }
+                        if count > 0 {
+                            next.arrows.push(BoundaryLoadPreviewArrow {
+                                origin: centroid / count as f32,
+                                direction: signed_preview_direction(Vec3::NEG_Y, magnitude),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if *preview != next {
+        *preview = next;
+    }
+}
+
+fn signed_preview_direction(direction: Vec3, magnitude: f32) -> Vec3 {
+    if magnitude.abs() <= f32::EPSILON {
+        Vec3::ZERO
+    } else if magnitude < 0.0 {
+        -direction
+    } else {
+        direction
     }
 }
 
@@ -4337,9 +5200,8 @@ pub(crate) fn set_button_system(
                             || keyboard.pressed(KeyCode::ShiftRight);
                         let alt = keyboard.pressed(KeyCode::AltLeft)
                             || keyboard.pressed(KeyCode::AltRight);
-                        let operation = selection::SelectionOperation::from_modifiers(
-                            ctrl, shift, alt,
-                        );
+                        let operation =
+                            selection::SelectionOperation::from_modifiers(ctrl, shift, alt);
 
                         filter.level = match set_button.kind {
                             SetKind::Node => SelectionLevel::Node,
@@ -4482,7 +5344,13 @@ pub(crate) fn rebuild_assembly_parts(
 
     commands.entity(container).with_children(|list| {
         for (part_index, (name, nodes, elements)) in signature.iter().enumerate() {
-            let label = format!("[{}] {}   {} N / {} E", part_index + 1, name, nodes, elements);
+            let label = format!(
+                "[{}] {}   {} N / {} E",
+                part_index + 1,
+                name,
+                nodes,
+                elements
+            );
             list.spawn((
                 Button,
                 Node {
@@ -4499,11 +5367,43 @@ pub(crate) fn rebuild_assembly_parts(
             ))
             .with_child((
                 Text::new(label),
-                TextFont { font_size: FontSize::Px(10.5), ..default() },
+                TextFont {
+                    font_size: FontSize::Px(10.5),
+                    ..default()
+                },
                 TextColor(TEXT_MAIN),
             ));
         }
     });
+}
+
+pub(crate) fn assembly_gizmo_mode_button_system(
+    mut state: ResMut<AssemblyEditorState>,
+    mut measurement: ResMut<MeasurementBoxState>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyGizmoModeButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.gizmo_mode = button.mode;
+            state.hovered_axis = None;
+            state.hovered_part = None;
+            measurement.clear();
+        }
+
+        let active = state.gizmo_mode == button.mode;
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
 }
 
 pub(crate) fn assembly_part_button_system(
@@ -4541,11 +5441,10 @@ pub(crate) fn assembly_mode_button_system(
     mut hover: ResMut<HoverResult>,
     mut selection: ResMut<SelectionState>,
     selected_query: Query<Entity, With<Selected>>,
-    mut buttons: Query<(
-        Ref<Interaction>,
-        &mut BackgroundColor,
-        &mut BorderColor,
-    ), With<AssemblyModeButton>>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        With<AssemblyModeButton>,
+    >,
     mut labels: Query<&mut Text, With<AssemblyModeButtonLabel>>,
 ) {
     let Ok((interaction, mut background, mut border)) = buttons.single_mut() else {
@@ -4622,20 +5521,14 @@ pub(crate) fn assembly_transform_button_system(
             if let Some(part_index) = state.selected_part {
                 changed = match button.action {
                     AssemblyTransformAction::Translate(direction) => {
-                        let percent = assembly_slider_value(
-                            &sliders,
-                            SliderId::AssemblyMovePercent,
-                            1.0,
-                        );
+                        let percent =
+                            assembly_slider_value(&sliders, SliderId::AssemblyMovePercent, 1.0);
                         let step = assembly_reference_size(&model, part_index) * percent / 100.0;
                         model.translate_part(part_index, direction * step)
                     }
                     AssemblyTransformAction::Rotate(axis) => {
-                        let degrees = assembly_slider_value(
-                            &sliders,
-                            SliderId::AssemblyRotationDegrees,
-                            5.0,
-                        );
+                        let degrees =
+                            assembly_slider_value(&sliders, SliderId::AssemblyRotationDegrees, 5.0);
                         model.rotate_part_about_centroid(
                             part_index,
                             Quat::from_axis_angle(axis.normalize(), degrees.to_radians()),
@@ -4684,7 +5577,12 @@ pub(crate) fn update_assembly_status_text(
     let percent = assembly_slider_value(&sliders, SliderId::AssemblyMovePercent, 1.0);
     let step = assembly_reference_size(&model, part_index) * percent / 100.0;
     let viewport_hint = if *tool == ViewportTool::Assembly {
-        "Viewport: click part / drag axis   Shift=fine Ctrl=snap"
+        match state.gizmo_mode {
+            AssemblyGizmoMode::Move => "Viewport Move: drag X/Y/Z arrow   Shift=fine Ctrl=snap",
+            AssemblyGizmoMode::Rotate => {
+                "Viewport Rotate: drag RX/RY/RZ ring   Shift=fine Ctrl=snap"
+            }
+        }
     } else {
         "Viewport edit is OFF; panel nudges remain available"
     };
@@ -4730,12 +5628,196 @@ pub(crate) fn update_contact_candidate_text(
     **text = contact_candidate_summary(&state, model.as_deref());
 }
 
+pub(crate) fn rebuild_contact_definitions_list(
+    mut commands: Commands,
+    model: Option<Res<FemModel>>,
+    version: Res<FemModelVersion>,
+    mut last_version: Local<Option<u64>>,
+    container_query: Query<Entity, With<ContactDefinitionsListContainer>>,
+    children_query: Query<&Children>,
+    mut summary_query: Query<&mut Text, With<ContactDefinitionsText>>,
+    mut preview: ResMut<DefinedContactPreview>,
+) {
+    let current = version.value;
+    let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
+    if *last_version == Some(current) && !model_changed {
+        return;
+    }
+    *last_version = Some(current);
+
+    let Ok(container) = container_query.single() else {
+        return;
+    };
+
+    if let Ok(children) = children_query.get(container) {
+        for &child in children {
+            commands.entity(child).despawn();
+        }
+    }
+
+    let contact_count = model.as_deref().map_or(0, |model| model.contacts.len());
+    if let Ok(mut summary) = summary_query.single_mut() {
+        **summary = format!("Defined contacts: {contact_count}");
+    }
+
+    let next_selected = match preview.selected {
+        Some(index) if index < contact_count => Some(index),
+        _ if contact_count > 0 => Some(0),
+        _ => None,
+    };
+    if preview.selected != next_selected {
+        preview.selected = next_selected;
+    }
+    if contact_count == 0 && preview.active {
+        preview.active = false;
+    }
+
+    let Some(model) = model.as_deref() else {
+        return;
+    };
+    commands.entity(container).with_children(|list| {
+        for (index, contact) in model.contacts.iter().enumerate() {
+            let slave = model.contact_slave_name(contact.slave).unwrap_or("?");
+            let master = model.surface_set_name(contact.master).unwrap_or("?");
+            let pair_kind = match contact.slave {
+                ContactSlaveRef::Nodes(_) => "NODE-SURF",
+                ContactSlaveRef::Surface(_) => "SURF-SURF",
+            };
+            let parameters = match contact.contact_type {
+                ContactType::Tied => String::new(),
+                ContactType::SmallSliding | ContactType::FiniteSliding => {
+                    format!(" | mu={:.4}", contact.friction_coefficient)
+                }
+            };
+            contact_definition_button(
+                list,
+                index,
+                &format!(
+                    "[{}] {} | {}{}\n{} -> {}",
+                    contact.name,
+                    contact.contact_type.label(),
+                    pair_kind,
+                    parameters,
+                    slave,
+                    master,
+                ),
+            );
+        }
+    });
+}
+
+fn contact_definition_button(parent: &mut ChildSpawnerCommands, index: usize, label: &str) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                width: percent(100.0),
+                min_height: px(42.0),
+                padding: UiRect::axes(px(8.0), px(5.0)),
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            DefinedContactButton(index),
+            Name::new(format!("DefinedContact_{index}")),
+        ))
+        .with_child((
+            Text::new(label.to_string()),
+            TextFont {
+                font_size: FontSize::Px(10.0),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
+}
+
+pub(crate) fn defined_contact_button_system(
+    mut preview: ResMut<DefinedContactPreview>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &DefinedContactButton,
+        ),
+        With<DefinedContactButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            preview.selected = Some(button.0);
+        }
+
+        let selected = preview.selected == Some(button.0);
+        let color = match (*interaction, selected) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        };
+        *background = BackgroundColor(color);
+        *border = BorderColor::all(if selected {
+            ACTIVE_BORDER
+        } else {
+            PANEL_BORDER
+        });
+    }
+}
+
+/// Enables the loaded-contact overlay only on the Contact page. An active
+/// automatic candidate review temporarily takes precedence over this view.
+pub(crate) fn sync_defined_contact_preview(
+    page: Res<SidebarPage>,
+    model: Option<Res<FemModel>>,
+    candidates: Res<ContactCandidateState>,
+    mut preview: ResMut<DefinedContactPreview>,
+) {
+    let contact_count = model.as_deref().map_or(0, |model| model.contacts.len());
+    let selected = match preview.selected {
+        Some(index) if index < contact_count => Some(index),
+        _ if contact_count > 0 => Some(0),
+        _ => None,
+    };
+    let active = *page == SidebarPage::Contact
+        && candidates.selected_candidate().is_none()
+        && selected.is_some();
+
+    if preview.selected != selected {
+        preview.selected = selected;
+    }
+    if preview.active != active {
+        preview.active = active;
+    }
+}
+
+pub(crate) fn update_contact_review_controls(
+    state: Res<ContactCandidateState>,
+    mut controls: Query<&mut Node, With<ContactReviewControls>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+
+    let display = if state.selected_candidate().is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+
+    for mut node in &mut controls {
+        node.display = display;
+    }
+}
+
 fn contact_candidate_summary(state: &ContactCandidateState, model: Option<&FemModel>) -> String {
     let total = state.candidates.len();
 
     let Some(candidate) = state.selected_candidate() else {
         return if total == 0 {
-            "Contacts: no candidates (press Detect)".to_string()
+            "No candidates — run Detect Contact Candidates".to_string()
         } else {
             format!("Contacts: {total} candidates")
         };
@@ -4974,7 +6056,7 @@ pub(crate) fn open_project_button_system(
 /// so a mesh that finishes loading this same frame is picked up on the very
 /// next frame rather than waiting an extra one.
 pub(crate) fn apply_pending_cnt_system(
-    model: Option<Res<FemModel>>,
+    mut model: Option<ResMut<FemModel>>,
     version: Res<FemModelVersion>,
     mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
@@ -4986,7 +6068,7 @@ pub(crate) fn apply_pending_cnt_system(
     let Some((path, mesh_index)) = pending_cnt.take_if_ready(version.value) else {
         return;
     };
-    let Some(model) = model.as_deref() else {
+    let Some(model) = model.as_deref_mut() else {
         return;
     };
     let Some(mesh) = model.meshes.get(mesh_index) else {
@@ -5005,11 +6087,13 @@ pub(crate) fn apply_pending_cnt_system(
                 data.distributed_loads.len(),
                 data.materials.len(),
                 data.sections.len(),
+                data.contact_settings.len(),
             );
+            let applied_contacts = data.apply_contact_settings(&mut model.contacts);
             data.merge_into(&mut setup);
             setup.set_changed();
             bevy::log::info!(
-                "Loaded analysis setup from {:?}: {} BCs / {} constrained nodes, {} nodal loads, {} distributed loads, {} materials, {} sections",
+                "Loaded analysis setup from {:?}: {} BCs / {} constrained nodes, {} nodal loads, {} distributed loads, {} materials, {} sections, {applied_contacts}/{} contacts",
                 path.file_name(),
                 counts.0,
                 counts.1,
@@ -5017,6 +6101,7 @@ pub(crate) fn apply_pending_cnt_system(
                 counts.3,
                 counts.4,
                 counts.5,
+                counts.6,
             );
         }
         Err(e) => bevy::log::warn!("Failed to parse cnt file {:?}: {e}", path),
@@ -5453,7 +6538,7 @@ pub(crate) fn open_setup_button_system(
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenSetupButton>,
     >,
-    model: Option<Res<FemModel>>,
+    mut model: Option<ResMut<FemModel>>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
@@ -5478,7 +6563,7 @@ pub(crate) fn open_setup_button_system(
     }
 
     if let Some(path) = pending_path.take() {
-        let Some(model) = model.as_deref() else {
+        let Some(model) = model.as_deref_mut() else {
             return;
         };
         let Some(mesh) = model.meshes.first() else {
@@ -5487,6 +6572,7 @@ pub(crate) fn open_setup_button_system(
 
         match hecmw::load_cnt_file(&path, mesh, 0) {
             Ok(data) => {
+                let applied_contacts = data.apply_contact_settings(&mut model.contacts);
                 data.merge_into(&mut setup);
 
                 // Touch the resource so `is_changed()` consumers (e.g.
@@ -5494,7 +6580,10 @@ pub(crate) fn open_setup_button_system(
                 // `extend` above happened to add zero items.
                 setup.set_changed();
 
-                bevy::log::info!("Loaded analysis setup from {:?}", path.file_name());
+                bevy::log::info!(
+                    "Loaded analysis setup from {:?}; updated {applied_contacts} contact pair(s)",
+                    path.file_name()
+                );
             }
             Err(err) => {
                 bevy::log::warn!("Failed to load .cnt file: {err}");
@@ -5937,7 +7026,8 @@ pub(crate) fn apply_slider_to_results(
             | SliderId::DloadMagnitude
             | SliderId::PlaybackSpeed
             | SliderId::AssemblyMovePercent
-            | SliderId::AssemblyRotationDegrees => {}
+            | SliderId::AssemblyRotationDegrees
+            | SliderId::ContactReviewSeparation => {}
         }
     }
 
@@ -6066,11 +7156,11 @@ mod sidebar_page_tests {
     use super::{
         CameraFitRequest, SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage,
         SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings, apply_mesh,
-        selected_nodes_by_mesh,
-        selection_operation_hint, supports_surface_growth, surface_selection_hint,
-        update_hover_preview_group,
+        merge_mesh_contact_pairs, selected_nodes_by_mesh, selection_context_for_page,
+        selection_operation_hint, sidebar_page_display, signed_preview_direction,
+        supports_surface_growth, surface_selection_hint, update_hover_preview_group,
     };
-    use bevy::prelude::{App, Update, Vec3};
+    use bevy::prelude::{App, Display, Update, Vec3};
     use fem_core::{
         AnalysisSetup, ElementId, ElementType, FemElement, FemEntityId, FemEntityRef, FemMesh,
         FemModel, FemModelVersion, FemNode, HoverPreviewTargets, MeshLoadStatus, NodeId,
@@ -6108,6 +7198,51 @@ mod sidebar_page_tests {
                 assert_eq!(content.contains(candidate), selected == candidate);
             }
         }
+    }
+
+    #[test]
+    fn inactive_sidebar_pages_are_removed_from_layout() {
+        let contact = SidebarPageContent::page(SidebarPage::Contact);
+
+        assert_eq!(
+            sidebar_page_display(contact, SidebarPage::Contact),
+            Display::Flex
+        );
+        assert_eq!(
+            sidebar_page_display(contact, SidebarPage::Model),
+            Display::None
+        );
+    }
+
+    #[test]
+    fn selection_targets_follow_the_active_workflow() {
+        let model = selection_context_for_page(SidebarPage::Model);
+        assert_eq!(model.levels.len(), 4);
+
+        let contact = selection_context_for_page(SidebarPage::Contact);
+        assert_eq!(
+            contact.levels,
+            &[SelectionLevel::Face, SelectionLevel::Element]
+        );
+        assert_eq!(contact.preferred, SelectionLevel::Face);
+
+        let loads = selection_context_for_page(SidebarPage::Loads);
+        assert!(loads.levels.contains(&SelectionLevel::Node));
+        assert!(!loads.levels.contains(&SelectionLevel::Edge));
+
+        let materials = selection_context_for_page(SidebarPage::Materials);
+        assert_eq!(materials.levels, &[SelectionLevel::Element]);
+
+        assert!(
+            selection_context_for_page(SidebarPage::Solve)
+                .levels
+                .is_empty()
+        );
+        assert!(
+            selection_context_for_page(SidebarPage::Results)
+                .levels
+                .is_empty()
+        );
     }
 
     #[test]
@@ -6160,6 +7295,41 @@ mod sidebar_page_tests {
     }
 
     #[test]
+    fn mesh_contact_pair_resolves_tutorial_node_surface_groups() {
+        let mut model = FemModel::demo_hex8();
+        model.meshes[0].node_sets.push(fem_core::FemNodeSet {
+            name: "slave".to_string(),
+            nodes: vec![NodeId(0)],
+        });
+        model.meshes[0]
+            .surface_sets
+            .push(fem_core::FemSurfaceSet::new("master"));
+
+        let count = merge_mesh_contact_pairs(
+            &mut model,
+            0,
+            vec![hecmw::HecmwContactPairDefinition {
+                name: "CP1".to_string(),
+                pair_type: hecmw::HecmwContactPairType::NodeSurface,
+                slave_group_name: "SLAVE".to_string(),
+                master_surface_name: "MASTER".to_string(),
+            }],
+        );
+
+        assert_eq!(count, 1);
+        assert_eq!(model.contacts[0].name, "CP1");
+        assert_eq!(model.contacts[0].master, fem_core::SurfaceSetRef::new(0, 0));
+        assert_eq!(
+            model.contacts[0].slave,
+            fem_core::ContactSlaveRef::Nodes(fem_core::NodeSetRef::new(0, 0))
+        );
+        assert_eq!(
+            model.contacts[0].contact_type,
+            fem_core::ContactType::SmallSliding
+        );
+    }
+
+    #[test]
     fn selected_nodes_remain_partitioned_by_mesh() {
         let selection = SelectionState {
             targets: vec![
@@ -6173,6 +7343,13 @@ mod sidebar_page_tests {
 
         assert_eq!(grouped.get(&0), Some(&vec![NodeId(7)]));
         assert_eq!(grouped.get(&1), Some(&vec![NodeId(7)]));
+    }
+
+    #[test]
+    fn load_preview_direction_tracks_the_sign_but_hides_zero_loads() {
+        assert_eq!(signed_preview_direction(Vec3::X, 12.0), Vec3::X);
+        assert_eq!(signed_preview_direction(Vec3::X, -12.0), Vec3::NEG_X);
+        assert_eq!(signed_preview_direction(Vec3::X, 0.0), Vec3::ZERO);
     }
 
     #[test]
@@ -6200,10 +7377,26 @@ mod sidebar_page_tests {
         assert!(SelectionGuideState::default().expanded);
         assert!(SELECTION_GUIDE_TEXT.contains("Double click"));
         assert!(SELECTION_GUIDE_TEXT.contains("Triple click"));
-        assert!(selection_operation_hint(SelectionOperation::Replace).0.contains("REPLACE"));
-        assert!(selection_operation_hint(SelectionOperation::Add).0.contains("ADD"));
-        assert!(selection_operation_hint(SelectionOperation::Toggle).0.contains("TOGGLE"));
-        assert!(selection_operation_hint(SelectionOperation::Remove).0.contains("REMOVE"));
+        assert!(
+            selection_operation_hint(SelectionOperation::Replace)
+                .0
+                .contains("REPLACE")
+        );
+        assert!(
+            selection_operation_hint(SelectionOperation::Add)
+                .0
+                .contains("ADD")
+        );
+        assert!(
+            selection_operation_hint(SelectionOperation::Toggle)
+                .0
+                .contains("TOGGLE")
+        );
+        assert!(
+            selection_operation_hint(SelectionOperation::Remove)
+                .0
+                .contains("REMOVE")
+        );
     }
 
     #[test]
@@ -6211,12 +7404,8 @@ mod sidebar_page_tests {
         let model = FemModel::demo_hex8();
         let face = model.meshes[0].cached_boundary_faces()[0].clone();
         let element = face.element.expect("a solid boundary face has an owner");
-        let hit = SelectionHit::new(
-            FemEntityRef::element(0, element),
-            Vec3::ZERO,
-            0.0,
-        )
-        .with_surface(face.id, face.element);
+        let hit = SelectionHit::new(FemEntityRef::element(0, element), Vec3::ZERO, 0.0)
+            .with_surface(face.id, face.element);
 
         let mut app = App::new();
         app.insert_resource(model);
@@ -6233,14 +7422,18 @@ mod sidebar_page_tests {
         app.update();
 
         let preview = app.world().resource::<HoverPreviewTargets>();
-        assert!(preview
-            .targets
-            .iter()
-            .all(|target| matches!(target.entity, FemEntityId::Element(_))));
-        assert!(preview
-            .highlight_targets
-            .iter()
-            .all(|target| matches!(target.entity, FemEntityId::Face(_))));
+        assert!(
+            preview
+                .targets
+                .iter()
+                .all(|target| matches!(target.entity, FemEntityId::Element(_)))
+        );
+        assert!(
+            preview
+                .highlight_targets
+                .iter()
+                .all(|target| matches!(target.entity, FemEntityId::Face(_)))
+        );
         assert!(!preview.targets.is_empty());
         assert!(!preview.highlight_targets.is_empty());
     }
@@ -6295,9 +7488,11 @@ mod sidebar_page_tests {
         let preview = app.world().resource::<HoverPreviewTargets>();
         assert_eq!(preview.targets.len(), 2);
         assert_eq!(preview.highlight_targets, preview.targets);
-        assert!(preview
-            .targets
-            .iter()
-            .all(|target| matches!(target.entity, FemEntityId::Edge(_))));
+        assert!(
+            preview
+                .targets
+                .iter()
+                .all(|target| matches!(target.entity, FemEntityId::Edge(_)))
+        );
     }
 }

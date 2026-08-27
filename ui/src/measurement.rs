@@ -7,6 +7,7 @@
 //! and probe tools can reuse the same transaction surface.
 
 use crate::layout::UiInputCapture;
+use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
@@ -27,6 +28,16 @@ pub(crate) enum MeasurementTarget {
         part_index: usize,
         axis: Vec3,
         committed_value: f32,
+    },
+    AssemblyRotation {
+        part_index: usize,
+        axis: Vec3,
+        committed_degrees: f32,
+    },
+    SliderValue {
+        slider_id: SliderId,
+        label: &'static str,
+        units: &'static str,
     },
 }
 
@@ -67,6 +78,67 @@ impl MeasurementBoxState {
         self.value = value;
         self.dragging = false;
         self.error = None;
+    }
+
+    pub fn begin_assembly_rotation(&mut self, part_index: usize, axis: Vec3) {
+        self.target = Some(MeasurementTarget::AssemblyRotation {
+            part_index,
+            axis,
+            committed_degrees: 0.0,
+        });
+        self.value = 0.0;
+        self.dragging = true;
+        self.error = None;
+    }
+
+    pub fn preview_rotation(&mut self, degrees: f32) {
+        if self.dragging && degrees.is_finite() {
+            self.value = degrees;
+        }
+    }
+
+    pub fn commit_rotation(&mut self, degrees: f32) {
+        let Some(MeasurementTarget::AssemblyRotation {
+            committed_degrees, ..
+        }) = self.target.as_mut()
+        else {
+            return;
+        };
+        *committed_degrees = degrees;
+        self.value = degrees;
+        self.dragging = false;
+        self.error = None;
+    }
+
+    pub fn begin_slider_value(
+        &mut self,
+        slider_id: SliderId,
+        label: &'static str,
+        units: &'static str,
+        value: f32,
+    ) {
+        self.target = Some(MeasurementTarget::SliderValue {
+            slider_id,
+            label,
+            units,
+        });
+        self.value = value;
+        self.dragging = false;
+        self.error = None;
+    }
+
+    pub fn update_slider_value(&mut self, slider_id: SliderId, value: f32) {
+        if matches!(
+            self.target,
+            Some(MeasurementTarget::SliderValue {
+                slider_id: target,
+                ..
+            }) if target == slider_id
+        ) && value.is_finite()
+        {
+            self.value = value;
+            self.error = None;
+        }
     }
 
     pub fn clear(&mut self) {
@@ -200,6 +272,7 @@ pub(crate) fn measurement_box_input_system(
     mut model: Option<ResMut<FemModel>>,
     mut version: ResMut<FemModelVersion>,
     mut contact_candidates: ResMut<ContactCandidateState>,
+    mut sliders: Query<&mut SliderState, With<SliderTrack>>,
     mut input_query: Query<(Entity, &mut EditableText), With<MeasurementValueInput>>,
     root_query: Query<(&ComputedNode, &UiGlobalTransform), With<MeasurementBoxRoot>>,
 ) {
@@ -240,32 +313,76 @@ pub(crate) fn measurement_box_input_system(
         }
     };
 
-    let Some(MeasurementTarget::AssemblyTranslation {
-        part_index,
-        axis,
-        committed_value,
-    }) = state.target
-    else {
+    let Some(target) = state.target else {
         state.error = Some("No viewport operation to update".to_string());
         return;
     };
-
-    let correction = assembly_translation_correction(axis, committed_value, requested);
-    if correction.length_squared() > f32::EPSILON * f32::EPSILON {
-        let Some(model) = model.as_deref_mut() else {
-            state.error = Some("No model is loaded".to_string());
-            return;
-        };
-        if !model.translate_part(part_index, correction) {
-            state.error = Some("The selected part can no longer be updated".to_string());
-            return;
+    let changed = match target {
+        MeasurementTarget::AssemblyTranslation {
+            part_index,
+            axis,
+            committed_value,
+        } => {
+            let correction = assembly_translation_correction(axis, committed_value, requested);
+            if correction.length_squared() <= f32::EPSILON * f32::EPSILON {
+                false
+            } else {
+                let Some(model) = model.as_deref_mut() else {
+                    state.error = Some("No model is loaded".to_string());
+                    return;
+                };
+                if !model.translate_part(part_index, correction) {
+                    state.error = Some("The selected part can no longer be updated".to_string());
+                    return;
+                }
+                true
+            }
         }
+        MeasurementTarget::AssemblyRotation {
+            part_index,
+            axis,
+            committed_degrees,
+        } => {
+            let correction_degrees = requested - committed_degrees;
+            if correction_degrees.abs() <= f32::EPSILON {
+                false
+            } else {
+                let Some(model) = model.as_deref_mut() else {
+                    state.error = Some("No model is loaded".to_string());
+                    return;
+                };
+                if !model.rotate_part_about_centroid(
+                    part_index,
+                    Quat::from_axis_angle(axis, correction_degrees.to_radians()),
+                ) {
+                    state.error = Some("The selected part can no longer be updated".to_string());
+                    return;
+                }
+                true
+            }
+        }
+        MeasurementTarget::SliderValue { slider_id, .. } => {
+            let Some(mut slider) = sliders.iter_mut().find(|slider| slider.id == slider_id) else {
+                state.error = Some("The setting is no longer available".to_string());
+                return;
+            };
+            slider.value = requested;
+            false
+        }
+    };
+
+    if changed {
         contact_candidates.candidates.clear();
         contact_candidates.selected = None;
         version.bump();
     }
-
-    state.commit_translation(requested);
+    match target {
+        MeasurementTarget::AssemblyTranslation { .. } => state.commit_translation(requested),
+        MeasurementTarget::AssemblyRotation { .. } => state.commit_rotation(requested),
+        MeasurementTarget::SliderValue { slider_id, .. } => {
+            state.update_slider_value(slider_id, requested)
+        }
+    }
     input_focus.clear();
     // Preserve capture until the next frame so Enter is not reused by a
     // global shortcut registered later in the schedule.
@@ -281,7 +398,11 @@ pub(crate) fn update_measurement_box_visuals(
     mut inputs: Query<(Entity, &mut EditableText, &mut BorderColor), With<MeasurementValueInput>>,
     mut statuses: Query<&mut Text, (With<MeasurementStatus>, Without<MeasurementLabel>)>,
 ) {
-    let visible = state.target.is_some() && *tool == ViewportTool::Assembly;
+    let visible = state.target.is_some_and(|target| match target {
+        MeasurementTarget::AssemblyTranslation { .. }
+        | MeasurementTarget::AssemblyRotation { .. } => *tool == ViewportTool::Assembly,
+        MeasurementTarget::SliderValue { .. } => *tool == ViewportTool::Selection,
+    });
     if let Ok(mut visibility) = roots.single_mut() {
         *visibility = if visible {
             Visibility::Visible
@@ -293,11 +414,22 @@ pub(crate) fn update_measurement_box_visuals(
         return;
     }
 
-    let Some(MeasurementTarget::AssemblyTranslation { axis, .. }) = state.target else {
+    let Some(target) = state.target else {
         return;
     };
+    let (label_text, units, value_name) = match target {
+        MeasurementTarget::AssemblyTranslation { axis, .. } => (
+            format!("Distance {}", axis_label(axis)),
+            "model units",
+            "distance",
+        ),
+        MeasurementTarget::AssemblyRotation { axis, .. } => {
+            (format!("Angle R{}", axis_label(axis)), "degrees", "angle")
+        }
+        MeasurementTarget::SliderValue { label, units, .. } => (label.to_string(), units, "value"),
+    };
     if let Ok(mut label) = labels.single_mut() {
-        **label = format!("Distance {}", axis_label(axis));
+        **label = label_text;
     }
 
     let Ok((input_entity, mut input, mut border)) = inputs.single_mut() else {
@@ -329,11 +461,11 @@ pub(crate) fn update_measurement_box_visuals(
         **status = if let Some(error) = state.error.as_deref() {
             format!("{error}  |  Esc = restore")
         } else if state.dragging {
-            "model units  |  drag now; Shift = fine, Ctrl = snap".to_string()
+            format!("{units}  |  drag now; Shift = fine, Ctrl = snap")
         } else if focused {
-            "model units  |  Enter = apply exact distance, Esc = restore".to_string()
+            format!("{units}  |  Enter = apply exact {value_name}, Esc = restore")
         } else {
-            "model units  |  click value, Enter = apply exact distance".to_string()
+            format!("{units}  |  click value, Enter = apply exact {value_name}")
         };
     }
 }
@@ -363,11 +495,11 @@ fn editable_value(input: &EditableText) -> String {
 fn parse_measurement(text: &str) -> Result<f32, &'static str> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Err("Enter a distance");
+        return Err("Enter a value");
     }
     let value = trimmed.parse::<f64>().map_err(|_| "Enter a valid number")?;
     if !value.is_finite() || value.abs() > f32::MAX as f64 {
-        return Err("Distance is outside the supported range");
+        return Err("Value is outside the supported range");
     }
     Ok(value as f32)
 }
@@ -433,5 +565,50 @@ mod tests {
             assembly_translation_correction(Vec3::Y, 12.0, 10.5),
             Vec3::new(0.0, -1.5, 0.0)
         );
+    }
+
+    #[test]
+    fn rotation_measurement_tracks_degrees_for_numeric_override() {
+        let mut state = MeasurementBoxState::default();
+        state.begin_assembly_rotation(2, Vec3::Z);
+        state.preview_rotation(32.5);
+        assert_eq!(state.value, 32.5);
+        assert!(state.dragging);
+
+        state.commit_rotation(30.0);
+        assert_eq!(state.value, 30.0);
+        assert!(!state.dragging);
+        let Some(MeasurementTarget::AssemblyRotation {
+            part_index,
+            axis,
+            committed_degrees,
+        }) = state.target
+        else {
+            panic!("rotation target");
+        };
+        assert_eq!(part_index, 2);
+        assert_eq!(axis, Vec3::Z);
+        assert_eq!(committed_degrees, 30.0);
+    }
+
+    #[test]
+    fn slider_measurement_tracks_an_exact_engineering_value() {
+        let mut state = MeasurementBoxState::default();
+        state.begin_slider_value(
+            SliderId::LoadMagnitude,
+            "Nodal load +X",
+            "analysis units",
+            100.0,
+        );
+        state.update_slider_value(SliderId::LoadMagnitude, 1250.5);
+
+        assert_eq!(state.value, 1250.5);
+        assert!(matches!(
+            state.target,
+            Some(MeasurementTarget::SliderValue {
+                slider_id: SliderId::LoadMagnitude,
+                ..
+            })
+        ));
     }
 }

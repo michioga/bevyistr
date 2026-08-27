@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::spatial::{Aabb, Bvh};
 use crate::SelectionLevel;
+use crate::spatial::{Aabb, Bvh};
 
 #[derive(Resource, Default, Debug, Clone)]
 pub struct FemModel {
@@ -26,15 +26,22 @@ pub struct Part {
     pub original_node_positions: Vec<Vec3>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContactPair {
     pub name: String,
 
     pub master: SurfaceSetRef,
 
-    pub slave: SurfaceSetRef,
+    pub slave: ContactSlaveRef,
 
     pub contact_type: ContactType,
+
+    /// Coulomb friction coefficient from the second line of `!CONTACT`.
+    /// Tied contacts do not use this value.
+    pub friction_coefficient: f32,
+
+    /// Optional friction penalty factor from the second line of `!CONTACT`.
+    pub penalty_factor: Option<f32>,
 }
 
 impl ContactPair {
@@ -47,9 +54,37 @@ impl ContactPair {
         Self {
             name: name.into(),
             master,
-            slave,
+            slave: ContactSlaveRef::Surface(slave),
             contact_type,
+            friction_coefficient: 0.0,
+            penalty_factor: None,
         }
+    }
+
+    pub fn new_node_surface(
+        name: impl Into<String>,
+        master: SurfaceSetRef,
+        slave: NodeSetRef,
+        contact_type: ContactType,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            master,
+            slave: ContactSlaveRef::Nodes(slave),
+            contact_type,
+            friction_coefficient: 0.0,
+            penalty_factor: None,
+        }
+    }
+
+    pub fn with_contact_parameters(
+        mut self,
+        friction_coefficient: f32,
+        penalty_factor: Option<f32>,
+    ) -> Self {
+        self.friction_coefficient = friction_coefficient;
+        self.penalty_factor = penalty_factor;
+        self
     }
 }
 
@@ -58,6 +93,42 @@ pub struct SurfaceSetRef {
     pub mesh_index: usize,
 
     pub surface_set_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeSetRef {
+    pub mesh_index: usize,
+
+    pub node_set_index: usize,
+}
+
+impl NodeSetRef {
+    pub const fn new(mesh_index: usize, node_set_index: usize) -> Self {
+        Self {
+            mesh_index,
+            node_set_index,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ContactSlaveRef {
+    Nodes(NodeSetRef),
+
+    Surface(SurfaceSetRef),
+}
+
+impl ContactSlaveRef {
+    pub const fn mesh_index(self) -> usize {
+        match self {
+            Self::Nodes(reference) => reference.mesh_index,
+            Self::Surface(reference) => reference.mesh_index,
+        }
+    }
+
+    pub const fn is_node_surface(self) -> bool {
+        matches!(self, Self::Nodes(_))
+    }
 }
 
 impl SurfaceSetRef {
@@ -74,7 +145,29 @@ pub enum ContactType {
     #[default]
     Tied,
 
-    Frictionless,
+    /// Infinitesimal-slip contact (`INTERACTION=SSLID`).
+    SmallSliding,
+
+    /// Finite-slip contact (`INTERACTION=FSLID`).
+    FiniteSliding,
+}
+
+impl ContactType {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Tied => "Tied",
+            Self::SmallSliding => "Small sliding",
+            Self::FiniteSliding => "Finite sliding",
+        }
+    }
+
+    pub const fn frontistr_interaction(self) -> &'static str {
+        match self {
+            Self::Tied => "TIED",
+            Self::SmallSliding => "SSLID",
+            Self::FiniteSliding => "FSLID",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -667,16 +760,12 @@ impl FemElement {
             | ElementType::Tri6
             | ElementType::ShellTri3
             | ElementType::ShellTri6
-            | ElementType::ShellTri3Mixed => {
-                self.corner_edges(&[(0, 1), (1, 2), (2, 0)])
-            }
+            | ElementType::ShellTri3Mixed => self.corner_edges(&[(0, 1), (1, 2), (2, 0)]),
             ElementType::Quad4
             | ElementType::Quad8
             | ElementType::ShellQuad4
             | ElementType::ShellQuad9
-            | ElementType::ShellQuad4Mixed => {
-                self.corner_edges(&[(0, 1), (1, 2), (2, 3), (3, 0)])
-            }
+            | ElementType::ShellQuad4Mixed => self.corner_edges(&[(0, 1), (1, 2), (2, 3), (3, 0)]),
             ElementType::Tet4 | ElementType::Tet10 => {
                 self.corner_edges(&[(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)])
             }
@@ -1025,6 +1114,21 @@ impl FemModel {
             .surface_sets
             .get(surface_set_ref.surface_set_index)
             .map(|surface_set| surface_set.name.as_str())
+    }
+
+    pub fn node_set_name(&self, node_set_ref: NodeSetRef) -> Option<&str> {
+        self.meshes
+            .get(node_set_ref.mesh_index)?
+            .node_sets
+            .get(node_set_ref.node_set_index)
+            .map(|node_set| node_set.name.as_str())
+    }
+
+    pub fn contact_slave_name(&self, slave: ContactSlaveRef) -> Option<&str> {
+        match slave {
+            ContactSlaveRef::Nodes(reference) => self.node_set_name(reference),
+            ContactSlaveRef::Surface(reference) => self.surface_set_name(reference),
+        }
     }
 
     pub fn create_contact_pair_from_recent_surface_sets(
@@ -1462,10 +1566,8 @@ mod tests {
         model.add_mesh("Part B", FemMesh::demo_hex8());
         let face_id = model.meshes[1].cached_boundary_faces()[0].id;
 
-        let count = model.create_surface_set_from_targets(
-            "PART_B_SURFACE",
-            &[FemEntityRef::face(1, face_id)],
-        );
+        let count = model
+            .create_surface_set_from_targets("PART_B_SURFACE", &[FemEntityRef::face(1, face_id)]);
 
         assert_eq!(count, 1);
         assert!(model.meshes[0].surface_sets.is_empty());
@@ -1503,10 +1605,12 @@ mod tests {
 
         let centroid_after = model.part_centroid(0).unwrap();
         assert!(centroid_after.distance(centroid_before) < 1.0e-6);
-        assert!(model.meshes[0].nodes[0]
-            .position
-            .distance(centroid_before + rotation * (first_before - centroid_before))
-            < 1.0e-6);
+        assert!(
+            model.meshes[0].nodes[0]
+                .position
+                .distance(centroid_before + rotation * (first_before - centroid_before))
+                < 1.0e-6
+        );
     }
 
     #[test]
@@ -1517,8 +1621,7 @@ mod tests {
             nodes: vec![NodeId(0), NodeId(1)],
         });
         let mut model = FemModel::single_mesh("Part", mesh);
-        let positions_before: Vec<_> = model
-            .meshes[0]
+        let positions_before: Vec<_> = model.meshes[0]
             .nodes
             .iter()
             .map(|node| node.position)
@@ -1545,6 +1648,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             node_ids
         );
-        assert_eq!(model.meshes[0].node_sets[0].nodes, vec![NodeId(0), NodeId(1)]);
+        assert_eq!(
+            model.meshes[0].node_sets[0].nodes,
+            vec![NodeId(0), NodeId(1)]
+        );
     }
 }
