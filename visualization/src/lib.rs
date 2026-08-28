@@ -21,9 +21,10 @@ pub use boundary_viz::{
 };
 pub use colorbar::ColorbagRoot;
 pub use demo_mesh::{
-    ContactReviewSettings, ContourSettings, DefinedContactPreview, FemMeshVisual, FemPartVisual,
-    FlatMaterial, TransparentMaterial, VisualizationMode, VisualizationSettings,
-    build_part_edge_mesh, build_part_surface_mesh,
+    ContactDraftPreview, ContactDraftSlave, ContactDraftSurface, ContactReviewSettings,
+    ContourSettings, DefinedContactPreview, FemMeshVisual, FemPartVisual, FlatMaterial,
+    TransparentMaterial, VisualizationMode, VisualizationSettings, build_part_edge_mesh,
+    build_part_surface_mesh,
 };
 
 pub struct VisualizationPlugin;
@@ -33,6 +34,7 @@ impl Plugin for VisualizationPlugin {
         app.init_resource::<VisualizationSettings>();
         app.init_resource::<ContactReviewSettings>();
         app.init_resource::<DefinedContactPreview>();
+        app.init_resource::<ContactDraftPreview>();
         app.init_resource::<demo_mesh::ContactReviewPose>();
         app.init_resource::<fem_core::FemModelVersion>();
         app.init_resource::<fem_core::ContactCandidateState>();

@@ -4,9 +4,9 @@ use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use fem_core::{
-    ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, FaceId, FemEdge,
-    FemElement, FemEntityId, FemEntityRef, FemFace, FemMesh, FemModel, FemNode, FemResultSet,
-    NodeId, SurfaceSetRef, rainbow_color,
+    ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, ElementFaceRef, FaceId,
+    FemEdge, FemElement, FemEntityId, FemEntityRef, FemFace, FemMesh, FemModel, FemNode,
+    FemResultSet, NodeId, SurfaceSetRef, rainbow_color,
 };
 use interaction::HoverResult;
 use std::collections::BTreeSet;
@@ -75,6 +75,43 @@ pub struct DefinedContactPreview {
     pub selected: Option<usize>,
 
     pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactDraftSurface {
+    pub mesh_index: usize,
+
+    pub surfaces: Vec<ElementFaceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContactDraftSlave {
+    Nodes {
+        mesh_index: usize,
+        nodes: Vec<NodeId>,
+    },
+
+    Surface(ContactDraftSurface),
+}
+
+/// Geometry captured while a new contact pair is being assembled in the UI.
+/// It intentionally stores raw members instead of creating solver groups
+/// immediately, so recapturing a side does not leave orphan NGRP/SGRP entries.
+#[derive(Resource, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ContactDraftPreview {
+    pub master: Option<ContactDraftSurface>,
+
+    pub slave: Option<ContactDraftSlave>,
+
+    pub active: bool,
+}
+
+impl ContactDraftPreview {
+    pub fn clear(&mut self) {
+        self.master = None;
+        self.slave = None;
+        self.active = false;
+    }
 }
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
@@ -1284,6 +1321,7 @@ pub(crate) fn update_contact_candidate_highlights(
     state: Res<ContactCandidateState>,
     pose: Res<ContactReviewPose>,
     defined: Res<DefinedContactPreview>,
+    draft: Res<ContactDraftPreview>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut query: Query<(
         &ContactCandidateHighlight,
@@ -1295,16 +1333,18 @@ pub(crate) fn update_contact_candidate_highlights(
 ) {
     let rebuild = state.is_changed()
         || defined.is_changed()
+        || draft.is_changed()
         || model.as_ref().is_some_and(|model| model.is_changed());
     let candidate = pose.active.then(|| state.selected_candidate()).flatten();
-    let defined_contact = if candidate.is_none() && defined.active {
+    let draft_active = candidate.is_none() && draft.active;
+    let defined_contact = if candidate.is_none() && !draft_active && defined.active {
         model
             .as_deref()
             .and_then(|model| defined.selected.and_then(|index| model.contacts.get(index)))
     } else {
         None
     };
-    let source_active = candidate.is_some() || defined_contact.is_some();
+    let source_active = candidate.is_some() || draft_active || defined_contact.is_some();
 
     for (highlight, mut mesh, mut transform, mut visibility, mut availability) in &mut query {
         if rebuild {
@@ -1317,6 +1357,10 @@ pub(crate) fn update_contact_candidate_highlights(
                     let fem_mesh = model.meshes.get(mesh_index)?;
                     build_highlight_faces_mesh(fem_mesh, face_ids)
                 })
+            } else if draft_active {
+                model
+                    .as_deref()
+                    .and_then(|model| build_draft_contact_highlight(model, &draft, *highlight))
             } else {
                 model.as_deref().and_then(|model| {
                     build_defined_contact_highlight(model, defined_contact?, *highlight)
@@ -1346,6 +1390,47 @@ pub(crate) fn update_contact_candidate_highlights(
             Visibility::Hidden
         };
     }
+}
+
+fn build_draft_contact_highlight(
+    model: &FemModel,
+    draft: &ContactDraftPreview,
+    highlight: ContactCandidateHighlight,
+) -> Option<Mesh> {
+    match highlight {
+        ContactCandidateHighlight::Master => {
+            build_draft_surface_highlight_mesh(model, draft.master.as_ref()?)
+        }
+        ContactCandidateHighlight::Slave => match draft.slave.as_ref()? {
+            ContactDraftSlave::Nodes { mesh_index, nodes } => build_highlight_nodes_mesh(
+                model.meshes.get(*mesh_index)?,
+                nodes,
+                model_visual_scale(model) * 0.006,
+            ),
+            ContactDraftSlave::Surface(surface) => {
+                build_draft_surface_highlight_mesh(model, surface)
+            }
+        },
+    }
+}
+
+fn build_draft_surface_highlight_mesh(
+    model: &FemModel,
+    surface: &ContactDraftSurface,
+) -> Option<Mesh> {
+    let fem_mesh = model.meshes.get(surface.mesh_index)?;
+    let element_faces: BTreeSet<_> = surface.surfaces.iter().copied().collect();
+    let face_ids: Vec<_> = fem_mesh
+        .cached_boundary_faces()
+        .iter()
+        .filter(|face| {
+            face.element_face_ref()
+                .is_some_and(|reference| element_faces.contains(&reference))
+        })
+        .map(|face| face.id)
+        .collect();
+
+    build_highlight_faces_mesh(fem_mesh, &face_ids)
 }
 
 fn build_defined_contact_highlight(

@@ -8,9 +8,9 @@ use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use camera::OrbitCamera;
 use fem_core::{
-    ContactCandidateState, ContactSlaveRef, ContactType, FemEntityId, FemEntityRef, FemModel,
-    FemModelVersion, FemResultSet, MeshLoadRequest, MeshLoadStatus, SelectionFilter,
-    SelectionLevel, UiPointerState, ViewportTool,
+    ContactCandidateState, ContactPair, ContactSlaveRef, ContactType, FemEntityId, FemEntityRef,
+    FemModel, FemModelVersion, FemNodeSet, FemResultSet, FemSurfaceSet, MeshLoadRequest,
+    MeshLoadStatus, SelectionFilter, SelectionLevel, UiPointerState, ViewportTool,
 };
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
@@ -18,8 +18,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use visualization::ContourSettings;
 use visualization::{
-    BoundaryLoadPreview, BoundaryLoadPreviewArrow, BoundaryLoadPreviewKind, ContactReviewSettings,
-    DefinedContactPreview, VisualizationMode, VisualizationSettings,
+    BoundaryLoadPreview, BoundaryLoadPreviewArrow, BoundaryLoadPreviewKind, ContactDraftPreview,
+    ContactDraftSlave, ContactDraftSurface, ContactReviewSettings, DefinedContactPreview,
+    VisualizationMode, VisualizationSettings,
 };
 
 const PANEL_BG: Color = Color::srgba(0.035, 0.04, 0.045, 0.88);
@@ -31,6 +32,8 @@ const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 const ACTIVE_BORDER: Color = Color::srgb(0.57, 0.86, 0.92);
+const CONTACT_MASTER_BUTTON: Color = Color::srgb(0.16, 0.34, 0.60);
+const CONTACT_SLAVE_BUTTON: Color = Color::srgb(0.62, 0.31, 0.08);
 const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
 const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 const SELECTION_GUIDE_TEXT: &str = "Click / drag       Replace selection\n\
@@ -203,6 +206,66 @@ pub(crate) struct CreateSurfaceButton;
 
 #[derive(Component)]
 pub(crate) struct CreateContactButton;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ContactPairKind {
+    #[default]
+    NodeSurface,
+
+    SurfaceSurface,
+}
+
+impl ContactPairKind {
+    const ALL: [Self; 2] = [Self::NodeSurface, Self::SurfaceSurface];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NodeSurface => "NODE-SURF",
+            Self::SurfaceSurface => "SURF-SURF",
+        }
+    }
+}
+
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct ContactDefinitionSettings {
+    pub pair_kind: ContactPairKind,
+
+    pub contact_type: ContactType,
+
+    pub message: String,
+}
+
+impl Default for ContactDefinitionSettings {
+    fn default() -> Self {
+        Self {
+            pair_kind: ContactPairKind::NodeSurface,
+            contact_type: ContactType::SmallSliding,
+            message: "Select slave nodes, then capture Slave".to_string(),
+        }
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct ContactPairKindButton(pub ContactPairKind);
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct ContactBehaviorButton(pub ContactType);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContactCaptureSide {
+    Slave,
+
+    Master,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct CaptureContactSideButton(pub ContactCaptureSide);
+
+#[derive(Component)]
+pub(crate) struct FinalizeContactButton;
+
+#[derive(Component)]
+pub(crate) struct ContactDraftStatusText;
 
 #[derive(Component)]
 pub(crate) struct DetectContactsButton;
@@ -981,16 +1044,126 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 ));
                 hint_text(sec, "Click a pair to review: master = blue, slave = orange");
                 sec.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: px(6.0),
+                    Text::new("NEW CONTACT — TOPOLOGY"),
+                    TextFont {
+                        font_size: FontSize::Px(9.2),
                         ..default()
                     },
-                )).with_children(|row| {
-                    action_button(row, "Make Surface",    CreateSurfaceButton,  "CreateSurfaceButton");
-                    action_button(row, "Make Contact",    CreateContactButton,  "CreateContactButton");
+                    TextColor(TEXT_MUTED),
+                ));
+                sec.spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    ..default()
+                },))
+                .with_children(|row| {
+                    for (index, kind) in ContactPairKind::ALL.into_iter().enumerate() {
+                        let (radius, border) = segment_style(index == 0, index == 1);
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(26.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border,
+                                border_radius: radius,
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            ContactPairKindButton(kind),
+                            Name::new(format!("ContactPairKind_{}", kind.label())),
+                        ))
+                        .with_child((
+                            Text::new(kind.label()),
+                            TextFont {
+                                font_size: FontSize::Px(10.5),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
                 });
-                hint_text(sec, "Select contact faces, create surfaces, then define a pair manually");
+                sec.spawn((
+                    Text::new("BEHAVIOR"),
+                    TextFont {
+                        font_size: FontSize::Px(9.2),
+                        ..default()
+                    },
+                    TextColor(TEXT_MUTED),
+                ));
+                sec.spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(4.0),
+                    ..default()
+                },))
+                .with_children(|row| {
+                    for (contact_type, label) in [
+                        (ContactType::SmallSliding, "Small"),
+                        (ContactType::FiniteSliding, "Finite"),
+                        (ContactType::Tied, "Tied"),
+                    ] {
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(25.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            ContactBehaviorButton(contact_type),
+                            Name::new(format!("ContactBehavior_{label}")),
+                        ))
+                        .with_child((
+                            Text::new(label),
+                            TextFont {
+                                font_size: FontSize::Px(10.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+                sec.spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(6.0),
+                    ..default()
+                },))
+                .with_children(|row| {
+                    action_button(
+                        row,
+                        "1  Capture Slave",
+                        CaptureContactSideButton(ContactCaptureSide::Slave),
+                        "CaptureContactSlaveButton",
+                    );
+                    action_button(
+                        row,
+                        "2  Capture Master",
+                        CaptureContactSideButton(ContactCaptureSide::Master),
+                        "CaptureContactMasterButton",
+                    );
+                });
+                sec.spawn((
+                    Text::new("Slave: not set   Master: not set"),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_MUTED),
+                    ContactDraftStatusText,
+                ));
+                action_button(
+                    sec,
+                    "3  Create Contact Pair",
+                    FinalizeContactButton,
+                    "FinalizeContactButton",
+                );
+                hint_text(sec, "Captured geometry is previewed immediately; master = blue, slave = orange");
             });
             divider(panel);
 
@@ -2494,8 +2667,11 @@ const MODEL_SELECTION_LEVELS: &[SelectionLevel] = &[
     SelectionLevel::Face,
     SelectionLevel::Element,
 ];
-const CONTACT_SELECTION_LEVELS: &[SelectionLevel] =
-    &[SelectionLevel::Face, SelectionLevel::Element];
+const CONTACT_SELECTION_LEVELS: &[SelectionLevel] = &[
+    SelectionLevel::Node,
+    SelectionLevel::Face,
+    SelectionLevel::Element,
+];
 const LOAD_SELECTION_LEVELS: &[SelectionLevel] = &[
     SelectionLevel::Node,
     SelectionLevel::Face,
@@ -2512,9 +2688,9 @@ fn selection_context_for_page(page: SidebarPage) -> SelectionPageContext {
             preferred: SelectionLevel::Element,
         },
         SidebarPage::Contact => SelectionPageContext {
-            label: "SELECT CONTACT SURFACE",
+            label: "SELECT CONTACT SIDE",
             levels: CONTACT_SELECTION_LEVELS,
-            preferred: SelectionLevel::Face,
+            preferred: SelectionLevel::Node,
         },
         SidebarPage::Loads => SelectionPageContext {
             label: "SELECT BC / LOAD TARGET",
@@ -3360,6 +3536,393 @@ pub(crate) fn create_contact_button_system(
         *background = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
     }
+}
+
+pub(crate) fn contact_pair_kind_button_system(
+    mut commands: Commands,
+    mut settings: ResMut<ContactDefinitionSettings>,
+    mut draft: ResMut<ContactDraftPreview>,
+    mut filter: ResMut<SelectionFilter>,
+    mut selection: ResMut<SelectionState>,
+    mut candidates: ResMut<ContactCandidateState>,
+    selected_query: Query<Entity, With<Selected>>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &ContactPairKindButton,
+        ),
+        With<ContactPairKindButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        if *interaction == Interaction::Pressed
+            && interaction.is_changed()
+            && settings.pair_kind != button.0
+        {
+            settings.pair_kind = button.0;
+            draft.slave = None;
+            settings.message = match button.0 {
+                ContactPairKind::NodeSurface => {
+                    filter.level = SelectionLevel::Node;
+                    "Select slave nodes, then capture Slave".to_string()
+                }
+                ContactPairKind::SurfaceSurface => {
+                    filter.level = SelectionLevel::Face;
+                    "Select the slave surface, then capture Slave".to_string()
+                }
+            };
+            candidates.candidates.clear();
+            candidates.selected = None;
+            selection.clear();
+            for entity in &selected_query {
+                commands.entity(entity).remove::<Selected>();
+            }
+        }
+
+        let active = settings.pair_kind == button.0;
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+}
+
+pub(crate) fn contact_behavior_button_system(
+    mut settings: ResMut<ContactDefinitionSettings>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &ContactBehaviorButton,
+        ),
+        With<ContactBehaviorButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            settings.contact_type = button.0;
+        }
+
+        let active = settings.contact_type == button.0;
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+}
+
+fn contact_nodes_from_selection(
+    selection: &SelectionState,
+) -> Result<(usize, Vec<fem_core::NodeId>), String> {
+    let mut groups = selected_nodes_by_mesh(selection).into_iter();
+    let Some((mesh_index, nodes)) = groups.next() else {
+        return Err("Slave requires selected nodes".to_string());
+    };
+    if groups.next().is_some() {
+        return Err("Select slave nodes from one mesh only".to_string());
+    }
+
+    Ok((mesh_index, nodes))
+}
+
+fn contact_surface_from_selection(
+    model: &FemModel,
+    selection: &SelectionState,
+) -> Result<ContactDraftSurface, String> {
+    let mut by_mesh = BTreeMap::<usize, Vec<FemEntityId>>::new();
+    for target in &selection.targets {
+        if matches!(
+            target.entity,
+            FemEntityId::Face(_) | FemEntityId::Element(_)
+        ) {
+            by_mesh
+                .entry(target.mesh_index)
+                .or_default()
+                .push(target.entity);
+        }
+    }
+
+    let mut surfaces = by_mesh.into_iter().filter_map(|(mesh_index, targets)| {
+        let surfaces = model
+            .meshes
+            .get(mesh_index)?
+            .surface_refs_from_targets(&targets);
+        (!surfaces.is_empty()).then_some(ContactDraftSurface {
+            mesh_index,
+            surfaces,
+        })
+    });
+    let Some(surface) = surfaces.next() else {
+        return Err("Select boundary faces or surface elements first".to_string());
+    };
+    if surfaces.next().is_some() {
+        return Err("Capture one mesh surface at a time".to_string());
+    }
+
+    Ok(surface)
+}
+
+pub(crate) fn capture_contact_side_button_system(
+    mut commands: Commands,
+    model: Option<Res<FemModel>>,
+    mut settings: ResMut<ContactDefinitionSettings>,
+    mut draft: ResMut<ContactDraftPreview>,
+    mut filter: ResMut<SelectionFilter>,
+    mut selection: ResMut<SelectionState>,
+    mut candidates: ResMut<ContactCandidateState>,
+    selected_query: Query<Entity, With<Selected>>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &CaptureContactSideButton,
+        ),
+        With<CaptureContactSideButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let result = match (button.0, settings.pair_kind, model.as_deref()) {
+                (ContactCaptureSide::Slave, ContactPairKind::NodeSurface, _) => {
+                    contact_nodes_from_selection(&selection).map(|(mesh_index, nodes)| {
+                        draft.slave = Some(ContactDraftSlave::Nodes { mesh_index, nodes });
+                        filter.level = SelectionLevel::Face;
+                        "Slave nodes captured; select the master surface".to_string()
+                    })
+                }
+                (ContactCaptureSide::Slave, ContactPairKind::SurfaceSurface, Some(model)) => {
+                    contact_surface_from_selection(model, &selection).map(|surface| {
+                        draft.slave = Some(ContactDraftSlave::Surface(surface));
+                        filter.level = SelectionLevel::Face;
+                        "Slave surface captured; select the master surface".to_string()
+                    })
+                }
+                (ContactCaptureSide::Master, _, Some(model)) => {
+                    contact_surface_from_selection(model, &selection).map(|surface| {
+                        draft.master = Some(surface);
+                        "Master surface captured; create the contact pair".to_string()
+                    })
+                }
+                _ => Err("No model is loaded".to_string()),
+            };
+
+            match result {
+                Ok(message) => {
+                    settings.message = message;
+                    candidates.candidates.clear();
+                    candidates.selected = None;
+                    selection.clear();
+                    for entity in &selected_query {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+                Err(message) => settings.message = message,
+            }
+        }
+
+        let captured = match button.0 {
+            ContactCaptureSide::Slave => draft.slave.is_some(),
+            ContactCaptureSide::Master => draft.master.is_some(),
+        };
+        let captured_color = match button.0 {
+            ContactCaptureSide::Slave => CONTACT_SLAVE_BUTTON,
+            ContactCaptureSide::Master => CONTACT_MASTER_BUTTON,
+        };
+        *background = BackgroundColor(match (*interaction, captured) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => captured_color,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if captured {
+            ACTIVE_BORDER
+        } else {
+            PANEL_BORDER
+        });
+    }
+}
+
+fn create_contact_from_draft(
+    model: &mut FemModel,
+    draft: &ContactDraftPreview,
+    pair_kind: ContactPairKind,
+    contact_type: ContactType,
+) -> Result<usize, String> {
+    let master = draft
+        .master
+        .as_ref()
+        .ok_or_else(|| "Capture the master surface first".to_string())?;
+    let slave = draft
+        .slave
+        .as_ref()
+        .ok_or_else(|| "Capture the slave side first".to_string())?;
+    let slave_matches_kind = matches!(
+        (pair_kind, slave),
+        (
+            ContactPairKind::NodeSurface,
+            ContactDraftSlave::Nodes { .. }
+        ) | (
+            ContactPairKind::SurfaceSurface,
+            ContactDraftSlave::Surface(_)
+        )
+    );
+    if !slave_matches_kind {
+        return Err("Captured slave does not match the selected topology".to_string());
+    }
+    let pair_number = model.contacts.len() + 1;
+    let pair_name = format!("CONTACT_{pair_number}");
+
+    let master_ref = {
+        let mesh = model
+            .meshes
+            .get_mut(master.mesh_index)
+            .ok_or_else(|| "Master mesh no longer exists".to_string())?;
+        let index = mesh.surface_sets.len();
+        mesh.surface_sets.push(FemSurfaceSet {
+            name: format!("{pair_name}_MASTER"),
+            surfaces: master.surfaces.clone(),
+        });
+        fem_core::SurfaceSetRef::new(master.mesh_index, index)
+    };
+
+    let contact = match (pair_kind, slave) {
+        (ContactPairKind::NodeSurface, ContactDraftSlave::Nodes { mesh_index, nodes }) => {
+            let mesh = model
+                .meshes
+                .get_mut(*mesh_index)
+                .ok_or_else(|| "Slave mesh no longer exists".to_string())?;
+            let index = mesh.node_sets.len();
+            mesh.node_sets.push(FemNodeSet {
+                name: format!("{pair_name}_SLAVE"),
+                nodes: nodes.clone(),
+            });
+            ContactPair::new_node_surface(
+                pair_name.clone(),
+                master_ref,
+                fem_core::NodeSetRef::new(*mesh_index, index),
+                contact_type,
+            )
+        }
+        (ContactPairKind::SurfaceSurface, ContactDraftSlave::Surface(surface)) => {
+            let mesh = model
+                .meshes
+                .get_mut(surface.mesh_index)
+                .ok_or_else(|| "Slave mesh no longer exists".to_string())?;
+            let index = mesh.surface_sets.len();
+            mesh.surface_sets.push(FemSurfaceSet {
+                name: format!("{pair_name}_SLAVE"),
+                surfaces: surface.surfaces.clone(),
+            });
+            ContactPair::new(
+                pair_name.clone(),
+                master_ref,
+                fem_core::SurfaceSetRef::new(surface.mesh_index, index),
+                contact_type,
+            )
+        }
+        _ => return Err("Captured slave does not match the selected topology".to_string()),
+    };
+
+    model.contacts.push(contact);
+    Ok(model.contacts.len() - 1)
+}
+
+pub(crate) fn finalize_contact_button_system(
+    mut model: Option<ResMut<FemModel>>,
+    mut settings: ResMut<ContactDefinitionSettings>,
+    mut draft: ResMut<ContactDraftPreview>,
+    mut defined: ResMut<DefinedContactPreview>,
+    mut candidates: ResMut<ContactCandidateState>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        With<FinalizeContactButton>,
+    >,
+) {
+    for (interaction, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let result = model
+                .as_deref_mut()
+                .ok_or_else(|| "No model is loaded".to_string())
+                .and_then(|model| {
+                    create_contact_from_draft(
+                        model,
+                        &draft,
+                        settings.pair_kind,
+                        settings.contact_type,
+                    )
+                });
+            match result {
+                Ok(index) => {
+                    let name = model
+                        .as_deref()
+                        .and_then(|model| model.contacts.get(index))
+                        .map(|contact| contact.name.clone())
+                        .unwrap_or_else(|| "contact".to_string());
+                    draft.clear();
+                    defined.selected = Some(index);
+                    candidates.candidates.clear();
+                    candidates.selected = None;
+                    settings.message = format!("Created {name}");
+                }
+                Err(message) => settings.message = message,
+            }
+        }
+
+        let ready = draft.master.is_some() && draft.slave.is_some();
+        *background = BackgroundColor(match (*interaction, ready) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if ready { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+}
+
+pub(crate) fn update_contact_draft_status(
+    settings: Res<ContactDefinitionSettings>,
+    draft: Res<ContactDraftPreview>,
+    mut query: Query<&mut Text, With<ContactDraftStatusText>>,
+) {
+    if !settings.is_changed() && !draft.is_changed() {
+        return;
+    }
+    let Ok(mut text) = query.single_mut() else {
+        return;
+    };
+
+    let slave = match draft.slave.as_ref() {
+        Some(ContactDraftSlave::Nodes { mesh_index, nodes }) => {
+            format!("Slave: {} nodes (part {})", nodes.len(), mesh_index + 1)
+        }
+        Some(ContactDraftSlave::Surface(surface)) => format!(
+            "Slave: {} faces (part {})",
+            surface.surfaces.len(),
+            surface.mesh_index + 1
+        ),
+        None => "Slave: not set".to_string(),
+    };
+    let master = draft.master.as_ref().map_or_else(
+        || "Master: not set".to_string(),
+        |surface| {
+            format!(
+                "Master: {} faces (part {})",
+                surface.surfaces.len(),
+                surface.mesh_index + 1
+            )
+        },
+    );
+    **text = format!("{slave}\n{master}\n{}", settings.message);
 }
 
 /// Runs [`FemModel::find_contact_candidates`] against the current model and
@@ -5736,6 +6299,7 @@ fn contact_definition_button(parent: &mut ChildSpawnerCommands, index: usize, la
 
 pub(crate) fn defined_contact_button_system(
     mut preview: ResMut<DefinedContactPreview>,
+    mut draft: ResMut<ContactDraftPreview>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -5749,6 +6313,7 @@ pub(crate) fn defined_contact_button_system(
     for (interaction, mut background, mut border, button) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             preview.selected = Some(button.0);
+            draft.clear();
         }
 
         let selected = preview.selected == Some(button.0);
@@ -5767,13 +6332,14 @@ pub(crate) fn defined_contact_button_system(
     }
 }
 
-/// Enables the loaded-contact overlay only on the Contact page. An active
-/// automatic candidate review temporarily takes precedence over this view.
+/// Enables contact overlays only on the Contact page. Candidate review has
+/// first priority, an in-progress draft second, and a defined pair third.
 pub(crate) fn sync_defined_contact_preview(
     page: Res<SidebarPage>,
     model: Option<Res<FemModel>>,
     candidates: Res<ContactCandidateState>,
     mut preview: ResMut<DefinedContactPreview>,
+    mut draft: ResMut<ContactDraftPreview>,
 ) {
     let contact_count = model.as_deref().map_or(0, |model| model.contacts.len());
     let selected = match preview.selected {
@@ -5781,8 +6347,13 @@ pub(crate) fn sync_defined_contact_preview(
         _ if contact_count > 0 => Some(0),
         _ => None,
     };
+    let draft_has_geometry = draft.master.is_some() || draft.slave.is_some();
+    let draft_active = *page == SidebarPage::Contact
+        && candidates.selected_candidate().is_none()
+        && draft_has_geometry;
     let active = *page == SidebarPage::Contact
         && candidates.selected_candidate().is_none()
+        && !draft_has_geometry
         && selected.is_some();
 
     if preview.selected != selected {
@@ -5790,6 +6361,9 @@ pub(crate) fn sync_defined_contact_preview(
     }
     if preview.active != active {
         preview.active = active;
+    }
+    if draft.active != draft_active {
+        draft.active = draft_active;
     }
 }
 
@@ -7154,11 +7728,12 @@ mod sidebar_page_tests {
     use std::path::PathBuf;
 
     use super::{
-        CameraFitRequest, SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage,
+        CameraFitRequest, ContactPairKind, SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage,
         SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings, apply_mesh,
-        merge_mesh_contact_pairs, selected_nodes_by_mesh, selection_context_for_page,
-        selection_operation_hint, sidebar_page_display, signed_preview_direction,
-        supports_surface_growth, surface_selection_hint, update_hover_preview_group,
+        create_contact_from_draft, merge_mesh_contact_pairs, selected_nodes_by_mesh,
+        selection_context_for_page, selection_operation_hint, sidebar_page_display,
+        signed_preview_direction, supports_surface_growth, surface_selection_hint,
+        update_hover_preview_group,
     };
     use bevy::prelude::{App, Display, Update, Vec3};
     use fem_core::{
@@ -7168,6 +7743,7 @@ mod sidebar_page_tests {
     };
     use interaction::HoverResult;
     use selection::{SelectionOperation, SelectionState};
+    use visualization::{ContactDraftPreview, ContactDraftSlave, ContactDraftSurface};
 
     #[test]
     fn analysis_shell_is_limited_to_analysis_pages() {
@@ -7222,9 +7798,13 @@ mod sidebar_page_tests {
         let contact = selection_context_for_page(SidebarPage::Contact);
         assert_eq!(
             contact.levels,
-            &[SelectionLevel::Face, SelectionLevel::Element]
+            &[
+                SelectionLevel::Node,
+                SelectionLevel::Face,
+                SelectionLevel::Element,
+            ]
         );
-        assert_eq!(contact.preferred, SelectionLevel::Face);
+        assert_eq!(contact.preferred, SelectionLevel::Node);
 
         let loads = selection_context_for_page(SidebarPage::Loads);
         assert!(loads.levels.contains(&SelectionLevel::Node));
@@ -7242,6 +7822,49 @@ mod sidebar_page_tests {
             selection_context_for_page(SidebarPage::Results)
                 .levels
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn node_surface_draft_creates_groups_and_contact_only_when_finalized() {
+        let mut model = FemModel::demo_hex8();
+        let master_face = model.meshes[0].cached_boundary_faces()[0]
+            .element_face_ref()
+            .unwrap();
+        let draft = ContactDraftPreview {
+            master: Some(ContactDraftSurface {
+                mesh_index: 0,
+                surfaces: vec![master_face],
+            }),
+            slave: Some(ContactDraftSlave::Nodes {
+                mesh_index: 0,
+                nodes: vec![NodeId(0), NodeId(1)],
+            }),
+            active: true,
+        };
+
+        assert!(model.contacts.is_empty());
+        assert!(model.meshes[0].node_sets.is_empty());
+        assert!(model.meshes[0].surface_sets.is_empty());
+
+        let index = create_contact_from_draft(
+            &mut model,
+            &draft,
+            ContactPairKind::NodeSurface,
+            fem_core::ContactType::FiniteSliding,
+        )
+        .unwrap();
+
+        assert_eq!(index, 0);
+        assert_eq!(model.meshes[0].node_sets[0].nodes.len(), 2);
+        assert_eq!(model.meshes[0].surface_sets[0].surfaces.len(), 1);
+        assert_eq!(
+            model.contacts[0].slave,
+            fem_core::ContactSlaveRef::Nodes(fem_core::NodeSetRef::new(0, 0))
+        );
+        assert_eq!(
+            model.contacts[0].contact_type,
+            fem_core::ContactType::FiniteSliding
         );
     }
 
