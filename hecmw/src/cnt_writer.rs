@@ -165,14 +165,30 @@ fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
 }
 
 fn write_contact(out: &mut String, contact: &ContactPair, group_id: usize) {
+    writeln!(
+        out,
+        "!CONTACT, GRPID={group_id}, INTERACTION={}",
+        contact.contact_type.frontistr_interaction()
+    )
+    .unwrap();
     match contact.contact_type {
-        ContactType::Tied => {
-            writeln!(out, "!CONTACT, GRPID={group_id}, INTERACTION=TIED").unwrap();
-            writeln!(out, " {}", contact.name).unwrap();
-        }
-        ContactType::Frictionless => {
-            writeln!(out, "!CONTACT, GRPID={group_id}, INTERACTION=SSLID").unwrap();
-            writeln!(out, " {},0.0", contact.name).unwrap();
+        ContactType::Tied => writeln!(out, " {}", contact.name).unwrap(),
+        ContactType::SmallSliding | ContactType::FiniteSliding => {
+            if let Some(factor) = contact.penalty_factor {
+                writeln!(
+                    out,
+                    " {},{:.6e},{factor:.6e}",
+                    contact.name, contact.friction_coefficient
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    " {},{:.6e}",
+                    contact.name, contact.friction_coefficient
+                )
+                .unwrap();
+            }
         }
     }
     writeln!(out).unwrap();
@@ -285,7 +301,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_tied_and_frictionless_contact_interactions() {
+    fn writes_tied_and_sliding_contact_interactions() {
         let contacts = vec![
             ContactPair::new(
                 "TIED_PAIR",
@@ -294,17 +310,29 @@ mod tests {
                 ContactType::Tied,
             ),
             ContactPair::new(
-                "SLIDING_PAIR",
+                "SMALL_SLIDING_PAIR",
                 SurfaceSetRef::new(0, 2),
                 SurfaceSetRef::new(0, 3),
-                ContactType::Frictionless,
+                ContactType::SmallSliding,
             ),
+            ContactPair::new(
+                "FINITE_SLIDING_PAIR",
+                SurfaceSetRef::new(0, 4),
+                SurfaceSetRef::new(0, 5),
+                ContactType::FiniteSliding,
+            )
+            .with_contact_parameters(0.1, Some(1.0e5)),
         ];
 
         let text = build_cnt(&AnalysisSetup::default(), &contacts);
 
         assert!(text.contains("!CONTACT, GRPID=1, INTERACTION=TIED\n TIED_PAIR\n"));
-        assert!(text.contains("!CONTACT, GRPID=2, INTERACTION=SSLID\n SLIDING_PAIR,0.0\n"));
+        assert!(
+            text.contains("!CONTACT, GRPID=2, INTERACTION=SSLID\n SMALL_SLIDING_PAIR,0.000000e0\n")
+        );
+        assert!(text.contains(
+            "!CONTACT, GRPID=3, INTERACTION=FSLID\n FINITE_SLIDING_PAIR,1.000000e-1,1.000000e5\n"
+        ));
     }
 
     #[test]

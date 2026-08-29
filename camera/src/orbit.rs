@@ -43,6 +43,26 @@ pub fn radius_limits(fit_radius: f32) -> (f32, f32) {
     (min_radius, max_radius)
 }
 
+/// Chooses a stable screen-up vector for an orbit direction. Global Y is the
+/// normal up direction, but top and bottom views need Z to avoid a collinear
+/// `look_at` basis.
+pub fn orbit_camera_up(direction_from_focus: Vec3) -> Vec3 {
+    let direction = if direction_from_focus.length_squared() > 1.0e-12 {
+        direction_from_focus.normalize()
+    } else {
+        Vec3::Z
+    };
+    if direction.dot(Vec3::Y).abs() > 0.98 {
+        if direction.y >= 0.0 {
+            Vec3::Z
+        } else {
+            -Vec3::Z
+        }
+    } else {
+        Vec3::Y
+    }
+}
+
 pub fn orbit_camera_system(
     buttons: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -73,23 +93,23 @@ pub fn orbit_camera_system(
             let pan_scale = orbit.radius * 0.0012;
 
             let right = transform.rotation * Vec3::X;
-            let up    = transform.rotation * Vec3::Y;
+            let up = transform.rotation * Vec3::Y;
 
-            let delta = -right * rotation_move.x * pan_scale
-                         + up  * rotation_move.y * pan_scale;
+            let delta = -right * rotation_move.x * pan_scale + up * rotation_move.y * pan_scale;
 
-            orbit.focus        += delta;
+            orbit.focus += delta;
             orbit.target_focus += delta;
         } else {
             // Orbit
-            let yaw   = -rotation_move.x * 0.005;
+            let yaw = -rotation_move.x * 0.005;
             let pitch = -rotation_move.y * 0.005;
 
             let rot = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
             let offset = transform.translation - orbit.focus;
+            let rotated_offset = rot * offset;
 
-            transform.translation = orbit.focus + rot * offset;
-            transform.look_at(orbit.focus, Vec3::Y);
+            transform.translation = orbit.focus + rotated_offset;
+            transform.look_at(orbit.focus, orbit_camera_up(rotated_offset));
         }
     }
 
@@ -128,7 +148,7 @@ pub fn orbit_camera_system(
 
     transform.translation = orbit.focus + dir * orbit.radius;
 
-    transform.look_at(orbit.focus, Vec3::Y);
+    transform.look_at(orbit.focus, orbit_camera_up(dir));
 }
 
 #[cfg(test)]
@@ -194,5 +214,12 @@ mod tests {
         scroll(&mut app, window, 1.0);
         app.update();
         assert_eq!(app.world().get::<OrbitCamera>(camera).unwrap().radius, 8.5);
+    }
+
+    #[test]
+    fn top_and_bottom_views_use_a_non_collinear_up_axis() {
+        assert!(orbit_camera_up(Vec3::Y).dot(Vec3::Y).abs() < 1.0e-6);
+        assert!(orbit_camera_up(-Vec3::Y).dot(Vec3::Y).abs() < 1.0e-6);
+        assert_eq!(orbit_camera_up(Vec3::Z), Vec3::Y);
     }
 }

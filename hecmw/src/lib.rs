@@ -67,6 +67,29 @@ pub enum HecmwLoadError {
     Parse(HecmwParseError),
 }
 
+/// A `!CONTACT PAIR` declaration from a HEC-MW mesh file. The data line is
+/// stored in FrontISTR order (`slave, master`) and resolved to surface-set
+/// indices by the caller after the mesh has been inserted into a model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HecmwContactPairDefinition {
+    pub name: String,
+
+    pub pair_type: HecmwContactPairType,
+
+    pub slave_group_name: String,
+
+    pub master_surface_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HecmwContactPairType {
+    /// FrontISTR's default: slave node group against a master surface group.
+    #[default]
+    NodeSurface,
+
+    SurfaceSurface,
+}
+
 impl fmt::Display for HecmwLoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -116,10 +139,90 @@ pub fn load_mesh_file(path: impl AsRef<Path>) -> Result<FemMesh, HecmwLoadError>
 pub fn load_mesh_file_with_setup(
     path: impl AsRef<Path>,
 ) -> Result<(FemMesh, Vec<fem_core::FemMaterial>, Vec<fem_core::Section>), HecmwLoadError> {
+    let (mesh, materials, sections, _) = load_mesh_file_with_setup_and_contacts(path)?;
+    Ok((mesh, materials, sections))
+}
+
+/// Extended project loader that also preserves `!CONTACT PAIR` declarations.
+/// This is used by Open Project; the shorter [`load_mesh_file_with_setup`]
+/// remains available to callers that only need geometry and assignments.
+pub fn load_mesh_file_with_setup_and_contacts(
+    path: impl AsRef<Path>,
+) -> Result<
+    (
+        FemMesh,
+        Vec<fem_core::FemMaterial>,
+        Vec<fem_core::Section>,
+        Vec<HecmwContactPairDefinition>,
+    ),
+    HecmwLoadError,
+> {
     let source = fs::read_to_string(path)?;
     let mesh = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
     let (materials, sections) = parse_msh_setup(&source, 0);
-    Ok((mesh, materials, sections))
+    let contacts = parse_msh_contact_pairs(&source);
+    Ok((mesh, materials, sections, contacts))
+}
+
+fn parse_msh_contact_pairs(source: &str) -> Vec<HecmwContactPairDefinition> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut contacts = Vec::new();
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if !line.to_ascii_uppercase().starts_with("!CONTACT PAIR") {
+            index += 1;
+            continue;
+        }
+
+        let name = keyword_parameter(line, "NAME").unwrap_or_default();
+        let pair_type = match keyword_parameter(line, "TYPE")
+            .map(|value| value.to_ascii_uppercase())
+            .as_deref()
+        {
+            Some("SURF-SURF") => HecmwContactPairType::SurfaceSurface,
+            _ => HecmwContactPairType::NodeSurface,
+        };
+        index += 1;
+
+        while index < lines.len() {
+            let data_line = lines[index].trim();
+            if data_line.starts_with('!') {
+                break;
+            }
+            if data_line.is_empty() || data_line.starts_with('#') {
+                index += 1;
+                continue;
+            }
+
+            let surfaces: Vec<&str> = data_line
+                .split(',')
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .collect();
+            if !name.is_empty() && surfaces.len() >= 2 {
+                contacts.push(HecmwContactPairDefinition {
+                    name: name.clone(),
+                    pair_type,
+                    slave_group_name: surfaces[0].to_string(),
+                    master_surface_name: surfaces[1].to_string(),
+                });
+            }
+            break;
+        }
+    }
+
+    contacts
+}
+
+fn keyword_parameter(line: &str, requested: &str) -> Option<String> {
+    line.split(',').skip(1).find_map(|part| {
+        let (key, value) = part.split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case(requested)
+            .then(|| value.trim().to_string())
+    })
 }
 
 /// Extracts `!MATERIAL` / `!SECTION` blocks from a `.msh` source string.
@@ -152,14 +255,7 @@ fn parse_msh_setup(
 
         // ── !MATERIAL ──────────────────────────────────────────────────────
         if upper.starts_with("!MATERIAL") {
-            let name = line
-                .split(',')
-                .find_map(|p| {
-                    let t = p.trim();
-                    let u = t.to_ascii_uppercase();
-                    u.strip_prefix("NAME=").map(|_| t[5..].trim().to_string())
-                })
-                .unwrap_or_else(|| "MAT".to_string());
+            let name = keyword_parameter(line, "NAME").unwrap_or_else(|| "MAT".to_string());
 
             let mut mat = FemMaterial::new(name);
             i += 1;
@@ -186,7 +282,9 @@ fn parse_msh_setup(
                     break; // next top-level keyword
                 }
 
-                if sub_upper.starts_with("!ELASTIC") || sub_upper.starts_with("!ITEM=1") {
+                let item =
+                    keyword_assignment_value(sub).and_then(|value| value.parse::<u32>().ok());
+                if sub_upper.starts_with("!ELASTIC") || item == Some(1) {
                     i += 1;
                     if i < lines.len() {
                         let vals: Vec<f32> = lines[i]
@@ -201,7 +299,7 @@ fn parse_msh_setup(
                             mat.poisson_ratio = Some(nu);
                         }
                     }
-                } else if sub_upper.starts_with("!DENSITY") || sub_upper.starts_with("!ITEM=2") {
+                } else if sub_upper.starts_with("!DENSITY") || item == Some(2) {
                     i += 1;
                     if i < lines.len() {
                         if let Ok(rho) = lines[i]
@@ -226,29 +324,13 @@ fn parse_msh_setup(
 
         // ── !SECTION ───────────────────────────────────────────────────────
         if upper.starts_with("!SECTION") {
-            let sec_type = line
-                .split(',')
-                .find_map(|p| {
-                    let u = p.trim().to_ascii_uppercase();
-                    u.strip_prefix("TYPE=")
-                        .map(|_| p.trim()[5..].trim().to_ascii_uppercase())
-                })
+            let sec_type = keyword_parameter(line, "TYPE")
+                .map(|value| value.to_ascii_uppercase())
                 .unwrap_or_default();
 
-            let egrp = line.split(',').find_map(|p| {
-                let u = p.trim().to_ascii_uppercase();
-                u.strip_prefix("EGRP=")
-                    .map(|_| p.trim()[5..].trim().to_string())
-            });
+            let egrp = keyword_parameter(line, "EGRP");
 
-            let mat_name = line
-                .split(',')
-                .find_map(|p| {
-                    let u = p.trim().to_ascii_uppercase();
-                    u.strip_prefix("MATERIAL=")
-                        .map(|_| p.trim()[9..].trim().to_string())
-                })
-                .unwrap_or_default();
+            let mat_name = keyword_parameter(line, "MATERIAL").unwrap_or_default();
 
             let kind = match sec_type.as_str() {
                 "SHELL" => {
@@ -304,6 +386,12 @@ fn parse_msh_setup(
     }
 
     (materials, sections)
+}
+
+fn keyword_assignment_value(line: &str) -> Option<&str> {
+    let first = line.trim_start_matches('!').split(',').next()?;
+    let (_, value) = first.split_once('=')?;
+    Some(value.trim())
 }
 
 pub fn parse_mesh_str(source: &str) -> Result<FemMesh, HecmwParseError> {
@@ -371,17 +459,14 @@ fn parse_section(
     }
 
     if command.starts_with("!ELEMENT") {
-        let Some(raw_type) = command
-            .split(',')
-            .find_map(|part| part.trim().strip_prefix("TYPE=").map(str::trim))
-        else {
+        let Some(raw_type) = parse_attribute(line, "TYPE") else {
             return Err(HecmwParseError::new(
                 line_number,
                 "missing TYPE=... in !ELEMENT section",
             ));
         };
 
-        return Ok(Section::Element(parse_element_type(raw_type)));
+        return Ok(Section::Element(parse_element_type(&raw_type)));
     }
 
     if command.starts_with("!NGROUP") {
@@ -603,16 +688,7 @@ fn parse_element_type(raw_type: &str) -> ElementType {
 }
 
 fn parse_attribute(line: &str, key: &str) -> Option<String> {
-    let expected = format!("{}=", key.to_ascii_uppercase());
-
-    line.split(',').find_map(|part| {
-        let part = part.trim();
-        let upper = part.to_ascii_uppercase();
-
-        upper
-            .strip_prefix(&expected)
-            .map(|_| part[expected.len()..].trim().trim_matches('"').to_string())
-    })
+    keyword_parameter(line, key).map(|value| value.trim_matches('"').to_string())
 }
 
 fn has_flag(line: &str, flag: &str) -> bool {
@@ -896,15 +972,86 @@ mod tests {
         assert_eq!(model.contacts.len(), 1);
         assert_eq!(model.contacts[0].name, "CONTACT_1");
         assert_eq!(model.contacts[0].master, SurfaceSetRef::new(0, 0));
-        assert_eq!(model.contacts[0].slave, SurfaceSetRef::new(0, 1));
+        assert_eq!(
+            model.contacts[0].slave,
+            fem_core::ContactSlaveRef::Surface(SurfaceSetRef::new(0, 1))
+        );
         assert_eq!(
             model.surface_set_name(model.contacts[0].master),
             Some("MASTER")
         );
         assert_eq!(
-            model.surface_set_name(model.contacts[0].slave),
+            model.contact_slave_name(model.contacts[0].slave),
             Some("SLAVE")
         );
+    }
+
+    #[test]
+    fn parses_contact_pair_in_slave_master_order() {
+        let contacts = parse_msh_contact_pairs(
+            "!CONTACT PAIR, NAME = CP1\n  slave_surface, master_surface\n!END\n",
+        );
+
+        assert_eq!(
+            contacts,
+            vec![HecmwContactPairDefinition {
+                name: "CP1".to_string(),
+                pair_type: HecmwContactPairType::NodeSurface,
+                slave_group_name: "slave_surface".to_string(),
+                master_surface_name: "master_surface".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_explicit_surface_to_surface_contact_pair() {
+        let contacts = parse_msh_contact_pairs(
+            "!CONTACT PAIR, NAME=CP2, TYPE=SURF-SURF\n slave,master\n!END\n",
+        );
+
+        assert_eq!(contacts[0].pair_type, HecmwContactPairType::SurfaceSurface);
+        assert_eq!(contacts[0].slave_group_name, "slave");
+    }
+
+    #[test]
+    fn parses_spaced_keyword_assignments_used_by_contact_tutorials() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+ 3,0,1,0
+ 4,0,0,1
+!ELEMENT, TYPE = 341
+ 1,1,2,3,4
+!EGROUP, EGRP = E1
+ 1
+!NGROUP, NGRP = slave
+ 1,2
+!SGROUP, SGRP = master
+ 1,1
+!MATERIAL, NAME = M1, ITEM = 1
+!ITEM = 1, SUBITEM = 2
+ 2.1e5,0.3
+!SECTION, TYPE = SOLID, EGRP = E1, MATERIAL = M1
+!CONTACT PAIR, NAME = CP1
+ slave,master
+!END
+"#;
+
+        let mesh = parse_mesh_str(source).expect("tutorial-style mesh");
+        assert_eq!(mesh.node_sets[0].name, "slave");
+        assert_eq!(mesh.surface_sets[0].name, "master");
+
+        let (materials, sections) = parse_msh_setup(source, 0);
+        assert_eq!(materials[0].name, "M1");
+        assert_eq!(materials[0].young_modulus, Some(2.1e5));
+        assert_eq!(sections[0].element_set_name.as_deref(), Some("E1"));
+        assert_eq!(sections[0].material_name, "M1");
+
+        let contacts = parse_msh_contact_pairs(source);
+        assert_eq!(contacts[0].pair_type, HecmwContactPairType::NodeSurface);
+        assert_eq!(contacts[0].slave_group_name, "slave");
+        assert_eq!(contacts[0].master_surface_name, "master");
     }
 
     #[test]

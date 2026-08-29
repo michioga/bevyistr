@@ -29,8 +29,9 @@ use std::path::Path;
 
 use bevy::prelude::Vec3;
 use fem_core::{
-    AnalysisSetup, BoundaryCondition, DistributedLoad, DistributedLoadKind, ElementId, FemMaterial,
-    FemMesh, NodalLoad, NodeId, Section, SectionKind,
+    AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
+    DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
+    Section, SectionKind, SolverSettings,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -72,6 +73,22 @@ pub struct CntData {
     pub distributed_loads: Vec<DistributedLoad>,
     pub materials: Vec<FemMaterial>,
     pub sections: Vec<Section>,
+
+    pub contact_settings: Vec<CntContactSettings>,
+
+    pub solver: Option<SolverSettings>,
+}
+
+/// Solver-side settings attached to a mesh `!CONTACT PAIR` by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CntContactSettings {
+    pub pair_name: String,
+
+    pub contact_type: ContactType,
+
+    pub friction_coefficient: f32,
+
+    pub penalty_factor: Option<f32>,
 }
 
 impl CntData {
@@ -108,6 +125,29 @@ impl CntData {
                 setup.sections.push(section);
             }
         }
+
+        if let Some(solver) = self.solver {
+            setup.solver = solver;
+        }
+    }
+
+    /// Applies `.cnt` interaction types and coefficients to contact pairs
+    /// that were read from the associated `.msh` file.
+    pub fn apply_contact_settings(&self, contacts: &mut [ContactPair]) -> usize {
+        let mut applied = 0usize;
+        for settings in &self.contact_settings {
+            let Some(contact) = contacts
+                .iter_mut()
+                .find(|contact| contact.name.eq_ignore_ascii_case(&settings.pair_name))
+            else {
+                continue;
+            };
+            contact.contact_type = settings.contact_type;
+            contact.friction_coefficient = settings.friction_coefficient;
+            contact.penalty_factor = settings.penalty_factor;
+            applied += 1;
+        }
+        applied
     }
 }
 
@@ -223,6 +263,96 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
         let header = parse_keyword_header(trimmed);
 
         match header.name.as_str() {
+            "SOLUTION" => {
+                let solver = data.solver.get_or_insert_with(SolverSettings::default);
+                if let Some(solution_type) = header.params.get("TYPE") {
+                    solver.analysis_type = match solution_type.to_ascii_uppercase().as_str() {
+                        "NLSTATIC" => AnalysisType::NlStatic,
+                        "DYNAMIC" => AnalysisType::Dynamic,
+                        "EIGEN" | "EIGENVALUE" => AnalysisType::Eigen,
+                        _ => AnalysisType::Static,
+                    };
+                }
+                i += 1;
+            }
+
+            "STEP" => {
+                let solver = data.solver.get_or_insert_with(SolverSettings::default);
+                if let Some(value) = header
+                    .params
+                    .get("SUBSTEPS")
+                    .and_then(|value| value.parse::<u32>().ok())
+                {
+                    solver.substeps = value;
+                }
+                if let Some(value) = header
+                    .params
+                    .get("MAXITER")
+                    .or_else(|| header.params.get("ITMAX"))
+                    .and_then(|value| value.parse::<u32>().ok())
+                {
+                    solver.max_iterations = value;
+                }
+                if let Some(value) = header
+                    .params
+                    .get("CONVERG")
+                    .and_then(|value| value.parse::<f32>().ok())
+                {
+                    solver.convergence_tol = value;
+                }
+                i += 1;
+            }
+
+            "SOLVER" => {
+                let solver = data.solver.get_or_insert_with(SolverSettings::default);
+                if let Some(method) = header.params.get("METHOD") {
+                    solver.solver_method = match method.to_ascii_uppercase().as_str() {
+                        "GMRES" => LinearSolverMethod::Gmres,
+                        "DIRECT" | "MUMPS" | "MKL" | "PARDISO" | "MKL_PARDISO" => {
+                            LinearSolverMethod::Direct
+                        }
+                        _ => LinearSolverMethod::Cg,
+                    };
+                }
+                i += 1;
+            }
+
+            "CONTACT" => {
+                let contact_type = match header
+                    .params
+                    .get("INTERACTION")
+                    .map(|value| value.to_ascii_uppercase())
+                    .as_deref()
+                {
+                    Some("TIED") => ContactType::Tied,
+                    Some("FSLID") | Some("GLUED") => ContactType::FiniteSliding,
+                    _ => ContactType::SmallSliding,
+                };
+                i += 1;
+
+                while i < lines.len() && !lines[i].trim_start().starts_with('!') {
+                    let line = strip_comment(lines[i]);
+                    i += 1;
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    let parts: Vec<&str> = line.split(',').map(str::trim).collect();
+                    let Some(pair_name) = parts.first().filter(|name| !name.is_empty()) else {
+                        continue;
+                    };
+                    data.contact_settings.push(CntContactSettings {
+                        pair_name: (*pair_name).to_string(),
+                        contact_type,
+                        friction_coefficient: parts
+                            .get(1)
+                            .and_then(|value| value.parse::<f32>().ok())
+                            .unwrap_or(0.0),
+                        penalty_factor: parts.get(2).and_then(|value| value.parse::<f32>().ok()),
+                    });
+                }
+            }
+
             "BOUNDARY" => {
                 i += 1;
 
@@ -645,5 +775,49 @@ mod tests {
 
         assert_eq!(setup.materials.len(), 1);
         assert_eq!(setup.materials[0].young_modulus, Some(210_000.0));
+    }
+
+    #[test]
+    fn parses_contact_tutorial_solver_and_finite_sliding_settings() {
+        let model = fem_core::FemModel::demo_hex8();
+        let data = parse_cnt(
+            "!SOLUTION, TYPE=NLSTATIC\n\
+             !CONTACT_ALGO, TYPE=SLAGRANGE\n\
+             !CONTACT, GRPID=1, INTERACTION=FSLID\n\
+              CP1, 0.1, 1.0e+5\n\
+             !STEP, SUBSTEPS=100, CONVERG=1.0e-4, MAXITER=1000\n\
+              CONTACT, 1\n\
+             !SOLVER, METHOD=MUMPS\n\
+             !END\n",
+            &model.meshes[0],
+            0,
+        );
+
+        assert_eq!(data.contact_settings.len(), 1);
+        assert_eq!(data.contact_settings[0].pair_name, "CP1");
+        assert_eq!(
+            data.contact_settings[0].contact_type,
+            ContactType::FiniteSliding
+        );
+        assert_eq!(data.contact_settings[0].friction_coefficient, 0.1);
+        assert_eq!(data.contact_settings[0].penalty_factor, Some(1.0e5));
+
+        let solver = data.solver.as_ref().expect("solver settings");
+        assert_eq!(solver.analysis_type, AnalysisType::NlStatic);
+        assert_eq!(solver.substeps, 100);
+        assert_eq!(solver.max_iterations, 1000);
+        assert_eq!(solver.convergence_tol, 1.0e-4);
+        assert_eq!(solver.solver_method, LinearSolverMethod::Direct);
+
+        let mut contacts = vec![ContactPair::new(
+            "cp1",
+            fem_core::SurfaceSetRef::new(0, 0),
+            fem_core::SurfaceSetRef::new(0, 1),
+            ContactType::SmallSliding,
+        )];
+        assert_eq!(data.apply_contact_settings(&mut contacts), 1);
+        assert_eq!(contacts[0].contact_type, ContactType::FiniteSliding);
+        assert_eq!(contacts[0].friction_coefficient, 0.1);
+        assert_eq!(contacts[0].penalty_factor, Some(1.0e5));
     }
 }

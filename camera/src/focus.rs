@@ -4,10 +4,11 @@ use crate::OrbitCamera;
 
 pub(crate) fn focus_selected_system(
     keyboard: Res<ButtonInput<KeyCode>>,
+    keyboard_state: Res<fem_core::UiKeyboardState>,
     selected_query: Query<(&GlobalTransform, Option<&Name>)>,
     mut camera_query: Query<&mut OrbitCamera>,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyF) {
+    if keyboard_state.text_editing || !keyboard.just_pressed(KeyCode::KeyF) {
         return;
     }
 

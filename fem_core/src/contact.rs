@@ -104,6 +104,30 @@ impl ContactCandidateState {
         };
     }
 
+    /// Selects the next candidate, wrapping from the last candidate back to
+    /// the first. Does nothing when there are no candidates.
+    pub fn select_next(&mut self) {
+        if self.candidates.is_empty() {
+            self.selected = None;
+            return;
+        }
+
+        let current = self.selected.unwrap_or(0).min(self.candidates.len() - 1);
+        self.selected = Some((current + 1) % self.candidates.len());
+    }
+
+    /// Selects the previous candidate, wrapping from the first candidate to
+    /// the last. Does nothing when there are no candidates.
+    pub fn select_previous(&mut self) {
+        if self.candidates.is_empty() {
+            self.selected = None;
+            return;
+        }
+
+        let current = self.selected.unwrap_or(0).min(self.candidates.len() - 1);
+        self.selected = Some((current + self.candidates.len() - 1) % self.candidates.len());
+    }
+
     /// Removes the currently selected candidate (e.g. after it has been
     /// accepted) and selects the next one, if any remain.
     pub fn remove_selected(&mut self) {
@@ -120,6 +144,54 @@ impl ContactCandidateState {
         } else {
             Some(index.min(self.candidates.len() - 1))
         };
+    }
+}
+
+#[cfg(test)]
+mod candidate_state_tests {
+    use super::*;
+
+    fn candidate(mesh_a: usize, mesh_b: usize) -> ContactCandidate {
+        ContactCandidate {
+            mesh_a,
+            mesh_b,
+            faces_a: Vec::new(),
+            faces_b: Vec::new(),
+            pair_count: 0,
+            average_gap: 0.0,
+        }
+    }
+
+    #[test]
+    fn candidate_navigation_wraps_in_both_directions() {
+        let mut state = ContactCandidateState {
+            candidates: vec![candidate(0, 1), candidate(1, 2), candidate(2, 3)],
+            selected: Some(0),
+            ..default()
+        };
+
+        state.select_previous();
+        assert_eq!(state.selected, Some(2));
+
+        state.select_next();
+        assert_eq!(state.selected, Some(0));
+    }
+
+    #[test]
+    fn removing_a_candidate_keeps_a_valid_selection() {
+        let mut state = ContactCandidateState {
+            candidates: vec![candidate(0, 1), candidate(1, 2)],
+            selected: Some(1),
+            ..default()
+        };
+
+        state.remove_selected();
+        assert_eq!(state.candidates.len(), 1);
+        assert_eq!(state.selected, Some(0));
+
+        state.remove_selected();
+        assert!(state.candidates.is_empty());
+        assert_eq!(state.selected, None);
     }
 }
 

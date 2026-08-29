@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use fem_core::{
     ElementId, FemEntityId, FemEntityRef, FemMesh, FemModel, NodeId, SelectionFilter,
-    SelectionHit, SelectionLevel, UiPointerState, ViewportTool, DEFAULT_FEATURE_EDGE_ANGLE_DEG,
+    SelectionHit, SelectionLevel, UiKeyboardState, UiPointerState, ViewportTool,
+    DEFAULT_FEATURE_EDGE_ANGLE_DEG,
     expand_connected_boundary_edges, expand_connected_boundary_faces, expand_connected_elements,
     expand_connected_feature_edges,
 };
@@ -25,8 +26,9 @@ pub fn selection_filter_shortcut_system(
     hovered_query: Query<Entity, With<Hovered>>,
     selected_query: Query<Entity, With<Selected>>,
     viewport_tool: Res<ViewportTool>,
+    keyboard_state: Res<UiKeyboardState>,
 ) {
-    if *viewport_tool != ViewportTool::Selection {
+    if *viewport_tool != ViewportTool::Selection || keyboard_state.text_editing {
         return;
     }
 
@@ -178,8 +180,9 @@ pub fn clear_selection_shortcut_system(
     mut selection: ResMut<SelectionState>,
     mut click_sequence: ResMut<ClickSequence>,
     selected_query: Query<Entity, With<Selected>>,
+    keyboard_state: Res<UiKeyboardState>,
 ) {
-    if !keyboard.just_pressed(KeyCode::Escape) {
+    if keyboard_state.text_editing || !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }
 

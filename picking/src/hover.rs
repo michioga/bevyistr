@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use fem_core::{
-    ElementId, FaceId, FemEntityId, FemEntityRef, FemMesh, FemModel, SelectionFilter,
-    SelectionHit, SelectionLevel, UiPointerState, ViewportTool,
+    ElementId, FaceId, FemEntityId, FemEntityRef, FemMesh, FemModel, MainViewportCamera,
+    SelectionFilter, SelectionHit, SelectionLevel, UiPointerState, ViewportTool,
 };
 
 use interaction::HoverResult;
@@ -11,7 +11,7 @@ use selection::{Hovered, Selectable};
 pub fn hover_system(
     mut commands: Commands,
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     selectable_query: Query<(Entity, &GlobalTransform, &Selectable)>,
     hovered_query: Query<Entity, With<Hovered>>,
     filter: Res<SelectionFilter>,
@@ -128,26 +128,28 @@ fn pick_model(
 
     for (mesh_index, mesh) in model.meshes.iter().enumerate() {
         let candidate = match level {
-            SelectionLevel::Node => pick_node(mesh, origin, direction, threshold).map(
-                |(target, point, distance)| {
+            SelectionLevel::Node => {
+                pick_node(mesh, origin, direction, threshold).map(|(target, point, distance)| {
                     SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
-                },
-            ),
-            SelectionLevel::Edge => pick_edge(mesh, origin, direction, threshold).map(
-                |(target, point, distance)| {
+                })
+            }
+            SelectionLevel::Edge => {
+                pick_edge(mesh, origin, direction, threshold).map(|(target, point, distance)| {
                     SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
-                },
-            ),
-            SelectionLevel::Face => pick_boundary_face(mesh, origin, direction, false)
-                .map(|(target, face, element, point, distance)| {
-                    SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
-                        .with_surface(face, element)
-                }),
-            SelectionLevel::Element => pick_boundary_face(mesh, origin, direction, true)
-                .map(|(target, face, element, point, distance)| {
+                })
+            }
+            SelectionLevel::Face => pick_boundary_face(mesh, origin, direction, false).map(
+                |(target, face, element, point, distance)| {
                     SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
                         .with_surface(face, element)
-                }),
+                },
+            ),
+            SelectionLevel::Element => pick_boundary_face(mesh, origin, direction, true).map(
+                |(target, face, element, point, distance)| {
+                    SelectionHit::new(FemEntityRef::new(mesh_index, target), point, distance)
+                        .with_surface(face, element)
+                },
+            ),
         };
 
         let Some(candidate) = candidate else {
@@ -169,11 +171,7 @@ fn pick_model(
 /// shell surfaces are preferred; line-only and point-only parts fall back
 /// to their edges and nodes so every supported model dimension remains
 /// directly selectable in assembly mode.
-pub fn pick_part(
-    model: &FemModel,
-    origin: Vec3,
-    direction: Vec3,
-) -> Option<SelectionHit> {
+pub fn pick_part(model: &FemModel, origin: Vec3, direction: Vec3) -> Option<SelectionHit> {
     pick_model(model, origin, direction, SelectionLevel::Element)
         .or_else(|| pick_line_parts(model, origin, direction))
         .or_else(|| pick_model(model, origin, direction, SelectionLevel::Edge))
@@ -204,11 +202,8 @@ fn pick_line_parts(model: &FemModel, origin: Vec3, direction: Vec3) -> Option<Se
                     continue;
                 }
 
-                let hit = SelectionHit::new(
-                    FemEntityRef::element(mesh_index, element.id),
-                    point,
-                    depth,
-                );
+                let hit =
+                    SelectionHit::new(FemEntityRef::element(mesh_index, element.id), point, depth);
                 if best.as_ref().is_none_or(|(best_hit, best_distance)| {
                     distance_to_ray < *best_distance
                         || (distance_to_ray == *best_distance && depth < best_hit.depth)
@@ -298,16 +293,28 @@ fn pick_edge(
             continue;
         }
 
-        let candidate = (FemEntityId::Edge(edge.id), point, projected, distance_to_ray);
-        let best = if mesh.cached_feature_edge_ids().binary_search(&edge.id).is_ok() {
+        let candidate = (
+            FemEntityId::Edge(edge.id),
+            point,
+            projected,
+            distance_to_ray,
+        );
+        let best = if mesh
+            .cached_feature_edge_ids()
+            .binary_search(&edge.id)
+            .is_ok()
+        {
             &mut best_feature
         } else {
             &mut best_regular
         };
-        if best.as_ref().is_none_or(|(_, _, best_depth, best_distance)| {
-            distance_to_ray < *best_distance
-                || (distance_to_ray == *best_distance && projected < *best_depth)
-        }) {
+        if best
+            .as_ref()
+            .is_none_or(|(_, _, best_depth, best_distance)| {
+                distance_to_ray < *best_distance
+                    || (distance_to_ray == *best_distance && projected < *best_depth)
+            })
+        {
             *best = Some(candidate);
         }
     }
@@ -356,7 +363,11 @@ fn pick_boundary_face(
         };
 
         for triangle_index in 1..(points.len() - 1) {
-            let triangle = [points[0], points[triangle_index], points[triangle_index + 1]];
+            let triangle = [
+                points[0],
+                points[triangle_index],
+                points[triangle_index + 1],
+            ];
             let Some(distance) = ray_triangle_intersection(origin, direction, triangle) else {
                 continue;
             };
