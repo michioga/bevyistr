@@ -294,8 +294,8 @@ fn write_dload(o: &mut String, dl: &DistributedLoad) {
 mod tests {
     use bevy::prelude::Vec3;
     use fem_core::{
-        ContactPair, ContactType, DistributedLoad, DistributedLoadKind, DistributedLoadTarget,
-        ElementId, SurfaceSetRef,
+        BoundaryCondition, ContactPair, ContactType, DistributedLoad, DistributedLoadKind,
+        DistributedLoadTarget, ElementId, NodalLoad, NodeId, SurfaceSetRef,
     };
 
     use super::*;
@@ -377,5 +377,32 @@ mod tests {
         let text = build_cnt(&setup, &[]);
 
         assert!(text.contains("!DLOAD, GRPID=1\n 7,GRAV,9.810000,0.000000,0.000000,-1.000000\n"));
+    }
+
+    #[test]
+    fn writes_exact_prescribed_rotation_and_nodal_moment() {
+        let mut setup = AnalysisSetup::default();
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "BC_EXACT".into(),
+            mesh_index: 0,
+            nodes: vec![NodeId(42)],
+            ngrp_name: None,
+            dof_start: 4,
+            dof_end: 4,
+            value: 0.125,
+        });
+        setup.nodal_loads.push(NodalLoad {
+            name: "MOMENT_EXACT".into(),
+            mesh_index: 0,
+            node: NodeId(42),
+            ngrp_name: None,
+            dof: 6,
+            value: -12.5,
+        });
+
+        let text = build_cnt(&setup, &[]);
+
+        assert!(text.contains("!BOUNDARY, GRPID=1\n  42,4,4,0.125000\n"));
+        assert!(text.contains("!CLOAD, GRPID=1\n  42,6,-12.500000\n"));
     }
 }

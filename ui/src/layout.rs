@@ -1,6 +1,11 @@
 use crate::assembly::{
     AssemblyEditorState, AssemblyGizmoMode, reference_size as assembly_reference_size,
 };
+use crate::boundary_editor::{
+    BoundaryLoadEditorState, spawn_constraint_exact_editor, spawn_dload_exact_editor,
+    spawn_engineering_input_status, spawn_nodal_exact_editor,
+};
+use crate::load_direction::{LoadDirectionPickerButton, LoadDirectionPickerLabel};
 use crate::measurement::{MeasurementBoxState, MeasurementTarget};
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -18,9 +23,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use visualization::ContourSettings;
 use visualization::{
-    BoundaryLoadPreview, BoundaryLoadPreviewArrow, BoundaryLoadPreviewKind, ContactDraftPreview,
-    ContactDraftSlave, ContactDraftSurface, ContactReviewSettings, DefinedContactPreview,
-    VisualizationMode, VisualizationSettings,
+    BoundaryLoadPreview, BoundaryLoadPreviewArrow, BoundaryLoadPreviewKind,
+    BoundaryLoadPreviewMoment, ContactDraftPreview, ContactDraftSlave, ContactDraftSurface,
+    ContactReviewSettings, DefinedContactPreview, VisualizationMode, VisualizationSettings,
 };
 
 const PANEL_BG: Color = Color::srgba(0.035, 0.04, 0.045, 0.88);
@@ -1480,7 +1485,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 page_hint_text(
                     sec,
                     SidebarPage::Loads,
-                    "Red cone = fixed DOF    Orange arrow = nodal load",
+                    "Red cone = fixed U   Magenta ring = fixed R\nOrange arrow = force   Orange arc = moment",
                 );
 
                 // ── Create from current node selection ──────────────────
@@ -1514,8 +1519,11 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         constraint_preset_button(row, "Fix Y",   2, 2);
                         constraint_preset_button(row, "Fix Z",   3, 3);
                     });
+                    spawn_constraint_exact_editor(panel);
 
-                    // Load direction + magnitude + apply
+                    // Exact components are authoritative; these direction
+                    // controls are viewport-friendly quick setters.
+                    spawn_nodal_exact_editor(panel);
                     panel.spawn((
                         Node { flex_direction: FlexDirection::Row, column_gap: px(4.0), ..default() },
                     )).with_children(|row| {
@@ -1526,6 +1534,27 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                         load_direction_button(row, "+Z", 3, 1.0);
                         load_direction_button(row, "-Z", 3, -1.0);
                     });
+                    panel.spawn((
+                        Button,
+                        Node {
+                            width: Val::Percent(100.0),
+                            min_height: px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(px(1.0)),
+                            border_radius: BorderRadius::all(px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(BUTTON_NORMAL),
+                        BorderColor::all(PANEL_BORDER),
+                        LoadDirectionPickerButton,
+                        Name::new("LoadDirectionPickerButton"),
+                    )).with_child((
+                        Text::new("Pick direction in viewport - select nodes first"),
+                        TextFont { font_size: FontSize::Px(9.5), ..default() },
+                        TextColor(TEXT_MAIN),
+                        LoadDirectionPickerLabel,
+                    ));
                     spawn_slider(panel, SliderConfig {
                         width: 268.0,
                         min: 0.0,
@@ -1536,7 +1565,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     });
                     hint_text(
                         panel,
-                        "Pick an axis to preview arrows; enter an exact value at lower right",
+                        "Axis button or viewport arrow -> preview; exact value at lower right",
                     );
                     panel.spawn((
                         Button,
@@ -1609,6 +1638,8 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             }
                         });
 
+                        spawn_dload_exact_editor(dp);
+
                         spawn_slider(dp, SliderConfig {
                             width: 268.0, min: 0.0, max: 100.0, value: 1.0,
                             label: "Pressure / Accel. magnitude",
@@ -1664,8 +1695,9 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     ));
                     hint_text(
                         panel,
-                        "Constraints apply immediately; loads stay provisional until Apply",
+                        "Viewport controls set a draft; exact fields and Apply are authoritative",
                     );
+                    spawn_engineering_input_status(panel);
 
                 });
 
@@ -2737,7 +2769,7 @@ pub(crate) fn sidebar_page_button_system(
             if page_changed {
                 measurement.clear();
             }
-            if !page_supports_part_position(button.page) {
+            if !page_supports_tool(button.page, *tool) {
                 *tool = ViewportTool::Selection;
             }
             for mut scroll in &mut scroll_areas {
@@ -2762,6 +2794,14 @@ pub(crate) fn sidebar_page_button_system(
 
 fn page_supports_part_position(page: SidebarPage) -> bool {
     matches!(page, SidebarPage::Model | SidebarPage::Contact)
+}
+
+fn page_supports_tool(page: SidebarPage, tool: ViewportTool) -> bool {
+    match tool {
+        ViewportTool::Selection => true,
+        ViewportTool::Assembly => page_supports_part_position(page),
+        ViewportTool::LoadDirection => page == SidebarPage::Loads,
+    }
 }
 
 /// Shows only content associated with the current sidebar task. Inactive
@@ -5018,11 +5058,10 @@ pub(crate) fn update_constraint_button_labels(
 /// Updates the "Apply Load" button label with the node count.
 pub(crate) fn update_apply_load_label(
     selection: Res<SelectionState>,
-    selected_dir: Res<SelectedLoadDirection>,
-    slider_query: Query<&SliderState, With<SliderTrack>>,
+    editor: Res<BoundaryLoadEditorState>,
     mut labels: Query<&mut Text, With<ApplyLoadLabel>>,
 ) {
-    if !selection.is_changed() && !selected_dir.is_changed() {
+    if !selection.is_changed() && !editor.is_changed() {
         return;
     }
 
@@ -5036,28 +5075,16 @@ pub(crate) fn update_apply_load_label(
         .filter(|t| matches!(t.entity, fem_core::FemEntityId::Node(_)))
         .count();
 
-    let mag = slider_query
+    let component_count = editor
+        .nodal_components
         .iter()
-        .find(|s| s.id == SliderId::LoadMagnitude)
-        .map(|s| s.value)
-        .unwrap_or(100.0);
-
-    let dir_label = selected_dir
-        .0
-        .map(|(dof, sign)| {
-            let axis = ["?", "X", "Y", "Z"]
-                .get(dof as usize)
-                .copied()
-                .unwrap_or("?");
-            let sign_char = if sign >= 0.0 { "+" } else { "-" };
-            format!(" {sign_char}{axis} {mag:.0}")
-        })
-        .unwrap_or_else(|| " (pick direction)".to_string());
+        .filter(|value| value.abs() > f32::EPSILON)
+        .count();
 
     **text = if n > 0 {
-        format!("Apply Load{dir_label}  ({n} nodes)")
+        format!("Apply {component_count} load components  ({n} nodes)")
     } else {
-        format!("Apply Load{dir_label}  - no nodes selected")
+        "Apply Load - no nodes selected".to_string()
     };
 }
 
@@ -5097,9 +5124,7 @@ fn selected_nodes_by_mesh(selection: &SelectionState) -> BTreeMap<usize, Vec<fem
 }
 
 pub(crate) fn constraint_preset_button_system(
-    mut setup: ResMut<fem_core::AnalysisSetup>,
-    model: Option<Res<FemModel>>,
-    selection: Res<SelectionState>,
+    mut editor: ResMut<BoundaryLoadEditorState>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -5110,29 +5135,9 @@ pub(crate) fn constraint_preset_button_system(
         With<ConstraintPresetButton>,
     >,
 ) {
-    let Some(model) = model else {
-        return;
-    };
-
     for (interaction, mut bg, mut border, preset) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
-                if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
-                    continue;
-                }
-
-                let bc_name = setup.next_auto_name_pub("BC");
-
-                setup.boundary_conditions.push(fem_core::BoundaryCondition {
-                    name: bc_name,
-                    mesh_index,
-                    nodes,
-                    ngrp_name: None,
-                    dof_start: preset.dof_start,
-                    dof_end: preset.dof_end,
-                    value: 0.0,
-                });
-            }
+            editor.set_constraint_preset(preset.dof_start, preset.dof_end);
         }
 
         let color = match *interaction {
@@ -5151,6 +5156,7 @@ pub(crate) fn constraint_preset_button_system(
 pub(crate) fn load_direction_button_system(
     mut selected: ResMut<SelectedLoadDirection>,
     mut active_editor: ResMut<ActiveLoadEditor>,
+    mut editor: ResMut<BoundaryLoadEditorState>,
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
@@ -5173,11 +5179,13 @@ pub(crate) fn load_direction_button_system(
             } else {
                 selected.0 = Some(new_dir);
                 *active_editor = ActiveLoadEditor::Nodal;
+                let magnitude = slider_value(&sliders, SliderId::LoadMagnitude, 100.0);
+                editor.set_axis_force(btn.dof, btn.sign, magnitude);
                 measurement.begin_slider_value(
                     SliderId::LoadMagnitude,
                     nodal_load_measurement_label(btn.dof, btn.sign),
                     "analysis force units",
-                    slider_value(&sliders, SliderId::LoadMagnitude, 100.0),
+                    magnitude,
                 );
             }
         }
@@ -5219,14 +5227,14 @@ fn slider_value(
         .unwrap_or(fallback)
 }
 
-/// Applies the selected direction + slider magnitude as a nodal load to
-/// every currently selected node.
+/// Applies every non-zero exact force / moment component to each selected
+/// node. Axis buttons, the viewport compass, and the slider only populate
+/// this same draft; they are never a second source of solver values.
 pub(crate) fn apply_load_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     model: Option<Res<FemModel>>,
     selection: Res<SelectionState>,
-    selected_dir: Res<SelectedLoadDirection>,
-    slider_query: Query<&SliderState, With<SliderTrack>>,
+    editor: Res<BoundaryLoadEditorState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<ApplyLoadButton>,
@@ -5236,20 +5244,21 @@ pub(crate) fn apply_load_button_system(
         return;
     };
 
-    let magnitude = slider_query
-        .iter()
-        .find(|s| s.id == SliderId::LoadMagnitude)
-        .map(|s| s.value)
-        .unwrap_or(100.0);
-
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let Some((dof, sign)) = selected_dir.0 else {
+            let components: Vec<_> = editor
+                .nodal_components
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, value)| value.is_finite() && value.abs() > f32::EPSILON)
+                .map(|(index, value)| (index as u8 + 1, value))
+                .collect();
+            if components.is_empty() {
                 continue;
-            };
+            }
 
-            let value = magnitude * sign;
-
+            let mut added = false;
             for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
                 if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
                     continue;
@@ -5258,15 +5267,21 @@ pub(crate) fn apply_load_button_system(
                 let name = setup.next_auto_name_pub("LOAD");
 
                 for node in nodes {
-                    setup.nodal_loads.push(fem_core::NodalLoad {
-                        name: name.clone(),
-                        mesh_index,
-                        node,
-                        ngrp_name: None,
-                        dof,
-                        value,
-                    });
+                    for &(dof, value) in &components {
+                        setup.nodal_loads.push(fem_core::NodalLoad {
+                            name: name.clone(),
+                            mesh_index,
+                            node,
+                            ngrp_name: None,
+                            dof,
+                            value,
+                        });
+                        added = true;
+                    }
                 }
+            }
+            if added {
+                setup.set_changed();
             }
         }
 
@@ -5288,7 +5303,7 @@ pub(crate) fn apply_load_button_system(
 pub(crate) fn dload_kind_button_system(
     mut selected: ResMut<SelectedDloadKind>,
     mut active_editor: ResMut<ActiveLoadEditor>,
-    sliders: Query<&SliderState, With<SliderTrack>>,
+    editor: Res<BoundaryLoadEditorState>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
@@ -5304,15 +5319,21 @@ pub(crate) fn dload_kind_button_system(
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             *selected = btn.0;
             *active_editor = ActiveLoadEditor::Distributed;
-            let (label, units) = match btn.0 {
-                SelectedDloadKind::Pressure => ("Pressure", "analysis pressure units"),
-                SelectedDloadKind::Gravity => ("Gravity acceleration", "analysis accel. units"),
+            let (label, units, value) = match btn.0 {
+                SelectedDloadKind::Pressure => {
+                    ("Pressure", "analysis pressure units", editor.pressure)
+                }
+                SelectedDloadKind::Gravity => (
+                    "Gravity acceleration",
+                    "analysis accel. units",
+                    editor.gravity_acceleration,
+                ),
             };
             measurement.begin_slider_value(
                 SliderId::DloadMagnitude,
                 label,
                 units,
-                slider_value(&sliders, SliderId::DloadMagnitude, 1.0),
+                value,
             );
         }
 
@@ -5335,14 +5356,14 @@ pub(crate) fn sync_load_measurement_box(
     active_editor: Res<ActiveLoadEditor>,
     selected_direction: Res<SelectedLoadDirection>,
     kind: Res<SelectedDloadKind>,
-    sliders: Query<Ref<SliderState>, With<SliderTrack>>,
+    editor: Res<BoundaryLoadEditorState>,
     mut measurement: ResMut<MeasurementBoxState>,
 ) {
     if *page != SidebarPage::Loads {
         return;
     }
 
-    let (slider_id, label, units, fallback) = match *active_editor {
+    let (slider_id, label, units, value) = match *active_editor {
         ActiveLoadEditor::None => return,
         ActiveLoadEditor::Nodal => {
             let Some((dof, sign)) = selected_direction.0 else {
@@ -5352,7 +5373,7 @@ pub(crate) fn sync_load_measurement_box(
                 SliderId::LoadMagnitude,
                 nodal_load_measurement_label(dof, sign),
                 "analysis force units",
-                100.0,
+                editor.nodal_components[usize::from(dof.saturating_sub(1))].abs(),
             )
         }
         ActiveLoadEditor::Distributed => match *kind {
@@ -5360,22 +5381,17 @@ pub(crate) fn sync_load_measurement_box(
                 SliderId::DloadMagnitude,
                 "Pressure",
                 "analysis pressure units",
-                1.0,
+                editor.pressure,
             ),
             SelectedDloadKind::Gravity => (
                 SliderId::DloadMagnitude,
                 "Gravity acceleration",
                 "analysis accel. units",
-                1.0,
+                editor.gravity_acceleration,
             ),
         },
     };
 
-    let slider = sliders.iter().find(|slider| slider.id == slider_id);
-    let value = slider
-        .as_ref()
-        .map(|slider| slider.value)
-        .unwrap_or(fallback);
     let target_matches = matches!(
         measurement.target,
         Some(MeasurementTarget::SliderValue {
@@ -5386,7 +5402,7 @@ pub(crate) fn sync_load_measurement_box(
 
     if !target_matches {
         measurement.begin_slider_value(slider_id, label, units, value);
-    } else if slider.is_some_and(|slider| slider.is_changed()) {
+    } else if editor.is_changed() {
         measurement.update_slider_value(slider_id, value);
     }
 }
@@ -5396,26 +5412,18 @@ pub(crate) fn sync_load_measurement_box(
 pub(crate) fn update_boundary_load_preview(
     page: Res<SidebarPage>,
     active_editor: Res<ActiveLoadEditor>,
-    selected_direction: Res<SelectedLoadDirection>,
     kind: Res<SelectedDloadKind>,
+    editor: Res<BoundaryLoadEditorState>,
     selection: Res<SelectionState>,
     model: Option<Res<FemModel>>,
-    sliders: Query<Ref<SliderState>, With<SliderTrack>>,
     mut preview: ResMut<BoundaryLoadPreview>,
 ) {
-    let slider_changed = sliders.iter().any(|slider| {
-        matches!(
-            slider.id,
-            SliderId::LoadMagnitude | SliderId::DloadMagnitude
-        ) && slider.is_changed()
-    });
     let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
     if !page.is_changed()
         && !active_editor.is_changed()
-        && !selected_direction.is_changed()
         && !kind.is_changed()
+        && !editor.is_changed()
         && !selection.is_changed()
-        && !slider_changed
         && !model_changed
     {
         return;
@@ -5439,51 +5447,44 @@ pub(crate) fn update_boundary_load_preview(
     match *active_editor {
         ActiveLoadEditor::None => {}
         ActiveLoadEditor::Nodal => {
-            let Some((dof, sign)) = selected_direction.0 else {
+            let force_direction = editor.translational_force().try_normalize();
+            let moment_axis = editor.rotational_moment().try_normalize();
+            if force_direction.is_none() && moment_axis.is_none() {
                 if *preview != next {
                     *preview = next;
                 }
                 return;
-            };
-            let magnitude = sliders
-                .iter()
-                .find(|slider| slider.id == SliderId::LoadMagnitude)
-                .map(|slider| slider.value)
-                .unwrap_or(100.0);
-            let axis = match dof {
-                1 => Vec3::X,
-                2 => Vec3::Y,
-                3 => Vec3::Z,
-                _ => Vec3::ZERO,
-            };
-            let direction = signed_preview_direction(axis * sign, magnitude);
+            }
             next.kind = Some(BoundaryLoadPreviewKind::Nodal);
-            next.arrows = selection
-                .targets
-                .iter()
-                .filter_map(|target| {
-                    let FemEntityId::Node(node_id) = target.entity else {
-                        return None;
-                    };
-                    Some(BoundaryLoadPreviewArrow {
-                        origin: model
-                            .meshes
-                            .get(target.mesh_index)?
-                            .node_position(node_id)?,
+            for target in &selection.targets {
+                let FemEntityId::Node(node_id) = target.entity else {
+                    continue;
+                };
+                let Some(position) = model
+                    .meshes
+                    .get(target.mesh_index)
+                    .and_then(|mesh| mesh.node_position(node_id))
+                else {
+                    continue;
+                };
+                if let Some(direction) = force_direction {
+                    next.arrows.push(BoundaryLoadPreviewArrow {
+                        origin: position,
                         direction,
-                    })
-                })
-                .collect();
+                    });
+                }
+                if let Some(axis) = moment_axis {
+                    next.moments.push(BoundaryLoadPreviewMoment {
+                        origin: position,
+                        axis,
+                    });
+                }
+            }
         }
         ActiveLoadEditor::Distributed => {
-            let magnitude = sliders
-                .iter()
-                .find(|slider| slider.id == SliderId::DloadMagnitude)
-                .map(|slider| slider.value)
-                .unwrap_or(1.0);
-
             match *kind {
                 SelectedDloadKind::Pressure => {
+                    let magnitude = editor.pressure;
                     next.kind = Some(BoundaryLoadPreviewKind::Pressure);
                     for (mesh_index, face_refs) in
                         selected_faces_from_faces_or_elements(&selection, model)
@@ -5511,6 +5512,8 @@ pub(crate) fn update_boundary_load_preview(
                     }
                 }
                 SelectedDloadKind::Gravity => {
+                    let magnitude = editor.gravity_acceleration;
+                    let direction = editor.normalized_gravity_direction().unwrap_or(Vec3::ZERO);
                     next.kind = Some(BoundaryLoadPreviewKind::Gravity);
                     for (mesh_index, element_ids) in
                         selected_elements_from_faces_or_elements(&selection, model)
@@ -5535,7 +5538,7 @@ pub(crate) fn update_boundary_load_preview(
                         if count > 0 {
                             next.arrows.push(BoundaryLoadPreviewArrow {
                                 origin: centroid / count as f32,
-                                direction: signed_preview_direction(Vec3::NEG_Y, magnitude),
+                                direction: signed_preview_direction(direction, magnitude),
                             });
                         }
                     }
@@ -5643,10 +5646,10 @@ pub(crate) fn update_apply_dload_label(
     selection: Res<SelectionState>,
     model: Option<Res<FemModel>>,
     kind: Res<SelectedDloadKind>,
-    slider_query: Query<&SliderState, With<SliderTrack>>,
+    editor: Res<BoundaryLoadEditorState>,
     mut labels: Query<&mut Text, With<ApplyDloadLabel>>,
 ) {
-    if !selection.is_changed() && !kind.is_changed() {
+    if !selection.is_changed() && !kind.is_changed() && !editor.is_changed() {
         return;
     }
 
@@ -5676,18 +5679,21 @@ pub(crate) fn update_apply_dload_label(
         ),
     };
 
-    let mag = slider_query
-        .iter()
-        .find(|s| s.id == SliderId::DloadMagnitude)
-        .map(|s| s.value)
-        .unwrap_or(1.0);
+    let mag = match *kind {
+        SelectedDloadKind::Pressure => editor.pressure,
+        SelectedDloadKind::Gravity => editor.gravity_acceleration,
+    };
 
     let kind_label = match *kind {
         SelectedDloadKind::Pressure => "Pressure",
         SelectedDloadKind::Gravity => "Gravity",
     };
 
-    **text = if n > 0 {
+    **text = if *kind == SelectedDloadKind::Gravity
+        && editor.normalized_gravity_direction().is_none()
+    {
+        "Apply Gravity - direction must be non-zero".to_string()
+    } else if n > 0 {
         format!("Apply {kind_label} {mag:.2}  ({n} {unit})")
     } else {
         format!("Apply {kind_label}  - no faces/elements selected")
@@ -5701,7 +5707,7 @@ pub(crate) fn apply_dload_button_system(
     model: Option<Res<FemModel>>,
     selection: Res<SelectionState>,
     kind: Res<SelectedDloadKind>,
-    slider_query: Query<&SliderState, With<SliderTrack>>,
+    editor: Res<BoundaryLoadEditorState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<ApplyDloadButton>,
@@ -5711,14 +5717,9 @@ pub(crate) fn apply_dload_button_system(
         return;
     };
 
-    let magnitude = slider_query
-        .iter()
-        .find(|s| s.id == SliderId::DloadMagnitude)
-        .map(|s| s.value)
-        .unwrap_or(1.0);
-
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let mut added = false;
             // Pressure needs which face was picked (P1..P6 in the exported
             // .cnt); gravity is a whole-element body force and has no face.
             match *kind {
@@ -5736,12 +5737,16 @@ pub(crate) fn apply_dload_button_system(
                             mesh_index,
                             target: fem_core::DistributedLoadTarget::Faces(faces),
                             kind: fem_core::DistributedLoadKind::Pressure,
-                            value: magnitude,
+                            value: editor.pressure,
                             direction: None,
                         });
+                        added = true;
                     }
                 }
                 SelectedDloadKind::Gravity => {
+                    let Some(direction) = editor.normalized_gravity_direction() else {
+                        continue;
+                    };
                     for (mesh_index, elements) in
                         selected_elements_from_faces_or_elements(&selection, model)
                     {
@@ -5755,14 +5760,17 @@ pub(crate) fn apply_dload_button_system(
                             mesh_index,
                             target: fem_core::DistributedLoadTarget::Elements(elements),
                             kind: fem_core::DistributedLoadKind::Gravity,
-                            value: magnitude,
-                            direction: Some(Vec3::NEG_Y),
+                            value: editor.gravity_acceleration,
+                            direction: Some(direction),
                         });
+                        added = true;
                     }
                 }
             }
 
-            setup.set_changed();
+            if added {
+                setup.set_changed();
+            }
         }
 
         let color = match *interaction {
@@ -6377,9 +6385,10 @@ pub(crate) fn assembly_mode_button_system(
     };
 
     if *interaction == Interaction::Pressed && interaction.is_changed() {
-        *tool = match *tool {
-            ViewportTool::Selection => ViewportTool::Assembly,
-            ViewportTool::Assembly => ViewportTool::Selection,
+        *tool = if *tool == ViewportTool::Assembly {
+            ViewportTool::Selection
+        } else {
+            ViewportTool::Assembly
         };
         state.hovered_part = None;
         state.hovered_axis = None;
@@ -8099,10 +8108,10 @@ mod sidebar_page_tests {
         CameraFitRequest, ContactDefinitionSettings, ContactPairKind, SELECTION_GUIDE_TEXT,
         SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
         SurfaceSelectionSettings, apply_mesh, create_contact_from_draft, merge_mesh_contact_pairs,
-        page_supports_part_position, selected_nodes_by_mesh, selection_context_for_page,
-        selection_operation_hint, sidebar_page_display, signed_preview_direction,
-        supports_surface_growth, surface_selection_hint, sync_contact_measurement_box,
-        update_hover_preview_group,
+        page_supports_part_position, page_supports_tool, selected_nodes_by_mesh,
+        selection_context_for_page, selection_operation_hint, sidebar_page_display,
+        signed_preview_direction, supports_surface_growth, surface_selection_hint,
+        sync_contact_measurement_box, update_hover_preview_group,
     };
     use crate::measurement::{MeasurementBoxState, MeasurementTarget};
     use bevy::prelude::{App, Display, Update, Vec3};
@@ -8137,6 +8146,26 @@ mod sidebar_page_tests {
         assert!(page_supports_part_position(SidebarPage::Model));
         assert!(page_supports_part_position(SidebarPage::Contact));
         assert!(!page_supports_part_position(SidebarPage::Materials));
+    }
+
+    #[test]
+    fn viewport_tools_are_limited_to_their_workflow_pages() {
+        assert!(page_supports_tool(
+            SidebarPage::Contact,
+            ViewportTool::Assembly
+        ));
+        assert!(!page_supports_tool(
+            SidebarPage::Loads,
+            ViewportTool::Assembly
+        ));
+        assert!(page_supports_tool(
+            SidebarPage::Loads,
+            ViewportTool::LoadDirection
+        ));
+        assert!(!page_supports_tool(
+            SidebarPage::Model,
+            ViewportTool::LoadDirection
+        ));
     }
 
     #[test]

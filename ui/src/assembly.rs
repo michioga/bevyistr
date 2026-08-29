@@ -23,7 +23,7 @@ const GIZMO_LENGTH_FACTOR: f32 = 0.24;
 const ROTATION_RING_FACTOR: f32 = 0.36;
 const ROTATION_RING_RADIUS: f32 = 0.92;
 const ROTATION_PICK_TOLERANCE: f32 = 0.12;
-const ASSEMBLY_GIZMO_RENDER_LAYER: usize = 30;
+pub(crate) const VIEWPORT_GIZMO_RENDER_LAYER: usize = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum AssemblyGizmoMode {
@@ -164,7 +164,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
             clear_color: ClearColorConfig::None,
             ..default()
         },
-        RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
+        RenderLayers::layer(VIEWPORT_GIZMO_RENDER_LAYER),
         AssemblyGizmoOverlayCamera,
         Name::new("Assembly gizmo X-ray camera"),
     ));
@@ -230,7 +230,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(0.10, 0.10, 0.10))),
         MeshMaterial3d(root_material.clone()),
-        RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
+        RenderLayers::layer(VIEWPORT_GIZMO_RENDER_LAYER),
         Transform::default(),
         Visibility::Hidden,
         AssemblyGizmoPiece {
@@ -263,7 +263,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
                 half_height: 0.32,
             })),
             MeshMaterial3d(normal_material.clone()),
-            RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
+            RenderLayers::layer(VIEWPORT_GIZMO_RENDER_LAYER),
             Transform::default(),
             Visibility::Hidden,
             AssemblyGizmoPiece {
@@ -283,7 +283,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
                 height: 0.20,
             })),
             MeshMaterial3d(normal_material.clone()),
-            RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
+            RenderLayers::layer(VIEWPORT_GIZMO_RENDER_LAYER),
             Transform::default(),
             Visibility::Hidden,
             AssemblyGizmoPiece {
@@ -308,7 +308,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
         commands.spawn((
             Mesh3d(meshes.add(Torus::new(0.84, 1.0))),
             MeshMaterial3d(ring_material.clone()),
-            RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
+            RenderLayers::layer(VIEWPORT_GIZMO_RENDER_LAYER),
             Transform::default(),
             Visibility::Hidden,
             AssemblyGizmoPiece {
@@ -339,7 +339,7 @@ pub(crate) fn sync_assembly_overlay_camera(
     let Ok((mut camera, mut transform, mut projection)) = overlay_camera.single_mut() else {
         return;
     };
-    camera.is_active = *tool == ViewportTool::Assembly;
+    camera.is_active = matches!(*tool, ViewportTool::Assembly | ViewportTool::LoadDirection);
     if !camera.is_active {
         return;
     }

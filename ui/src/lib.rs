@@ -1,5 +1,7 @@
 mod assembly;
+mod boundary_editor;
 mod layout;
+mod load_direction;
 mod measurement;
 pub mod slider;
 
@@ -49,6 +51,16 @@ use layout::{
     update_selection_operation_hint, update_selection_stats_text, update_sidebar_page_visibility,
     update_surface_selection_hint, update_ui_pointer_state,
 };
+use boundary_editor::{
+    BoundaryLoadEditorState, QuickLoadControlState, apply_constraint_button_system,
+    constraint_dof_toggle_system, engineering_numeric_input_system, sync_quick_load_controls,
+    update_apply_constraint_label, update_dload_exact_field_visibility,
+};
+use load_direction::{
+    LoadDirectionPickerState, load_direction_picker_button_system,
+    load_direction_picker_hover_system, load_direction_picker_input_system,
+    spawn_load_direction_gizmo, update_load_direction_gizmo_visuals,
+};
 use measurement::{
     MeasurementBoxState, measurement_box_input_system, spawn_measurement_box,
     update_measurement_box_visuals, update_ui_keyboard_state,
@@ -79,10 +91,13 @@ impl Plugin for UiPlugin {
         app.init_resource::<visualization::BoundaryLoadPreview>();
         app.init_resource::<SidebarPage>();
         app.init_resource::<AssemblyEditorState>();
+        app.init_resource::<BoundaryLoadEditorState>();
+        app.init_resource::<QuickLoadControlState>();
         app.init_resource::<MeasurementBoxState>();
         app.init_resource::<CameraFitRequest>();
         app.init_resource::<SelectionGuideState>();
         app.init_resource::<SelectedLoadDirection>();
+        app.init_resource::<LoadDirectionPickerState>();
         app.init_resource::<ActiveLoadEditor>();
         app.init_resource::<SelectedSectionType>();
         app.init_resource::<SelectedEgrp>();
@@ -98,6 +113,7 @@ impl Plugin for UiPlugin {
             (
                 spawn_ui,
                 spawn_assembly_viewport_visuals,
+                spawn_load_direction_gizmo,
                 spawn_measurement_box,
             ),
         );
@@ -108,9 +124,11 @@ impl Plugin for UiPlugin {
             (
                 update_ui_keyboard_state
                     .before(measurement_box_input_system)
+                    .before(engineering_numeric_input_system)
                     .before(selection::selection_filter_shortcut_system)
                     .before(selection::clear_selection_shortcut_system),
                 measurement_box_input_system,
+                engineering_numeric_input_system.after(update_ui_keyboard_state),
             )
                 .in_set(InteractionSystems::UiInput),
         );
@@ -219,16 +237,19 @@ impl Plugin for UiPlugin {
                 open_setup_button_system,
                 constraint_preset_button_system,
                 load_direction_button_system,
+                load_direction_picker_button_system.in_set(InteractionSystems::UiInput),
                 apply_load_button_system,
                 dload_kind_button_system,
                 apply_dload_button_system,
                 sync_load_measurement_box
                     .after(load_direction_button_system)
                     .after(dload_kind_button_system)
+                    .after(sync_quick_load_controls)
                     .after(slider::update_sliders),
                 update_boundary_load_preview
                     .after(load_direction_button_system)
                     .after(dload_kind_button_system)
+                    .after(sync_quick_load_controls)
                     .after(slider::update_sliders),
                 material_preset_button_system,
                 material_select_button_system,
@@ -314,23 +335,49 @@ impl Plugin for UiPlugin {
 
         app.add_systems(
             Update,
-            assembly_viewport_hover_system.in_set(InteractionSystems::Picking),
+            (
+                assembly_viewport_hover_system,
+                load_direction_picker_hover_system,
+            )
+                .in_set(InteractionSystems::Picking),
         );
         app.add_systems(
             Update,
-            assembly_viewport_input_system.in_set(InteractionSystems::Selection),
+            (
+                constraint_dof_toggle_system.in_set(InteractionSystems::UiInput),
+                apply_constraint_button_system.after(constraint_preset_button_system),
+                sync_quick_load_controls
+                    .after(engineering_numeric_input_system)
+                    .after(load_direction_button_system)
+                    .after(dload_kind_button_system)
+                    .after(slider::update_sliders),
+                update_apply_constraint_label
+                    .after(constraint_preset_button_system)
+                    .after(constraint_dof_toggle_system),
+                update_dload_exact_field_visibility.after(dload_kind_button_system),
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
+                assembly_viewport_input_system,
+                load_direction_picker_input_system,
+            )
+                .in_set(InteractionSystems::Selection),
         );
         app.add_systems(
             Update,
             (
                 update_assembly_part_overlays,
                 update_assembly_gizmo_visuals,
+                update_load_direction_gizmo_visuals,
                 sync_assembly_overlay_camera,
                 update_measurement_box_visuals
                     .after(sync_load_measurement_box)
                     .after(sync_contact_measurement_box),
             )
-                .after(assembly_viewport_input_system),
+                .after(assembly_viewport_input_system)
+                .after(load_direction_picker_input_system),
         );
     }
 }

@@ -488,11 +488,11 @@ fn cursor_is_over_root(
     })
 }
 
-fn editable_value(input: &EditableText) -> String {
+pub(crate) fn editable_value(input: &EditableText) -> String {
     input.value().into_iter().collect()
 }
 
-fn parse_measurement(text: &str) -> Result<f32, &'static str> {
+pub(crate) fn parse_measurement(text: &str) -> Result<f32, &'static str> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("Enter a value");
@@ -504,7 +504,7 @@ fn parse_measurement(text: &str) -> Result<f32, &'static str> {
     Ok(value as f32)
 }
 
-fn format_measurement(value: f32) -> String {
+pub(crate) fn format_measurement(value: f32) -> String {
     if value == 0.0 {
         return "0".to_string();
     }

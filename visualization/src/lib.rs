@@ -17,6 +17,7 @@ use demo_mesh::{
 
 pub use boundary_viz::{
     BoundaryLoadPreview, BoundaryLoadPreviewArrow, BoundaryLoadPreviewKind,
+    BoundaryLoadPreviewMoment,
     BoundaryLoadPreviewVisual, BoundaryVisual, BoundaryVisualSettings,
 };
 pub use colorbar::ColorbagRoot;

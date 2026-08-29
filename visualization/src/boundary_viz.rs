@@ -39,6 +39,14 @@ pub struct BoundaryLoadPreviewArrow {
     pub direction: Vec3,
 }
 
+/// One provisional moment shown as a right-hand-rule arc about `axis`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundaryLoadPreviewMoment {
+    pub origin: Vec3,
+
+    pub axis: Vec3,
+}
+
 /// View-only load feedback assembled by the UI from the current selection.
 /// It never becomes solver input until the user presses an Apply button.
 #[derive(Resource, Debug, Clone, PartialEq, Default)]
@@ -46,6 +54,8 @@ pub struct BoundaryLoadPreview {
     pub kind: Option<BoundaryLoadPreviewKind>,
 
     pub arrows: Vec<BoundaryLoadPreviewArrow>,
+
+    pub moments: Vec<BoundaryLoadPreviewMoment>,
 }
 
 #[derive(Component)]
@@ -68,6 +78,7 @@ impl Default for BoundaryVisualSettings {
 }
 
 const CONSTRAINT_COLOR: Color = Color::srgb(0.95, 0.30, 0.20);
+const ROTATION_CONSTRAINT_COLOR: Color = Color::srgb(0.96, 0.30, 0.66);
 const LOAD_COLOR: Color = Color::srgb(0.95, 0.65, 0.10);
 const PRESSURE_COLOR: Color = Color::srgb(0.35, 0.75, 0.95);
 const GRAVITY_COLOR: Color = Color::srgb(0.70, 0.55, 0.95);
@@ -100,7 +111,7 @@ pub fn spawn_boundary_load_preview(
         return;
     };
     let size = boundary_symbol_size(model);
-    let Some(mesh) = build_load_preview_mesh(&preview.arrows, size) else {
+    let Some(mesh) = build_load_preview_mesh(&preview.arrows, &preview.moments, size) else {
         return;
     };
     let color = match kind {
@@ -126,8 +137,12 @@ pub fn spawn_boundary_load_preview(
     ));
 }
 
-fn build_load_preview_mesh(arrows: &[BoundaryLoadPreviewArrow], size: f32) -> Option<Mesh> {
-    if arrows.is_empty() {
+fn build_load_preview_mesh(
+    arrows: &[BoundaryLoadPreviewArrow],
+    moments: &[BoundaryLoadPreviewMoment],
+    size: f32,
+) -> Option<Mesh> {
+    if arrows.is_empty() && moments.is_empty() {
         return None;
     }
 
@@ -144,6 +159,24 @@ fn build_load_preview_mesh(arrows: &[BoundaryLoadPreviewArrow], size: f32) -> Op
             arrow.direction,
             size,
             6,
+        );
+    }
+
+    let moment_stride = moments.len().div_ceil(MAX_PREVIEW_ARROWS).max(1);
+    for moment in moments
+        .iter()
+        .step_by(moment_stride)
+        .take(MAX_PREVIEW_ARROWS)
+    {
+        append_moment_arc(
+            &mut positions,
+            &mut normals,
+            moment.origin,
+            moment.axis,
+            size * 1.15,
+            size * 0.13,
+            16,
+            4,
         );
     }
 
@@ -200,6 +233,99 @@ fn append_load_preview_arrow(
     }
 }
 
+/// Appends a curved right-hand-rule arrow around `axis`. A low-poly tube is
+/// used rather than Bevy entities per segment so thousands of selected nodes
+/// still produce one preview mesh.
+fn append_moment_arc(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    center: Vec3,
+    axis: Vec3,
+    radius: f32,
+    tube_radius: f32,
+    arc_segments: usize,
+    tube_sides: usize,
+) {
+    let Some(axis) = axis.try_normalize() else {
+        return;
+    };
+    let Some((u, v)) = perpendicular_basis(axis) else {
+        return;
+    };
+    let arc_segments = arc_segments.max(3);
+    let tube_sides = tube_sides.max(3);
+    let start = -std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.50;
+
+    for segment in 0..arc_segments {
+        let theta0 = start + sweep * segment as f32 / arc_segments as f32;
+        let theta1 = start + sweep * (segment + 1) as f32 / arc_segments as f32;
+        let radial0 = u * theta0.cos() + v * theta0.sin();
+        let radial1 = u * theta1.cos() + v * theta1.sin();
+        let center0 = center + radial0 * radius;
+        let center1 = center + radial1 * radius;
+
+        for side in 0..tube_sides {
+            let phi0 = std::f32::consts::TAU * side as f32 / tube_sides as f32;
+            let phi1 = std::f32::consts::TAU * (side + 1) as f32 / tube_sides as f32;
+            let ring00 = center0 + (radial0 * phi0.cos() + axis * phi0.sin()) * tube_radius;
+            let ring01 = center0 + (radial0 * phi1.cos() + axis * phi1.sin()) * tube_radius;
+            let ring10 = center1 + (radial1 * phi0.cos() + axis * phi0.sin()) * tube_radius;
+            let ring11 = center1 + (radial1 * phi1.cos() + axis * phi1.sin()) * tube_radius;
+            append_triangle(positions, normals, ring00, ring10, ring11);
+            append_triangle(positions, normals, ring00, ring11, ring01);
+        }
+    }
+
+    let end = start + sweep;
+    let radial = u * end.cos() + v * end.sin();
+    let tangent = (-u * end.sin() + v * end.cos()).normalize();
+    let base_center = center + radial * radius;
+    append_oriented_cone(
+        positions,
+        normals,
+        base_center,
+        base_center + tangent * radius * 0.42,
+        tube_radius * 2.4,
+        tube_sides.max(6),
+    );
+}
+
+fn perpendicular_basis(axis: Vec3) -> Option<(Vec3, Vec3)> {
+    let helper = if axis.dot(Vec3::Y).abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let u = axis.cross(helper).try_normalize()?;
+    let v = axis.cross(u).try_normalize()?;
+    Some((u, v))
+}
+
+fn append_oriented_cone(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    base_center: Vec3,
+    tip: Vec3,
+    radius: f32,
+    sides: usize,
+) {
+    let Some(direction) = (tip - base_center).try_normalize() else {
+        return;
+    };
+    let Some((u, v)) = perpendicular_basis(direction) else {
+        return;
+    };
+    for side in 0..sides {
+        let angle0 = std::f32::consts::TAU * side as f32 / sides as f32;
+        let angle1 = std::f32::consts::TAU * (side + 1) as f32 / sides as f32;
+        let ring0 = base_center + (u * angle0.cos() + v * angle0.sin()) * radius;
+        let ring1 = base_center + (u * angle1.cos() + v * angle1.sin()) * radius;
+        append_triangle(positions, normals, tip, ring0, ring1);
+        append_triangle(positions, normals, base_center, ring1, ring0);
+    }
+}
+
 /// (Re)spawns constraint cones and load arrows whenever [`AnalysisSetup`]
 /// or [`BoundaryVisualSettings`] changes.
 ///
@@ -248,9 +374,16 @@ pub fn spawn_boundary_visuals(
         cull_mode: None,
         ..default()
     });
+    let rotation_constraint_material = materials.add(StandardMaterial {
+        base_color: ROTATION_CONSTRAINT_COLOR,
+        unlit: true,
+        cull_mode: None,
+        ..default()
+    });
     let load_material = materials.add(StandardMaterial {
         base_color: LOAD_COLOR,
         unlit: true,
+        cull_mode: None,
         ..default()
     });
     let pressure_material = materials.add(StandardMaterial {
@@ -272,6 +405,7 @@ pub fn spawn_boundary_visuals(
             setup,
             symbol_size,
             constraint_material,
+            rotation_constraint_material,
         );
     }
 
@@ -296,31 +430,35 @@ pub fn spawn_boundary_visuals(
     }
 }
 
-/// One cone per restrained translational axis (Ux/Uy/Uz), pointing inward
-/// toward the node — the conventional FEM "roller/pin" constraint symbol.
-/// Rotational-only constraints (Rx-Rz) are skipped: there is no
-/// universally recognized lightweight 3-D glyph for a rotational
-/// constraint, and adding one would clutter the view without a strong
-/// payoff; the dof_label is still available via hover/inspection text.
+/// Cones represent restrained translations; magenta rings represent
+/// restrained rotations about their normal axis.
 fn spawn_constraint_symbols(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     model: &FemModel,
     setup: &AnalysisSetup,
     size: f32,
-    material: Handle<StandardMaterial>,
+    translation_material: Handle<StandardMaterial>,
+    rotation_material: Handle<StandardMaterial>,
 ) {
-    let Some(mesh) = build_constraint_mesh(model, setup, size) else {
-        return;
-    };
-
-    commands.spawn((
-        Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(material),
-        Transform::default(),
-        BoundaryVisual,
-        Name::new("Boundary constraint symbols"),
-    ));
+    if let Some(mesh) = build_constraint_mesh(model, setup, size) {
+        commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(translation_material),
+            Transform::default(),
+            BoundaryVisual,
+            Name::new("Translational constraint symbols"),
+        ));
+    }
+    if let Some(mesh) = build_rotation_constraint_mesh(model, setup, size) {
+        commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(rotation_material),
+            Transform::default(),
+            BoundaryVisual,
+            Name::new("Rotational constraint symbols"),
+        ));
+    }
 }
 
 /// Builds every translational constraint marker into one low-poly mesh.
@@ -386,6 +524,95 @@ fn build_constraint_mesh(model: &FemModel, setup: &AnalysisSetup, size: f32) -> 
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     })
+}
+
+/// Builds rotational restraints as lightweight annular ribbons. The ring
+/// plane identifies the restrained axis while a distinct magenta color keeps
+/// it separate from translational restraint cones.
+fn build_rotation_constraint_mesh(
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    size: f32,
+) -> Option<Mesh> {
+    const RING_SEGMENTS: usize = 12;
+    let estimated_symbols: usize = setup
+        .boundary_conditions
+        .iter()
+        .map(|bc| {
+            let axis_count = (4u8..=6)
+                .filter(|dof| *dof >= bc.dof_start && *dof <= bc.dof_end)
+                .count();
+            bc.nodes.len() * axis_count
+        })
+        .sum();
+    let mut positions = Vec::with_capacity(estimated_symbols * RING_SEGMENTS * 6);
+    let mut normals = Vec::with_capacity(estimated_symbols * RING_SEGMENTS * 6);
+
+    for bc in &setup.boundary_conditions {
+        if !bc.constrains_rotation() {
+            continue;
+        }
+        let Some(mesh) = model.meshes.get(bc.mesh_index) else {
+            continue;
+        };
+        for &node_id in &bc.nodes {
+            let Some(position) = mesh.node_position(node_id) else {
+                continue;
+            };
+            for (dof, axis) in [(4u8, Vec3::X), (5, Vec3::Y), (6, Vec3::Z)] {
+                if dof < bc.dof_start || dof > bc.dof_end {
+                    continue;
+                }
+                append_rotation_constraint_ring(
+                    &mut positions,
+                    &mut normals,
+                    position,
+                    axis,
+                    size * 0.82,
+                    size * 0.10,
+                    RING_SEGMENTS,
+                );
+            }
+        }
+    }
+
+    (!positions.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    })
+}
+
+fn append_rotation_constraint_ring(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    center: Vec3,
+    axis: Vec3,
+    radius: f32,
+    half_width: f32,
+    segments: usize,
+) {
+    let Some(axis) = axis.try_normalize() else {
+        return;
+    };
+    let Some((u, v)) = perpendicular_basis(axis) else {
+        return;
+    };
+    for segment in 0..segments {
+        let angle0 = std::f32::consts::TAU * segment as f32 / segments as f32;
+        let angle1 = std::f32::consts::TAU * (segment + 1) as f32 / segments as f32;
+        let radial0 = u * angle0.cos() + v * angle0.sin();
+        let radial1 = u * angle1.cos() + v * angle1.sin();
+        let inner0 = center + radial0 * (radius - half_width);
+        let outer0 = center + radial0 * (radius + half_width);
+        let inner1 = center + radial1 * (radius - half_width);
+        let outer1 = center + radial1 * (radius + half_width);
+        append_triangle(positions, normals, inner0, outer0, outer1);
+        append_triangle(positions, normals, inner0, outer1, inner1);
+    }
 }
 
 fn append_constraint_cone(
@@ -480,6 +707,7 @@ fn spawn_load_arrows(
     let max_magnitude = setup
         .nodal_loads
         .iter()
+        .filter(|load| (1..=3).contains(&load.dof))
         .map(|load| load.value.abs())
         .fold(0.0f32, f32::max)
         .max(1.0e-9);
@@ -496,7 +724,7 @@ fn spawn_load_arrows(
             1 => Vec3::X,
             2 => Vec3::Y,
             3 => Vec3::Z,
-            _ => continue, // moments (DOF 4-6) not visualized as arrows
+            _ => continue,
         };
 
         let direction = axis * load.value.signum();
@@ -549,6 +777,79 @@ fn spawn_load_arrows(
             Name::new(format!("Load head {} @ node {}", load.name, load.node.0)),
         ));
     }
+
+    spawn_nodal_moment_arcs(commands, meshes, model, setup, base_size, material);
+}
+
+/// Draws `Mx/My/Mz` as combined curved arrows. Force and moment magnitudes
+/// are scaled independently because they have different physical units.
+fn spawn_nodal_moment_arcs(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    base_size: f32,
+    material: Handle<StandardMaterial>,
+) {
+    const MAX_MOMENT_GLYPHS: usize = 2_000;
+    let moments: Vec<_> = setup
+        .nodal_loads
+        .iter()
+        .filter(|load| (4..=6).contains(&load.dof) && load.value.abs() > f32::EPSILON)
+        .collect();
+    if moments.is_empty() {
+        return;
+    }
+    let max_magnitude = moments
+        .iter()
+        .map(|load| load.value.abs())
+        .fold(0.0f32, f32::max)
+        .max(1.0e-9);
+    let stride = moments.len().div_ceil(MAX_MOMENT_GLYPHS).max(1);
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+
+    for load in moments.into_iter().step_by(stride).take(MAX_MOMENT_GLYPHS) {
+        let Some(mesh) = model.meshes.get(load.mesh_index) else {
+            continue;
+        };
+        let Some(position) = mesh.node_position(load.node) else {
+            continue;
+        };
+        let axis = match load.dof {
+            4 => Vec3::X,
+            5 => Vec3::Y,
+            6 => Vec3::Z,
+            _ => continue,
+        } * load.value.signum();
+        let relative = load.value.abs() / max_magnitude;
+        append_moment_arc(
+            &mut positions,
+            &mut normals,
+            position,
+            axis,
+            base_size * (1.05 + 0.80 * relative),
+            base_size * 0.13,
+            12,
+            3,
+        );
+    }
+    if positions.is_empty() {
+        return;
+    }
+    let mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(material),
+        Transform::default(),
+        BoundaryVisual,
+        Name::new("Nodal moment arcs"),
+    ));
 }
 
 /// One arrow per pressure [`fem_core::DistributedLoad`] face, drawn from
@@ -792,7 +1093,7 @@ mod tests {
             direction: Vec3::X,
         }];
 
-        let mesh = build_load_preview_mesh(&arrows, 1.0).unwrap();
+        let mesh = build_load_preview_mesh(&arrows, &[], 1.0).unwrap();
 
         // Six sides: 12 shaft triangles + 6 head triangles.
         assert_eq!(mesh.count_vertices(), 18 * 3);
@@ -805,6 +1106,39 @@ mod tests {
             direction: Vec3::ZERO,
         }];
 
-        assert!(build_load_preview_mesh(&arrows, 1.0).is_none());
+        assert!(build_load_preview_mesh(&arrows, &[], 1.0).is_none());
+    }
+
+    #[test]
+    fn rotational_constraint_rings_are_combined_into_one_mesh() {
+        let mesh = FemMesh::new(vec![FemNode::new(NodeId(1), Vec3::ZERO)], Vec::new());
+        let model = FemModel::single_mesh("test", mesh);
+        let mut setup = AnalysisSetup::default();
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "FIX_ROT".to_string(),
+            mesh_index: 0,
+            nodes: vec![NodeId(1)],
+            ngrp_name: None,
+            dof_start: 4,
+            dof_end: 6,
+            value: 0.0,
+        });
+
+        let mesh = build_rotation_constraint_mesh(&model, &setup, 1.0).unwrap();
+
+        // 3 axes * 12 ring segments * 2 triangles * 3 vertices.
+        assert_eq!(mesh.count_vertices(), 3 * 12 * 2 * 3);
+    }
+
+    #[test]
+    fn moment_preview_generates_a_curved_arrow() {
+        let moments = [BoundaryLoadPreviewMoment {
+            origin: Vec3::ZERO,
+            axis: Vec3::Z,
+        }];
+
+        let mesh = build_load_preview_mesh(&[], &moments, 1.0).unwrap();
+
+        assert!(mesh.count_vertices() > 16 * 2 * 3);
     }
 }
