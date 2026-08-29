@@ -5,9 +5,7 @@
 //! expose all six structural degrees of freedom and are copied to
 //! [`fem_core::AnalysisSetup`] only by an explicit Apply action.
 
-use crate::layout::{
-    ActiveLoadEditor, SelectedDloadKind, SelectedLoadDirection, UiInputCapture,
-};
+use crate::layout::{ActiveLoadEditor, SelectedDloadKind, SelectedLoadDirection, UiInputCapture};
 use crate::measurement::{editable_value, format_measurement, parse_measurement};
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::input_focus::InputFocus;
@@ -40,7 +38,24 @@ pub(crate) struct BoundaryLoadEditorState {
     pub pressure: f32,
     pub gravity_acceleration: f32,
     pub gravity_direction: Vec3,
+    pub constraint_rotation_mode: RotationalInputMode,
+    pub load_moment_mode: RotationalInputMode,
+    pub rotation_center: Option<fem_core::FemEntityRef>,
+    pub rotation_center_feedback: Option<String>,
     pub error: Option<(EngineeringField, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RotationalInputMode {
+    #[default]
+    DirectDof,
+    AboutCenter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RotationalInputKind {
+    Constraint,
+    Load,
 }
 
 /// Last values observed from the coarse sliders. Bevy change detection also
@@ -61,6 +76,10 @@ impl Default for BoundaryLoadEditorState {
             pressure: 1.0,
             gravity_acceleration: 1.0,
             gravity_direction: Vec3::NEG_Y,
+            constraint_rotation_mode: RotationalInputMode::DirectDof,
+            load_moment_mode: RotationalInputMode::DirectDof,
+            rotation_center: None,
+            rotation_center_feedback: None,
             error: None,
         }
     }
@@ -117,6 +136,46 @@ impl BoundaryLoadEditorState {
         self.gravity_direction.try_normalize()
     }
 
+    pub(crate) fn resolved_rotation_center(&self) -> Option<fem_core::RotationCenter> {
+        let center = self.rotation_center?;
+        let FemEntityId::Node(node) = center.entity else {
+            return None;
+        };
+        Some(fem_core::RotationCenter::from_node(center.mesh_index, node))
+    }
+
+    pub(crate) fn constraint_solver_component(
+        &self,
+        index: usize,
+    ) -> Option<(u8, Option<fem_core::RotationCenter>)> {
+        match index {
+            0..=2 => Some((index as u8 + 1, None)),
+            3..=5 if self.constraint_rotation_mode == RotationalInputMode::DirectDof => {
+                Some((index as u8 + 1, None))
+            }
+            3..=5 => self
+                .resolved_rotation_center()
+                .map(|center| (index as u8 - 2, Some(center))),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn load_solver_component(
+        &self,
+        index: usize,
+    ) -> Option<(u8, Option<fem_core::RotationCenter>)> {
+        match index {
+            0..=2 => Some((index as u8 + 1, None)),
+            3..=5 if self.load_moment_mode == RotationalInputMode::DirectDof => {
+                Some((index as u8 + 1, None))
+            }
+            3..=5 => self
+                .resolved_rotation_center()
+                .map(|center| (index as u8 - 2, Some(center))),
+            _ => None,
+        }
+    }
+
     fn value(&self, field: EngineeringField) -> f32 {
         match field {
             EngineeringField::Constraint(dof) => self.constraint_values[usize::from(dof - 1)],
@@ -164,6 +223,21 @@ pub(crate) struct ApplyConstraintButton;
 pub(crate) struct ApplyConstraintLabel;
 
 #[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct RotationalInputModeButton {
+    pub kind: RotationalInputKind,
+    pub mode: RotationalInputMode,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) enum RotationCenterButton {
+    Capture,
+    Clear,
+}
+
+#[derive(Component)]
+pub(crate) struct RotationCenterStatus;
+
+#[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct DloadExactFieldGroup(pub SelectedDloadKind);
 
 #[derive(Component)]
@@ -183,6 +257,7 @@ pub(crate) fn spawn_constraint_exact_editor(parent: &mut ChildSpawnerCommands) {
         ],
         true,
     );
+    spawn_rotational_input_controls(parent, RotationalInputKind::Constraint);
     apply_button(
         parent,
         "Apply Constraints",
@@ -206,6 +281,103 @@ pub(crate) fn spawn_nodal_exact_editor(parent: &mut ChildSpawnerCommands) {
         ],
         false,
     );
+    spawn_rotational_input_controls(parent, RotationalInputKind::Load);
+}
+
+fn spawn_rotational_input_controls(parent: &mut ChildSpawnerCommands, kind: RotationalInputKind) {
+    let caption = match kind {
+        RotationalInputKind::Constraint => "Rx/Ry/Rz interpretation",
+        RotationalInputKind::Load => "Mx/My/Mz interpretation",
+    };
+    section_caption(parent, caption);
+    parent
+        .spawn((Node {
+            width: percent(100.0),
+            flex_direction: FlexDirection::Row,
+            column_gap: px(4.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (label, mode) in [
+                ("Direct DOF", RotationalInputMode::DirectDof),
+                ("About center", RotationalInputMode::AboutCenter),
+            ] {
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: 1.0,
+                        height: px(22.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(INPUT_BORDER),
+                    RotationalInputModeButton { kind, mode },
+                ))
+                .with_child((
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
+            }
+        });
+    parent
+        .spawn((Node {
+            width: percent(100.0),
+            flex_direction: FlexDirection::Row,
+            column_gap: px(4.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (label, action, grow) in [
+                (
+                    "Set center from selected node",
+                    RotationCenterButton::Capture,
+                    1.0,
+                ),
+                ("Clear", RotationCenterButton::Clear, 0.0),
+            ] {
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: grow,
+                        min_width: if grow > 0.0 { px(0.0) } else { px(52.0) },
+                        height: px(22.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(INPUT_BORDER),
+                    action,
+                ))
+                .with_child((
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
+            }
+        });
+    parent.spawn((
+        Text::new("Center: not set"),
+        TextFont {
+            font_size: FontSize::Px(8.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        RotationCenterStatus,
+    ));
 }
 
 pub(crate) fn spawn_dload_exact_editor(parent: &mut ChildSpawnerCommands) {
@@ -361,11 +533,7 @@ fn compact_value_field(
         });
 }
 
-fn wide_value_row(
-    parent: &mut ChildSpawnerCommands,
-    label: &'static str,
-    field: EngineeringField,
-) {
+fn wide_value_row(parent: &mut ChildSpawnerCommands, label: &'static str, field: EngineeringField) {
     parent
         .spawn((Node {
             width: percent(100.0),
@@ -542,9 +710,10 @@ pub(crate) fn engineering_numeric_input_system(
             }
         }
 
-        let field_has_error = state.error.as_ref().is_some_and(|(error_field, _)| {
-            *error_field == field.0
-        });
+        let field_has_error = state
+            .error
+            .as_ref()
+            .is_some_and(|(error_field, _)| *error_field == field.0);
         *border = BorderColor::all(if field_has_error {
             INPUT_ERROR_BORDER
         } else if focused {
@@ -595,6 +764,129 @@ pub(crate) fn constraint_dof_toggle_system(
     }
 }
 
+pub(crate) fn rotational_input_mode_button_system(
+    mut state: ResMut<BoundaryLoadEditorState>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &RotationalInputModeButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            match button.kind {
+                RotationalInputKind::Constraint => {
+                    state.constraint_rotation_mode = button.mode;
+                }
+                RotationalInputKind::Load => state.load_moment_mode = button.mode,
+            }
+            state.rotation_center_feedback = None;
+        }
+        let active = match button.kind {
+            RotationalInputKind::Constraint => state.constraint_rotation_mode == button.mode,
+            RotationalInputKind::Load => state.load_moment_mode == button.mode,
+        };
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active {
+            INPUT_FOCUS_BORDER
+        } else {
+            INPUT_BORDER
+        });
+    }
+}
+
+pub(crate) fn rotation_center_button_system(
+    model: Option<Res<FemModel>>,
+    selection: Res<SelectionState>,
+    mut state: ResMut<BoundaryLoadEditorState>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &RotationCenterButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, action, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            match action {
+                RotationCenterButton::Capture => {
+                    let selected_nodes: Vec<_> = selection
+                        .targets
+                        .iter()
+                        .copied()
+                        .filter(|target| matches!(target.entity, FemEntityId::Node(_)))
+                        .collect();
+                    if let [center] = selected_nodes.as_slice() {
+                        let exists = model.as_deref().is_some_and(|model| {
+                            let FemEntityId::Node(node) = center.entity else {
+                                return false;
+                            };
+                            model
+                                .meshes
+                                .get(center.mesh_index)
+                                .is_some_and(|mesh| mesh.node_position(node).is_some())
+                        });
+                        if exists {
+                            state.rotation_center = Some(*center);
+                            state.rotation_center_feedback = None;
+                        } else {
+                            state.rotation_center_feedback =
+                                Some("Selected center is not present in the model".into());
+                        }
+                    } else {
+                        state.rotation_center_feedback = Some(
+                            "Select exactly one node, set the center, then select target nodes"
+                                .into(),
+                        );
+                    }
+                }
+                RotationCenterButton::Clear => {
+                    state.rotation_center = None;
+                    state.rotation_center_feedback = None;
+                }
+            }
+        }
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(INPUT_BORDER);
+    }
+}
+
+pub(crate) fn update_rotation_center_status(
+    state: Res<BoundaryLoadEditorState>,
+    mut statuses: Query<&mut Text, With<RotationCenterStatus>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    let text = if let Some(message) = &state.rotation_center_feedback {
+        message.clone()
+    } else if let Some(center) = state.rotation_center {
+        match center.entity {
+            FemEntityId::Node(node) => format!(
+                "Center: part {} / node {} - now select target nodes",
+                center.mesh_index + 1,
+                node.0
+            ),
+            _ => "Center: invalid selection".to_string(),
+        }
+    } else {
+        "Center: not set (required only for About center)".to_string()
+    };
+    for mut status in &mut statuses {
+        **status = text.clone();
+    }
+}
+
 pub(crate) fn apply_constraint_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     model: Option<Res<FemModel>>,
@@ -610,6 +902,11 @@ pub(crate) fn apply_constraint_button_system(
     };
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let needs_center = state.constraint_rotation_mode == RotationalInputMode::AboutCenter
+                && state.constraint_enabled[3..].iter().any(|enabled| *enabled);
+            if needs_center && state.resolved_rotation_center().is_none() {
+                continue;
+            }
             let mut added = false;
             for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
                 if nodes.is_empty() || model.meshes.get(mesh_index).is_none() {
@@ -620,12 +917,16 @@ pub(crate) fn apply_constraint_button_system(
                     if !enabled {
                         continue;
                     }
-                    let dof = index as u8 + 1;
+                    let Some((dof, rotation_center)) = state.constraint_solver_component(index)
+                    else {
+                        continue;
+                    };
                     setup.boundary_conditions.push(fem_core::BoundaryCondition {
                         name: name.clone(),
                         mesh_index,
                         nodes: nodes.clone(),
                         ngrp_name: None,
+                        rotation_center,
                         dof_start: dof,
                         dof_end: dof,
                         value: state.constraint_values[index],
@@ -662,8 +963,17 @@ pub(crate) fn update_apply_constraint_label(
         .iter()
         .filter(|target| matches!(target.entity, FemEntityId::Node(_)))
         .count();
-    let dof_count = state.constraint_enabled.iter().filter(|enabled| **enabled).count();
-    **label = if node_count == 0 {
+    let dof_count = state
+        .constraint_enabled
+        .iter()
+        .filter(|enabled| **enabled)
+        .count();
+    let needs_center = state.constraint_rotation_mode == RotationalInputMode::AboutCenter
+        && state.constraint_enabled[3..].iter().any(|enabled| *enabled)
+        && state.rotation_center.is_none();
+    **label = if needs_center {
+        "Apply Constraints - set one rotation center".to_string()
+    } else if node_count == 0 {
         "Apply Constraints - no nodes selected".to_string()
     } else if dof_count == 0 {
         format!("Apply Constraints - choose DOF ({node_count} nodes)")
@@ -683,7 +993,9 @@ pub(crate) fn sync_quick_load_controls(
     mut quick: ResMut<QuickLoadControlState>,
     sliders: Query<&SliderState, With<SliderTrack>>,
 ) {
-    let load_slider = sliders.iter().find(|slider| slider.id == SliderId::LoadMagnitude);
+    let load_slider = sliders
+        .iter()
+        .find(|slider| slider.id == SliderId::LoadMagnitude);
     let dload_slider = sliders
         .iter()
         .find(|slider| slider.id == SliderId::DloadMagnitude);
@@ -761,7 +1073,10 @@ mod tests {
         let mut state = BoundaryLoadEditorState::default();
         state.constraint_values = [1.0; 6];
         state.set_constraint_preset(1, 3);
-        assert_eq!(state.constraint_enabled, [true, true, true, false, false, false]);
+        assert_eq!(
+            state.constraint_enabled,
+            [true, true, true, false, false, false]
+        );
         assert_eq!(&state.constraint_values[..3], &[0.0, 0.0, 0.0]);
         assert_eq!(&state.constraint_values[3..], &[1.0, 1.0, 1.0]);
     }
@@ -795,5 +1110,22 @@ mod tests {
         assert_eq!(state.normalized_gravity_direction(), Some(Vec3::NEG_Y));
         state.gravity_direction = Vec3::ZERO;
         assert_eq!(state.normalized_gravity_direction(), None);
+    }
+
+    #[test]
+    fn about_center_maps_ui_rotation_components_to_frontistr_dofs_one_to_three() {
+        let mut state = BoundaryLoadEditorState::default();
+        state.constraint_rotation_mode = RotationalInputMode::AboutCenter;
+        state.load_moment_mode = RotationalInputMode::AboutCenter;
+        state.rotation_center = Some(fem_core::FemEntityRef::node(2, fem_core::NodeId(7)));
+
+        let constraint = state.constraint_solver_component(3).unwrap();
+        let load = state.load_solver_component(5).unwrap();
+
+        assert_eq!(constraint.0, 1);
+        assert_eq!(constraint.1.unwrap().node, Some(fem_core::NodeId(7)));
+        assert_eq!(load.0, 3);
+        assert_eq!(load.1.unwrap().mesh_index, 2);
+        assert_eq!(state.load_solver_component(0), Some((1, None)));
     }
 }

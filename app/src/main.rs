@@ -115,7 +115,13 @@ fn main() {
         // as a first-class plugin rather than requiring a third-party crate.
         .add_plugins(InfiniteGridPlugin)
         .add_systems(Startup, (setup, spawn_grid))
-        .add_systems(Update, rescale_grid_on_reload)
+        .add_systems(
+            Update,
+            (
+                rescale_grid_on_reload,
+                update_grid_visibility.after(interaction::InteractionSystems::Navigation),
+            ),
+        )
         .run();
 }
 
@@ -217,6 +223,7 @@ fn setup(mut commands: Commands, model: Option<Res<FemModel>>) {
 fn spawn_grid(mut commands: Commands) {
     commands.spawn((
         InfiniteGrid,
+        Visibility::Visible,
         InfiniteGridSettings {
             x_axis_color: Color::srgb(0.70, 0.20, 0.20),
             z_axis_color: Color::srgb(0.20, 0.50, 0.70),
@@ -225,6 +232,47 @@ fn spawn_grid(mut commands: Commands) {
             ..default()
         },
     ));
+}
+
+/// Hides the infinite XZ grid while it is viewed almost exactly edge-on.
+///
+/// Bevy's infinite-grid shader reconstructs a ray/plane intersection per
+/// pixel. At the Front/Back/Left/Right navigation-cube views, that ray is
+/// parallel to the XZ plane; floating-point noise can then turn the
+/// undefined intersection into screen-sized translucent triangles. The
+/// grid has no useful depth cue in this orientation anyway, so suppress it
+/// only within a narrow band around the singular view.
+fn update_grid_visibility(
+    camera: Query<(&Transform, &OrbitCamera), With<MainViewportCamera>>,
+    mut grids: Query<&mut Visibility, With<InfiniteGrid>>,
+) {
+    let Ok((transform, orbit)) = camera.single() else {
+        return;
+    };
+    let visibility = grid_visibility_for_direction(transform.translation - orbit.focus);
+
+    for mut current in &mut grids {
+        if *current != visibility {
+            *current = visibility;
+        }
+    }
+}
+
+fn grid_visibility_for_direction(direction_from_focus: Vec3) -> Visibility {
+    const EDGE_ON_NORMAL_COMPONENT: f32 = 0.02;
+
+    let normal_component =
+        if direction_from_focus.is_finite() && direction_from_focus.length_squared() > 1.0e-12 {
+            direction_from_focus.normalize().dot(Vec3::Y).abs()
+        } else {
+            0.0
+        };
+
+    if normal_component <= EDGE_ON_NORMAL_COMPONENT {
+        Visibility::Hidden
+    } else {
+        Visibility::Visible
+    }
 }
 
 /// Re-tunes the grid's line spacing (`scale`) and camera-relative fade
@@ -273,4 +321,31 @@ fn rescale_grid_on_reload(
 
     settings.fadeout_distance = (radius * 6.0).max(100.0);
     settings.scale = (REFERENCE_RADIUS / radius).clamp(1.0e-4, 10.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_is_hidden_for_axis_views_parallel_to_its_plane() {
+        for direction in [Vec3::X, -Vec3::X, Vec3::Z, -Vec3::Z] {
+            assert_eq!(grid_visibility_for_direction(direction), Visibility::Hidden);
+        }
+    }
+
+    #[test]
+    fn grid_remains_visible_from_top_bottom_and_isometric_views() {
+        for direction in [
+            Vec3::Y,
+            -Vec3::Y,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-1.0, 1.0, -1.0),
+        ] {
+            assert_eq!(
+                grid_visibility_for_direction(direction),
+                Visibility::Visible
+            );
+        }
+    }
 }

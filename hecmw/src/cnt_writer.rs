@@ -2,9 +2,9 @@
 //! Uses !ELASTIC / !DENSITY as confirmed from tutorial files.
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
-    DistributedLoadKind, DistributedLoadTarget, FemMaterial, NodalLoad,
+    DistributedLoadKind, DistributedLoadTarget, FemMaterial, NodalLoad, RotationCenter,
 };
-use std::{fmt::Write as FmtWrite, io, path::Path};
+use std::{collections::HashSet, fmt::Write as FmtWrite, io, path::Path};
 
 pub fn write_cnt_file(
     path: impl AsRef<Path>,
@@ -88,14 +88,15 @@ fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
     }
 
     // BOUNDARY — group by name
-    let mut last: Option<&str> = None;
+    let mut last: Option<(&str, Option<&RotationCenter>)> = None;
     for bc in &setup.boundary_conditions {
-        if last != Some(bc.name.as_str()) {
+        let key = (bc.name.as_str(), bc.rotation_center.as_ref());
+        if last != Some(key) {
             if last.is_some() {
                 writeln!(o).unwrap();
             }
-            writeln!(o, "!BOUNDARY, GRPID=1").unwrap();
-            last = Some(&bc.name);
+            write_condition_header(&mut o, "BOUNDARY", bc.rotation_center.as_ref());
+            last = Some(key);
         }
         write_bc(&mut o, bc);
     }
@@ -104,14 +105,28 @@ fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
     }
 
     // CLOAD — group by name
-    let mut last: Option<&str> = None;
+    let mut last: Option<(&str, Option<&RotationCenter>)> = None;
+    let mut written_compact_loads = HashSet::new();
     for load in &setup.nodal_loads {
-        if last != Some(load.name.as_str()) {
+        if let Some(group) = &load.ngrp_name {
+            let compact_key = (
+                load.name.clone(),
+                group.clone(),
+                load.dof,
+                load.value.to_bits(),
+                load.rotation_center.clone(),
+            );
+            if !written_compact_loads.insert(compact_key) {
+                continue;
+            }
+        }
+        let key = (load.name.as_str(), load.rotation_center.as_ref());
+        if last != Some(key) {
             if last.is_some() {
                 writeln!(o).unwrap();
             }
-            writeln!(o, "!CLOAD, GRPID=1").unwrap();
-            last = Some(&load.name);
+            write_condition_header(&mut o, "CLOAD", load.rotation_center.as_ref());
+            last = Some(key);
         }
         write_cload(&mut o, load);
     }
@@ -162,6 +177,21 @@ fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
     writeln!(o, "!END").unwrap();
 
     o
+}
+
+fn write_condition_header(out: &mut String, keyword: &str, center: Option<&RotationCenter>) {
+    write!(out, "!{keyword}, GRPID=1").unwrap();
+    if let Some(token) = center.and_then(rotation_center_token) {
+        write!(out, ", ROT_CENTER={token}").unwrap();
+    }
+    writeln!(out).unwrap();
+}
+
+fn rotation_center_token(center: &RotationCenter) -> Option<String> {
+    center
+        .ngrp_name
+        .clone()
+        .or_else(|| center.node.map(|node| node.0.to_string()))
 }
 
 fn write_contact(out: &mut String, contact: &ContactPair, group_id: usize) {
@@ -387,6 +417,7 @@ mod tests {
             mesh_index: 0,
             nodes: vec![NodeId(42)],
             ngrp_name: None,
+            rotation_center: None,
             dof_start: 4,
             dof_end: 4,
             value: 0.125,
@@ -396,6 +427,7 @@ mod tests {
             mesh_index: 0,
             node: NodeId(42),
             ngrp_name: None,
+            rotation_center: None,
             dof: 6,
             value: -12.5,
         });
@@ -404,5 +436,55 @@ mod tests {
 
         assert!(text.contains("!BOUNDARY, GRPID=1\n  42,4,4,0.125000\n"));
         assert!(text.contains("!CLOAD, GRPID=1\n  42,6,-12.500000\n"));
+    }
+
+    #[test]
+    fn writes_rot_center_headers_without_conflating_direct_rotations() {
+        let center = RotationCenter::from_node(0, NodeId(7));
+        let mut setup = AnalysisSetup::default();
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "BC_ROT_CENTER".into(),
+            mesh_index: 0,
+            nodes: vec![NodeId(42)],
+            ngrp_name: None,
+            rotation_center: Some(center.clone()),
+            dof_start: 1,
+            dof_end: 1,
+            value: 0.125,
+        });
+        setup.nodal_loads.push(NodalLoad {
+            name: "TORQUE_CENTER".into(),
+            mesh_index: 0,
+            node: NodeId(42),
+            ngrp_name: None,
+            rotation_center: Some(center),
+            dof: 3,
+            value: -12.5,
+        });
+
+        let text = build_cnt(&setup, &[]);
+
+        assert!(text.contains("!BOUNDARY, GRPID=1, ROT_CENTER=7\n  42,1,1,0.125000\n"));
+        assert!(text.contains("!CLOAD, GRPID=1, ROT_CENTER=7\n  42,3,-12.500000\n"));
+    }
+
+    #[test]
+    fn writes_a_compact_cload_group_only_once_after_parser_expansion() {
+        let mut setup = AnalysisSetup::default();
+        for node in [NodeId(1), NodeId(2)] {
+            setup.nodal_loads.push(NodalLoad {
+                name: "GROUP_LOAD".into(),
+                mesh_index: 0,
+                node,
+                ngrp_name: Some("LOADED_NODES".into()),
+                rotation_center: None,
+                dof: 1,
+                value: 25.0,
+            });
+        }
+
+        let text = build_cnt(&setup, &[]);
+
+        assert_eq!(text.matches("  LOADED_NODES,1,25.000000\n").count(), 1);
     }
 }

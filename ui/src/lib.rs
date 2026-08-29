@@ -14,21 +14,28 @@ use assembly::{
     update_assembly_part_overlays,
 };
 
+use boundary_editor::{
+    BoundaryLoadEditorState, QuickLoadControlState, apply_constraint_button_system,
+    constraint_dof_toggle_system, engineering_numeric_input_system, rotation_center_button_system,
+    rotational_input_mode_button_system, sync_quick_load_controls, update_apply_constraint_label,
+    update_dload_exact_field_visibility, update_rotation_center_status,
+};
 use layout::{
     ActiveLoadEditor, CameraFitRequest, ContactDefinitionSettings, PlaybackState,
     SelectedDloadKind, SelectedEgrp, SelectedLoadDirection, SelectedMaterialForSection,
     SelectedSectionType, SelectionGuideState, SidebarPage, SurfaceSelectionSettings,
-    UndoInProgress, UndoStack, accept_contact_button_system, add_section_button_system,
-    analysis_type_button_system, apply_dload_button_system, apply_load_button_system,
-    apply_pending_cnt_system, apply_slider_to_results, assembly_gizmo_mode_button_system,
-    assembly_mode_button_system, assembly_part_button_system, assembly_transform_button_system,
-    camera_refit_on_reload, capture_contact_side_button_system, clear_all_bc_loads_button_system,
-    constraint_preset_button_system, contact_behavior_button_system,
-    contact_candidate_action_button_system, contact_ghost_toggle_button_system,
-    contact_pair_kind_button_system, contact_parameter_button_system,
-    contact_penalty_toggle_button_system, create_contact_button_system,
-    create_surface_button_system, defined_contact_button_system, delete_setup_entry_button_system,
-    detect_contacts_button_system, dload_kind_button_system, egrp_select_button_system,
+    UndoInProgress, UndoStack, accept_contact_button_system, accept_rigid_spider_button_system,
+    add_section_button_system, analysis_type_button_system, apply_dload_button_system,
+    apply_load_button_system, apply_pending_cnt_system, apply_slider_to_results,
+    assembly_gizmo_mode_button_system, assembly_mode_button_system, assembly_part_button_system,
+    assembly_transform_button_system, camera_refit_on_reload, capture_contact_side_button_system,
+    clear_all_bc_loads_button_system, constraint_preset_button_system,
+    contact_behavior_button_system, contact_candidate_action_button_system,
+    contact_ghost_toggle_button_system, contact_pair_kind_button_system,
+    contact_parameter_button_system, contact_penalty_toggle_button_system,
+    create_contact_button_system, create_surface_button_system, defined_contact_button_system,
+    delete_setup_entry_button_system, detect_contacts_button_system,
+    detect_rigid_spiders_button_system, dload_kind_button_system, egrp_select_button_system,
     export_button_system, finalize_contact_button_system, handle_panel_wheel,
     handle_scrollable_list_wheel, import_mesh_button_system, load_direction_button_system,
     make_element_group_button_system, make_node_group_button_system, material_preset_button_system,
@@ -37,24 +44,20 @@ use layout::{
     playback_advance_system, playback_button_system, push_undo_before_setup_change,
     rebuild_assembly_parts, rebuild_boundary_loads_list, rebuild_contact_definitions_list,
     rebuild_materials_sections_list, rebuild_section_def_panel, rebuild_sets_list,
-    render_mode_button_system, section_type_button_system, selection_guide_toggle_system,
-    selection_level_button_system, set_button_system, sidebar_page_button_system,
-    solver_method_button_system, spawn_ui, step_keyboard_navigation,
-    surface_selection_mode_button_system, sync_contact_measurement_box,
-    sync_defined_contact_preview, sync_load_measurement_box, toggle_constraints_button_system,
-    toggle_loads_button_system, undo_redo_system, update_analysis_setup_stats_text,
-    update_apply_dload_label, update_apply_load_label, update_assembly_status_text,
-    update_boundary_load_preview, update_constraint_button_labels, update_contact_candidate_text,
-    update_contact_draft_status, update_contact_parameter_controls, update_contact_review_controls,
+    render_mode_button_system, rigid_spider_action_button_system, section_type_button_system,
+    selection_guide_toggle_system, selection_level_button_system, set_button_system,
+    sidebar_page_button_system, solver_method_button_system, spawn_ui, step_keyboard_navigation,
+    surface_selection_mode_button_system, sync_contact_measurement_box, sync_contact_search_params,
+    sync_defined_contact_preview, sync_load_measurement_box, sync_rigid_spider_review,
+    sync_rigid_spider_search_params, toggle_constraints_button_system, toggle_loads_button_system,
+    undo_redo_system, update_analysis_setup_stats_text, update_apply_dload_label,
+    update_apply_load_label, update_assembly_status_text, update_boundary_load_preview,
+    update_constraint_button_labels, update_contact_candidate_text, update_contact_draft_status,
+    update_contact_parameter_controls, update_contact_review_controls,
     update_contact_review_settings, update_hover_preview_group, update_mesh_stats_text,
-    update_result_stats_text, update_selection_context, update_selection_info_text,
-    update_selection_operation_hint, update_selection_stats_text, update_sidebar_page_visibility,
-    update_surface_selection_hint, update_ui_pointer_state,
-};
-use boundary_editor::{
-    BoundaryLoadEditorState, QuickLoadControlState, apply_constraint_button_system,
-    constraint_dof_toggle_system, engineering_numeric_input_system, sync_quick_load_controls,
-    update_apply_constraint_label, update_dload_exact_field_visibility,
+    update_result_stats_text, update_rigid_spider_candidate_text, update_selection_context,
+    update_selection_info_text, update_selection_operation_hint, update_selection_stats_text,
+    update_sidebar_page_visibility, update_surface_selection_hint, update_ui_pointer_state,
 };
 use load_direction::{
     LoadDirectionPickerState, load_direction_picker_button_system,
@@ -80,6 +83,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::UiKeyboardState>();
         app.init_resource::<fem_core::ViewportTool>();
         app.init_resource::<fem_core::ContactCandidateState>();
+        app.init_resource::<fem_core::RigidSpiderCandidateState>();
         app.init_resource::<fem_core::FemResultSet>();
         app.init_resource::<fem_core::AnalysisSetup>();
         app.init_resource::<fem_core::HoverPreviewTargets>();
@@ -87,6 +91,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<visualization::ContactReviewSettings>();
         app.init_resource::<visualization::DefinedContactPreview>();
         app.init_resource::<visualization::ContactDraftPreview>();
+        app.init_resource::<visualization::RigidSpiderReviewSettings>();
         app.init_resource::<visualization::BoundaryVisualSettings>();
         app.init_resource::<visualization::BoundaryLoadPreview>();
         app.init_resource::<SidebarPage>();
@@ -170,8 +175,11 @@ impl Plugin for UiPlugin {
             (
                 create_surface_button_system,
                 create_contact_button_system,
-                detect_contacts_button_system,
-                accept_contact_button_system,
+                detect_contacts_button_system.after(sync_contact_search_params),
+                accept_contact_button_system
+                    .after(contact_behavior_button_system)
+                    .after(contact_penalty_toggle_button_system)
+                    .after(slider::update_sliders),
                 contact_candidate_action_button_system,
                 contact_ghost_toggle_button_system,
                 update_contact_review_controls
@@ -187,10 +195,29 @@ impl Plugin for UiPlugin {
         app.add_systems(
             Update,
             (
+                detect_rigid_spiders_button_system.after(sync_rigid_spider_search_params),
+                rigid_spider_action_button_system,
+                accept_rigid_spider_button_system,
+                update_rigid_spider_candidate_text
+                    .after(detect_rigid_spiders_button_system)
+                    .after(rigid_spider_action_button_system)
+                    .after(accept_rigid_spider_button_system),
+                sync_rigid_spider_review
+                    .after(sidebar_page_button_system)
+                    .after(detect_rigid_spiders_button_system)
+                    .after(rigid_spider_action_button_system)
+                    .after(accept_rigid_spider_button_system),
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
                 contact_pair_kind_button_system,
                 contact_behavior_button_system.after(contact_pair_kind_button_system),
                 contact_penalty_toggle_button_system.after(contact_behavior_button_system),
                 contact_parameter_button_system.after(contact_penalty_toggle_button_system),
+                sync_contact_search_params.after(slider::update_sliders),
+                sync_rigid_spider_search_params.after(slider::update_sliders),
                 update_contact_parameter_controls
                     .after(contact_behavior_button_system)
                     .after(contact_penalty_toggle_button_system),
@@ -345,6 +372,8 @@ impl Plugin for UiPlugin {
             Update,
             (
                 constraint_dof_toggle_system.in_set(InteractionSystems::UiInput),
+                rotational_input_mode_button_system.in_set(InteractionSystems::UiInput),
+                rotation_center_button_system.in_set(InteractionSystems::UiInput),
                 apply_constraint_button_system.after(constraint_preset_button_system),
                 sync_quick_load_controls
                     .after(engineering_numeric_input_system)
@@ -353,7 +382,12 @@ impl Plugin for UiPlugin {
                     .after(slider::update_sliders),
                 update_apply_constraint_label
                     .after(constraint_preset_button_system)
-                    .after(constraint_dof_toggle_system),
+                    .after(constraint_dof_toggle_system)
+                    .after(rotational_input_mode_button_system)
+                    .after(rotation_center_button_system),
+                update_rotation_center_status
+                    .after(rotational_input_mode_button_system)
+                    .after(rotation_center_button_system),
                 update_dload_exact_field_visibility.after(dload_kind_button_system),
             ),
         );

@@ -28,6 +28,13 @@ pub enum SliderId {
     /// View-only separation of a detected contact pair, as a percentage of
     /// the complete model size.
     ContactReviewSeparation,
+    /// Maximum surface-to-surface distance used by contact detection, in
+    /// model units.
+    ContactSearchGap,
+    /// Maximum deviation from aligned/opposing contact-face normals.
+    ContactSearchAngle,
+    /// Radius used to gather solid boundary nodes around an MPC center.
+    RigidSpiderRadius,
     /// Coulomb friction coefficient for a new sliding contact pair.
     ContactFriction,
     /// Optional user-specified contact penalty factor. When automatic

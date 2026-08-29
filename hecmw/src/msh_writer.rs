@@ -31,8 +31,8 @@ use std::io;
 use std::path::Path;
 
 use fem_core::{
-    AnalysisSetup, ContactSlaveRef, ElementId, ElementType, FemMaterial, FemMesh, FemModel, NodeId,
-    NodeSetRef, Section, SectionKind, SurfaceSetRef,
+    AnalysisSetup, ContactSlaveRef, ElementId, ElementType, FemMaterial, FemMesh, FemModel,
+    MpcEquation, NodeId, NodeSetRef, Section, SectionKind, SurfaceSetRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +249,11 @@ fn write_msh_assembly_impl(
             );
             write_mesh_section(&mut combined, section, &exported_group);
         }
+        write_mpc_equations(&mut combined, &setup.mpc_equations, |mesh_index, node| {
+            offsets
+                .get(mesh_index)
+                .map(|(node_offset, _)| node.0 + node_offset)
+        });
     }
 
     write_contact_pairs(&mut combined, &resolve_contact_pairs(model, None, true)?);
@@ -751,6 +756,9 @@ fn build_msh(
                 section.element_set_name.as_deref().unwrap_or("ALL"),
             );
         }
+        write_mpc_equations(&mut out, &setup.mpc_equations, |term_mesh, node| {
+            (term_mesh == mesh_index).then_some(node.0)
+        });
     }
 
     write_contact_pairs(&mut out, contacts);
@@ -760,11 +768,60 @@ fn build_msh(
     out
 }
 
+/// Writes all valid equations whose node references can be resolved by the
+/// supplied export mapping. `!EQUATION` contains a sequence of equations;
+/// each data block starts with its term count and constant, followed by up
+/// to seven `(node, DOF, coefficient)` terms per line.
+fn write_mpc_equations(
+    out: &mut String,
+    equations: &[MpcEquation],
+    mut exported_node: impl FnMut(usize, NodeId) -> Option<u32>,
+) {
+    let resolved: Vec<_> = equations
+        .iter()
+        .filter(|equation| equation.is_valid())
+        .filter_map(|equation| {
+            let terms = equation
+                .terms
+                .iter()
+                .map(|term| {
+                    Some((
+                        exported_node(term.mesh_index, term.node)?,
+                        term.dof,
+                        term.coefficient,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some((equation, terms))
+        })
+        .collect();
+
+    if resolved.is_empty() {
+        return;
+    }
+
+    writeln!(out, "!EQUATION").unwrap();
+    for (equation, terms) in resolved {
+        if !equation.name.is_empty() {
+            writeln!(out, "!! {}", equation.name).unwrap();
+        }
+        writeln!(out, " {},{:.9e}", terms.len(), equation.constant).unwrap();
+        for chunk in terms.chunks(7) {
+            let line = chunk
+                .iter()
+                .map(|(node, dof, coefficient)| format!("{node},{dof},{coefficient:.9e}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            writeln!(out, " {line}").unwrap();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use fem_core::{
         ContactPair, ContactType, ElementFaceRef, ElementId, FemMesh, FemNodeSet, FemSurfaceSet,
-        LocalFaceId, NodeId, NodeSetRef, SurfaceSetRef,
+        LocalFaceId, MpcTerm, NodeId, NodeSetRef, SurfaceSetRef,
     };
 
     use super::*;
@@ -903,5 +960,26 @@ mod tests {
             mesh.element_sets[0].elements,
             [11, 13, 15, 17].map(ElementId).to_vec()
         );
+    }
+
+    #[test]
+    fn writes_official_equation_terms_and_remaps_part_nodes() {
+        let equation = MpcEquation::new(
+            "SPIDER_1_UX",
+            0.0,
+            vec![
+                MpcTerm::new(0, NodeId(2), 1, 1.0),
+                MpcTerm::new(1, NodeId(3), 1, -1.0),
+            ],
+        );
+        let mut text = String::new();
+
+        write_mpc_equations(&mut text, &[equation], |mesh_index, node| {
+            Some(node.0 + [10, 100][mesh_index])
+        });
+
+        assert!(text.starts_with("!EQUATION\n"));
+        assert!(text.contains("!! SPIDER_1_UX\n 2,0.000000000e0\n"));
+        assert!(text.contains(" 12,1,1.000000000e0,103,1,-1.000000000e0\n"));
     }
 }

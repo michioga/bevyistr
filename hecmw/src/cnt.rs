@@ -31,7 +31,7 @@ use bevy::prelude::Vec3;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
-    Section, SectionKind, SolverSettings,
+    RotationCenter, Section, SectionKind, SolverSettings,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -354,6 +354,10 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
 
             "BOUNDARY" => {
+                let rotation_center = header
+                    .params
+                    .get("ROT_CENTER")
+                    .map(|token| parse_rotation_center(token, &ngroups, mesh, mesh_index));
                 i += 1;
 
                 while i < lines.len() && !lines[i].trim_start().starts_with('!') {
@@ -389,6 +393,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         mesh_index,
                         nodes,
                         ngrp_name: ngrp,
+                        rotation_center: rotation_center.clone(),
                         dof_start,
                         dof_end,
                         value,
@@ -397,6 +402,10 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
 
             "CLOAD" => {
+                let rotation_center = header
+                    .params
+                    .get("ROT_CENTER")
+                    .map(|token| parse_rotation_center(token, &ngroups, mesh, mesh_index));
                 i += 1;
 
                 while i < lines.len() && !lines[i].trim_start().starts_with('!') {
@@ -428,6 +437,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                             mesh_index,
                             node,
                             ngrp_name: ngrp.clone(),
+                            rotation_center: rotation_center.clone(),
                             dof,
                             value,
                         });
@@ -706,6 +716,20 @@ fn resolve_node_group(
     Vec::new()
 }
 
+fn parse_rotation_center(
+    token: &str,
+    ngroups: &HashMap<String, Vec<NodeId>>,
+    mesh: &FemMesh,
+    mesh_index: usize,
+) -> RotationCenter {
+    if let Ok(id) = token.parse::<u32>() {
+        RotationCenter::from_node(mesh_index, NodeId(id))
+    } else {
+        let resolved_node = resolve_node_group(token, ngroups, mesh).into_iter().next();
+        RotationCenter::from_group(mesh_index, token, resolved_node)
+    }
+}
+
 /// Resolves a `.cnt` data-line token to an element list, analogous to
 /// [`resolve_node_group`] but against the mesh's `element_sets`.
 fn resolve_element_group(token: &str, mesh: &FemMesh) -> Vec<ElementId> {
@@ -751,6 +775,28 @@ mod tests {
         );
 
         assert!(data.sections.is_empty());
+    }
+
+    #[test]
+    fn parses_rot_center_for_boundary_and_cload() {
+        let model = fem_core::FemModel::demo_hex8();
+        let data = parse_cnt(
+            "!NGROUP, NGRP=CENTER\n 0\n\
+             !BOUNDARY, ROT_CENTER=CENTER\n 1,1,3,0.25\n\
+             !CLOAD, ROT_CENTER=0\n 2,2,-4.0\n\
+             !END\n",
+            &model.meshes[0],
+            0,
+        );
+
+        assert_eq!(
+            data.boundary_conditions[0].rotation_center,
+            Some(RotationCenter::from_group(0, "CENTER", Some(NodeId(0))))
+        );
+        assert_eq!(
+            data.nodal_loads[0].rotation_center,
+            Some(RotationCenter::from_node(0, NodeId(0)))
+        );
     }
 
     #[test]

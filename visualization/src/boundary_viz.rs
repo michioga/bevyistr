@@ -11,6 +11,7 @@ use bevy::math::primitives::{Cone, Cylinder};
 use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 use fem_core::{AnalysisSetup, FemModel};
 
@@ -552,6 +553,33 @@ fn build_rotation_constraint_mesh(
         if !bc.constrains_rotation() {
             continue;
         }
+        if let Some(center) = &bc.rotation_center {
+            let Some(center_node) = center.node else {
+                continue;
+            };
+            let Some(position) = model
+                .meshes
+                .get(center.mesh_index)
+                .and_then(|mesh| mesh.node_position(center_node))
+            else {
+                continue;
+            };
+            for (dof, axis) in [(1u8, Vec3::X), (2, Vec3::Y), (3, Vec3::Z)] {
+                if dof < bc.dof_start || dof > bc.dof_end {
+                    continue;
+                }
+                append_rotation_constraint_ring(
+                    &mut positions,
+                    &mut normals,
+                    position,
+                    axis,
+                    size * 0.82,
+                    size * 0.10,
+                    RING_SEGMENTS,
+                );
+            }
+            continue;
+        }
         let Some(mesh) = model.meshes.get(bc.mesh_index) else {
             continue;
         };
@@ -707,12 +735,15 @@ fn spawn_load_arrows(
     let max_magnitude = setup
         .nodal_loads
         .iter()
-        .filter(|load| (1..=3).contains(&load.dof))
+        .filter(|load| load.rotation_center.is_none() && (1..=3).contains(&load.dof))
         .map(|load| load.value.abs())
         .fold(0.0f32, f32::max)
         .max(1.0e-9);
 
     for load in &setup.nodal_loads {
+        if load.rotation_center.is_some() {
+            continue;
+        }
         let Some(mesh) = model.meshes.get(load.mesh_index) else {
             continue;
         };
@@ -795,7 +826,11 @@ fn spawn_nodal_moment_arcs(
     let moments: Vec<_> = setup
         .nodal_loads
         .iter()
-        .filter(|load| (4..=6).contains(&load.dof) && load.value.abs() > f32::EPSILON)
+        .filter(|load| {
+            let direct = load.rotation_center.is_none() && (4..=6).contains(&load.dof);
+            let about_center = load.rotation_center.is_some() && (1..=3).contains(&load.dof);
+            (direct || about_center) && load.value.abs() > f32::EPSILON
+        })
         .collect();
     if moments.is_empty() {
         return;
@@ -808,20 +843,47 @@ fn spawn_nodal_moment_arcs(
     let stride = moments.len().div_ceil(MAX_MOMENT_GLYPHS).max(1);
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut seen_center_moments = HashSet::new();
 
     for load in moments.into_iter().step_by(stride).take(MAX_MOMENT_GLYPHS) {
-        let Some(mesh) = model.meshes.get(load.mesh_index) else {
-            continue;
+        let (position, axis) = if let Some(center) = &load.rotation_center {
+            let key = (load.name.as_str(), center.mesh_index, center.node, load.dof);
+            if !seen_center_moments.insert(key) {
+                continue;
+            }
+            let Some(center_node) = center.node else {
+                continue;
+            };
+            let Some(position) = model
+                .meshes
+                .get(center.mesh_index)
+                .and_then(|mesh| mesh.node_position(center_node))
+            else {
+                continue;
+            };
+            let axis = match load.dof {
+                1 => Vec3::X,
+                2 => Vec3::Y,
+                3 => Vec3::Z,
+                _ => continue,
+            };
+            (position, axis)
+        } else {
+            let Some(mesh) = model.meshes.get(load.mesh_index) else {
+                continue;
+            };
+            let Some(position) = mesh.node_position(load.node) else {
+                continue;
+            };
+            let axis = match load.dof {
+                4 => Vec3::X,
+                5 => Vec3::Y,
+                6 => Vec3::Z,
+                _ => continue,
+            };
+            (position, axis)
         };
-        let Some(position) = mesh.node_position(load.node) else {
-            continue;
-        };
-        let axis = match load.dof {
-            4 => Vec3::X,
-            5 => Vec3::Y,
-            6 => Vec3::Z,
-            _ => continue,
-        } * load.value.signum();
+        let axis = axis * load.value.signum();
         let relative = load.value.abs() / max_magnitude;
         append_moment_arc(
             &mut positions,
@@ -1044,7 +1106,7 @@ fn spawn_dload_arrows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fem_core::{BoundaryCondition, FemMesh, FemNode, NodeId};
+    use fem_core::{BoundaryCondition, FemMesh, FemNode, NodeId, RotationCenter};
 
     #[test]
     fn constraint_markers_are_combined_into_one_mesh() {
@@ -1062,6 +1124,7 @@ mod tests {
             mesh_index: 0,
             nodes: vec![NodeId(1), NodeId(2)],
             ngrp_name: Some("FIX".to_string()),
+            rotation_center: None,
             dof_start: 1,
             dof_end: 3,
             value: 0.0,
@@ -1119,6 +1182,7 @@ mod tests {
             mesh_index: 0,
             nodes: vec![NodeId(1)],
             ngrp_name: None,
+            rotation_center: None,
             dof_start: 4,
             dof_end: 6,
             value: 0.0,
@@ -1128,6 +1192,35 @@ mod tests {
 
         // 3 axes * 12 ring segments * 2 triangles * 3 vertices.
         assert_eq!(mesh.count_vertices(), 3 * 12 * 2 * 3);
+    }
+
+    #[test]
+    fn rot_center_constraint_draws_one_ring_at_the_center_not_each_target() {
+        let mesh = FemMesh::new(
+            vec![
+                FemNode::new(NodeId(1), Vec3::ZERO),
+                FemNode::new(NodeId(2), Vec3::ONE),
+                FemNode::new(NodeId(7), Vec3::X),
+            ],
+            Vec::new(),
+        );
+        let model = FemModel::single_mesh("test", mesh);
+        let mut setup = AnalysisSetup::default();
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "CENTER_ROT".to_string(),
+            mesh_index: 0,
+            nodes: vec![NodeId(1), NodeId(2)],
+            ngrp_name: None,
+            rotation_center: Some(RotationCenter::from_node(0, NodeId(7))),
+            dof_start: 1,
+            dof_end: 1,
+            value: 0.25,
+        });
+
+        let mesh = build_rotation_constraint_mesh(&model, &setup, 1.0).unwrap();
+
+        assert_eq!(mesh.count_vertices(), 12 * 2 * 3);
+        assert!(build_constraint_mesh(&model, &setup, 1.0).is_none());
     }
 
     #[test]

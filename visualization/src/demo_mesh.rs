@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use fem_core::{
     ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, ElementFaceRef, FaceId,
     FemEdge, FemElement, FemEntityId, FemEntityRef, FemFace, FemMesh, FemModel, FemNode,
-    FemResultSet, NodeId, SurfaceSetRef, rainbow_color,
+    FemResultSet, NodeId, RigidSpiderCandidateState, SurfaceSetRef, rainbow_color,
 };
 use interaction::HoverResult;
 use std::collections::BTreeSet;
@@ -62,6 +62,14 @@ impl Default for ContactReviewSettings {
             separation_percent: 8.0,
         }
     }
+}
+
+/// Enables the 3-D master/slave markers for the selected automatic MPC
+/// spider candidate. The UI toggles this with the Contact page, keeping the
+/// visualization crate independent from sidebar implementation details.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RigidSpiderReviewSettings {
+    pub active: bool,
 }
 
 /// View-only selection of a contact pair already defined in the model.
@@ -263,6 +271,12 @@ pub(crate) enum TopologyHighlight {
 pub(crate) enum ContactCandidateHighlight {
     Master,
 
+    Slave,
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RigidSpiderHighlight {
+    Master,
     Slave,
 }
 
@@ -742,6 +756,48 @@ pub(crate) fn spawn_contact_candidate_highlights(
         ContactHighlightAvailability::default(),
         Name::new("Contact candidate slave highlight"),
     ));
+}
+
+pub(crate) fn spawn_rigid_spider_highlights(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let master_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.18, 0.78),
+        unlit: true,
+        depth_bias: 3.0,
+        ..default()
+    });
+    let slave_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.10, 0.90, 0.95),
+        unlit: true,
+        depth_bias: 3.0,
+        ..default()
+    });
+
+    for (highlight, material, name) in [
+        (
+            RigidSpiderHighlight::Master,
+            master_material,
+            "MPC spider center highlight",
+        ),
+        (
+            RigidSpiderHighlight::Slave,
+            slave_material,
+            "MPC spider slave highlight",
+        ),
+    ] {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(0.01, 0.01, 0.01))),
+            MeshMaterial3d(material),
+            Transform::default(),
+            Visibility::Hidden,
+            highlight,
+            ContactHighlightAvailability::default(),
+            Name::new(name),
+        ));
+    }
 }
 
 pub fn update_hover_materials(
@@ -1385,6 +1441,66 @@ pub(crate) fn update_contact_candidate_highlights(
         transform.rotation = Quat::IDENTITY;
         transform.scale = Vec3::ONE;
         *visibility = if source_active && availability.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+pub(crate) fn update_rigid_spider_highlights(
+    model: Option<Res<FemModel>>,
+    state: Res<RigidSpiderCandidateState>,
+    settings: Res<RigidSpiderReviewSettings>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut query: Query<(
+        &RigidSpiderHighlight,
+        &mut Mesh3d,
+        &mut Visibility,
+        &mut ContactHighlightAvailability,
+    )>,
+) {
+    let rebuild = state.is_changed()
+        || settings.is_changed()
+        || model.as_ref().is_some_and(|model| model.is_changed());
+    let candidate = settings
+        .active
+        .then(|| state.selected_candidate())
+        .flatten();
+
+    for (highlight, mut mesh, mut visibility, mut availability) in &mut query {
+        if rebuild {
+            let built = model.as_deref().and_then(|model| {
+                let candidate = candidate?;
+                let radius = model_visual_scale(model)
+                    * match highlight {
+                        RigidSpiderHighlight::Master => 0.012,
+                        RigidSpiderHighlight::Slave => 0.006,
+                    };
+                match highlight {
+                    RigidSpiderHighlight::Master => build_highlight_nodes_mesh(
+                        model.meshes.get(candidate.master_mesh)?,
+                        &[candidate.master_node],
+                        radius,
+                    ),
+                    RigidSpiderHighlight::Slave => build_highlight_nodes_mesh(
+                        model.meshes.get(candidate.slave_mesh)?,
+                        &candidate.slave_nodes,
+                        radius,
+                    ),
+                }
+            });
+
+            let Some(built) = built else {
+                availability.0 = false;
+                *visibility = Visibility::Hidden;
+                continue;
+            };
+            mesh.0 = meshes.add(built);
+            availability.0 = true;
+        }
+
+        *visibility = if candidate.is_some() && availability.0 {
             Visibility::Visible
         } else {
             Visibility::Hidden

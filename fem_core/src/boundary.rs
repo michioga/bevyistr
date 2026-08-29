@@ -16,6 +16,98 @@ use bevy::prelude::*;
 
 use crate::{ElementFaceRef, ElementId, NodeId};
 
+/// One term of a FrontISTR `!EQUATION` multi-point constraint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MpcTerm {
+    /// Mesh/part owning `node`; node IDs are scoped to a part until export.
+    pub mesh_index: usize,
+
+    pub node: NodeId,
+
+    /// Structural degree of freedom (`1..=6`).
+    pub dof: u8,
+
+    pub coefficient: f32,
+}
+
+impl MpcTerm {
+    pub fn new(mesh_index: usize, node: NodeId, dof: u8, coefficient: f32) -> Self {
+        Self {
+            mesh_index,
+            node,
+            dof,
+            coefficient,
+        }
+    }
+}
+
+/// A linear multi-point constraint exported through the official HEC-MW
+/// mesh keyword `!EQUATION`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MpcEquation {
+    /// Human-readable identifier retained by bevyistr. HEC-MW equations do
+    /// not have names, so this is emitted only as a comment when possible.
+    pub name: String,
+
+    pub constant: f32,
+
+    pub terms: Vec<MpcTerm>,
+}
+
+impl MpcEquation {
+    pub fn new(name: impl Into<String>, constant: f32, terms: Vec<MpcTerm>) -> Self {
+        Self {
+            name: name.into(),
+            constant,
+            terms,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.terms.len() >= 2
+            && self
+                .terms
+                .iter()
+                .all(|term| (1..=6).contains(&term.dof) && term.coefficient.is_finite())
+            && self.constant.is_finite()
+    }
+}
+
+/// FrontISTR `ROT_CENTER` reference used by `!BOUNDARY` and `!CLOAD`.
+///
+/// The center is independent from the constrained/loaded target nodes.  A
+/// source file may name either one node directly or a node group; keeping the
+/// optional group name preserves compact round-trip output, while `node`
+/// provides a resolved point for viewport feedback when one is available.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RotationCenter {
+    pub mesh_index: usize,
+    pub node: Option<NodeId>,
+    pub ngrp_name: Option<String>,
+}
+
+impl RotationCenter {
+    pub fn from_node(mesh_index: usize, node: NodeId) -> Self {
+        Self {
+            mesh_index,
+            node: Some(node),
+            ngrp_name: None,
+        }
+    }
+
+    pub fn from_group(
+        mesh_index: usize,
+        name: impl Into<String>,
+        resolved_node: Option<NodeId>,
+    ) -> Self {
+        Self {
+            mesh_index,
+            node: resolved_node,
+            ngrp_name: Some(name.into()),
+        }
+    }
+}
+
 // ─── boundary conditions (displacement / rotation constraints) ──────────────
 
 /// A displacement (or rotation) constraint applied to a degree-of-freedom
@@ -41,6 +133,11 @@ pub struct BoundaryCondition {
     /// boundary condition was created directly from a node selection in the UI.
     pub ngrp_name: Option<String>,
 
+    /// Center used by FrontISTR's `ROT_CENTER` rotational-displacement form.
+    /// In that form data-line DOFs 1..3 are rotations about global X/Y/Z;
+    /// this is distinct from direct shell/beam rotational DOFs 4..6.
+    pub rotation_center: Option<RotationCenter>,
+
     pub dof_start: u8,
 
     pub dof_end: u8,
@@ -53,21 +150,27 @@ impl BoundaryCondition {
     /// `true` if this constrains a translational DOF (1, 2, or 3) within
     /// its `[dof_start, dof_end]` range.
     pub fn constrains_translation(&self) -> bool {
-        self.dof_start <= 3 && self.dof_end >= 1
+        self.rotation_center.is_none() && self.dof_start <= 3 && self.dof_end >= 1
     }
 
     /// `true` if this constrains a rotational DOF (4, 5, or 6) within its
     /// `[dof_start, dof_end]` range — only meaningful for shell/beam nodes.
     pub fn constrains_rotation(&self) -> bool {
-        self.dof_start <= 6 && self.dof_end >= 4
+        self.rotation_center.is_some() || (self.dof_start <= 6 && self.dof_end >= 4)
     }
 
     /// Short human-readable summary of the constrained DOF range, e.g.
     /// `"Ux-Uz"`, `"Uy"`, `"Rx-Rz"`.
     pub fn dof_label(&self) -> String {
-        const NAMES: [&str; 6] = ["Ux", "Uy", "Uz", "Rx", "Ry", "Rz"];
+        const DIRECT_NAMES: [&str; 6] = ["Ux", "Uy", "Uz", "Rx", "Ry", "Rz"];
+        const CENTER_NAMES: [&str; 3] = ["Rx", "Ry", "Rz"];
+        let names: &[&str] = if self.rotation_center.is_some() {
+            &CENTER_NAMES
+        } else {
+            &DIRECT_NAMES
+        };
 
-        let start_label = NAMES
+        let start_label = names
             .get(self.dof_start.saturating_sub(1) as usize)
             .copied()
             .unwrap_or("?");
@@ -75,7 +178,7 @@ impl BoundaryCondition {
         if self.dof_start == self.dof_end {
             start_label.to_string()
         } else {
-            let end_label = NAMES
+            let end_label = names
                 .get(self.dof_end.saturating_sub(1) as usize)
                 .copied()
                 .unwrap_or("?");
@@ -101,10 +204,38 @@ pub struct NodalLoad {
     /// [`BoundaryCondition::ngrp_name`]).
     pub ngrp_name: Option<String>,
 
+    /// Center used by FrontISTR's `ROT_CENTER` torque form. When present,
+    /// data-line DOFs 1..3 describe torque components about global X/Y/Z;
+    /// without it DOFs 1..3 are ordinary concentrated forces.
+    pub rotation_center: Option<RotationCenter>,
+
     /// DOF the load acts on: `1=Fx, 2=Fy, 3=Fz` (4-6 for moments).
     pub dof: u8,
 
     pub value: f32,
+}
+
+impl NodalLoad {
+    pub fn dof_label(&self) -> &'static str {
+        if self.rotation_center.is_some() {
+            match self.dof {
+                1 => "Mx",
+                2 => "My",
+                3 => "Mz",
+                _ => "?",
+            }
+        } else {
+            match self.dof {
+                1 => "Fx",
+                2 => "Fy",
+                3 => "Fz",
+                4 => "Mx",
+                5 => "My",
+                6 => "Mz",
+                _ => "?",
+            }
+        }
+    }
 }
 
 /// A distributed load on element faces — FrontISTR's `!DLOAD` / Abaqus's
@@ -361,6 +492,10 @@ pub struct AnalysisSetup {
 
     pub sections: Vec<Section>,
 
+    /// General multi-point constraints stored in mesh-local coordinates and
+    /// exported as HEC-MW `!EQUATION` entries.
+    pub mpc_equations: Vec<MpcEquation>,
+
     /// Solver settings for this analysis. Written as `!SOLUTION`, `!STEP`,
     /// `!SOLVER` etc. in the exported `.cnt` file.
     pub solver: SolverSettings,
@@ -374,6 +509,7 @@ impl Default for AnalysisSetup {
             distributed_loads: Vec::new(),
             materials: Vec::new(),
             sections: Vec::new(),
+            mpc_equations: Vec::new(),
             solver: SolverSettings::default(),
         }
     }
@@ -386,6 +522,7 @@ impl AnalysisSetup {
             && self.distributed_loads.is_empty()
             && self.materials.is_empty()
             && self.sections.is_empty()
+            && self.mpc_equations.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -394,6 +531,7 @@ impl AnalysisSetup {
         self.distributed_loads.clear();
         self.materials.clear();
         self.sections.clear();
+        self.mpc_equations.clear();
     }
 
     pub fn material_by_name(&self, name: &str) -> Option<&FemMaterial> {
@@ -424,6 +562,7 @@ impl AnalysisSetup {
             mesh_index,
             nodes,
             ngrp_name: None,
+            rotation_center: None,
             dof_start,
             dof_end,
             value,
@@ -451,6 +590,7 @@ impl AnalysisSetup {
                 mesh_index,
                 node,
                 ngrp_name: None,
+                rotation_center: None,
                 dof,
                 value,
             });

@@ -139,7 +139,7 @@ pub fn load_mesh_file(path: impl AsRef<Path>) -> Result<FemMesh, HecmwLoadError>
 pub fn load_mesh_file_with_setup(
     path: impl AsRef<Path>,
 ) -> Result<(FemMesh, Vec<fem_core::FemMaterial>, Vec<fem_core::Section>), HecmwLoadError> {
-    let (mesh, materials, sections, _) = load_mesh_file_with_setup_and_contacts(path)?;
+    let (mesh, materials, sections, _, _) = load_mesh_file_with_setup_and_contacts(path)?;
     Ok((mesh, materials, sections))
 }
 
@@ -154,6 +154,7 @@ pub fn load_mesh_file_with_setup_and_contacts(
         Vec<fem_core::FemMaterial>,
         Vec<fem_core::Section>,
         Vec<HecmwContactPairDefinition>,
+        Vec<fem_core::MpcEquation>,
     ),
     HecmwLoadError,
 > {
@@ -161,7 +162,149 @@ pub fn load_mesh_file_with_setup_and_contacts(
     let mesh = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
     let (materials, sections) = parse_msh_setup(&source, 0);
     let contacts = parse_msh_contact_pairs(&source);
-    Ok((mesh, materials, sections, contacts))
+    let equations = parse_msh_equations(&source, &mesh);
+    Ok((mesh, materials, sections, contacts, equations))
+}
+
+#[derive(Debug, Clone)]
+struct RawMpcTerm {
+    target: String,
+    dof: u8,
+    coefficient: f32,
+}
+
+/// Parses numeric and node-group forms of the official HEC-MW `!EQUATION`
+/// block. Group equations expand pairwise to explicit node equations so the
+/// in-memory representation remains unambiguous and viewport-addressable.
+fn parse_msh_equations(source: &str, mesh: &FemMesh) -> Vec<fem_core::MpcEquation> {
+    let lines: Vec<_> = source.lines().collect();
+    let mut equations = Vec::new();
+    let mut index = 0usize;
+    let mut serial = 1usize;
+
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if !line.to_ascii_uppercase().starts_with("!EQUATION") {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        let mut pending_name = None;
+
+        while index < lines.len() {
+            let line = lines[index].trim();
+            if line.starts_with('!') && !line.starts_with("!!") {
+                break;
+            }
+            if line.is_empty() || line.starts_with('#') {
+                index += 1;
+                continue;
+            }
+            if let Some(comment) = line.strip_prefix("!!") {
+                pending_name = Some(comment.trim().to_string());
+                index += 1;
+                continue;
+            }
+
+            let header: Vec<_> = line.split(',').map(str::trim).collect();
+            let Ok(term_count) = header[0].parse::<usize>() else {
+                index += 1;
+                continue;
+            };
+            let constant = header
+                .get(1)
+                .and_then(|value| value.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            index += 1;
+            let mut raw_terms = Vec::with_capacity(term_count);
+
+            while index < lines.len() && raw_terms.len() < term_count {
+                let term_line = lines[index].trim();
+                if term_line.starts_with('!') || term_line.starts_with('#') {
+                    break;
+                }
+                let values: Vec<_> = term_line.split(',').map(str::trim).collect();
+                for term in values.chunks_exact(3) {
+                    let (Ok(dof), Ok(coefficient)) =
+                        (term[1].parse::<u8>(), term[2].parse::<f32>())
+                    else {
+                        continue;
+                    };
+                    raw_terms.push(RawMpcTerm {
+                        target: term[0].to_string(),
+                        dof,
+                        coefficient,
+                    });
+                    if raw_terms.len() == term_count {
+                        break;
+                    }
+                }
+                index += 1;
+            }
+
+            if raw_terms.len() != term_count {
+                continue;
+            }
+            let name = pending_name
+                .take()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("MPC_{serial}"));
+            serial += 1;
+            equations.extend(expand_mpc_groups(mesh, &name, constant, &raw_terms));
+        }
+    }
+
+    equations
+}
+
+fn expand_mpc_groups(
+    mesh: &FemMesh,
+    name: &str,
+    constant: f32,
+    raw_terms: &[RawMpcTerm],
+) -> Vec<fem_core::MpcEquation> {
+    let group_nodes = |target: &str| {
+        mesh.node_sets
+            .iter()
+            .find(|group| group.name.eq_ignore_ascii_case(target))
+            .map(|group| group.nodes.as_slice())
+    };
+    let group_len = raw_terms
+        .iter()
+        .filter_map(|term| group_nodes(&term.target).map(<[_]>::len))
+        .next()
+        .unwrap_or(1);
+
+    if raw_terms
+        .iter()
+        .filter_map(|term| group_nodes(&term.target))
+        .any(|nodes| nodes.len() != group_len)
+    {
+        return Vec::new();
+    }
+
+    (0..group_len)
+        .filter_map(|group_index| {
+            let terms = raw_terms
+                .iter()
+                .map(|term| {
+                    let node = if let Ok(id) = term.target.parse::<u32>() {
+                        fem_core::NodeId(id)
+                    } else {
+                        *group_nodes(&term.target)?.get(group_index)?
+                    };
+                    Some(fem_core::MpcTerm::new(0, node, term.dof, term.coefficient))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let expanded_name = if group_len == 1 {
+                name.to_string()
+            } else {
+                format!("{name}_{}", group_index + 1)
+            };
+            let equation = fem_core::MpcEquation::new(expanded_name, constant, terms);
+            equation.is_valid().then_some(equation)
+        })
+        .collect()
 }
 
 fn parse_msh_contact_pairs(source: &str) -> Vec<HecmwContactPairDefinition> {
@@ -1121,5 +1264,35 @@ mod tests {
                 .map(ElementId)
                 .to_vec()
         );
+    }
+
+    #[test]
+    fn parses_numeric_and_group_equations() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+ 3,0,1,0
+ 4,1,1,0
+!NGROUP,NGRP=A
+ 1,2
+!NGROUP,NGRP=B
+ 3,4
+!EQUATION
+!! DIRECT
+ 2,0.0
+ 1,1,1.0,3,1,-1.0
+!! GROUP_PAIR
+ 2
+ A,2,1.0,B,2,-1.0
+!END
+"#;
+        let mesh = parse_mesh_str(source).unwrap();
+        let equations = parse_msh_equations(source, &mesh);
+
+        assert_eq!(equations.len(), 3);
+        assert_eq!(equations[0].name, "DIRECT");
+        assert_eq!(equations[1].name, "GROUP_PAIR_1");
+        assert_eq!(equations[2].terms[1].node, NodeId(4));
     }
 }

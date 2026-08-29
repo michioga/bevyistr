@@ -2,8 +2,8 @@ use crate::assembly::{
     AssemblyEditorState, AssemblyGizmoMode, reference_size as assembly_reference_size,
 };
 use crate::boundary_editor::{
-    BoundaryLoadEditorState, spawn_constraint_exact_editor, spawn_dload_exact_editor,
-    spawn_engineering_input_status, spawn_nodal_exact_editor,
+    BoundaryLoadEditorState, RotationalInputMode, spawn_constraint_exact_editor,
+    spawn_dload_exact_editor, spawn_engineering_input_status, spawn_nodal_exact_editor,
 };
 use crate::load_direction::{LoadDirectionPickerButton, LoadDirectionPickerLabel};
 use crate::measurement::{MeasurementBoxState, MeasurementTarget};
@@ -13,9 +13,10 @@ use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use camera::OrbitCamera;
 use fem_core::{
-    ContactCandidateState, ContactPair, ContactSlaveRef, ContactType, FemEntityId, FemEntityRef,
-    FemModel, FemModelVersion, FemNodeSet, FemResultSet, FemSurfaceSet, MeshLoadRequest,
-    MeshLoadStatus, SelectionFilter, SelectionLevel, UiPointerState, ViewportTool,
+    ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, ContactType,
+    FemEntityId, FemEntityRef, FemModel, FemModelVersion, FemNodeSet, FemResultSet, FemSurfaceSet,
+    MeshLoadRequest, MeshLoadStatus, RigidSpiderCandidateState, RigidSpiderMode, SelectionFilter,
+    SelectionLevel, UiPointerState, ViewportTool,
 };
 use interaction::HoverResult;
 use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
@@ -237,6 +238,12 @@ pub(crate) enum ContactParameter {
     Friction,
 
     PenaltyFactor,
+
+    SearchGap,
+
+    SearchAngle,
+
+    SpiderRadius,
 }
 
 #[derive(Resource, Debug, Clone)]
@@ -307,6 +314,9 @@ pub(crate) struct DetectContactsButton;
 #[derive(Component)]
 pub(crate) struct AcceptContactButton;
 
+#[derive(Component)]
+pub(crate) struct AcceptContactLabel;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContactCandidateAction {
     Previous,
@@ -345,6 +355,25 @@ pub(crate) struct DefinedContactButton(pub usize);
 
 #[derive(Component)]
 pub(crate) struct ContactReviewControls;
+
+#[derive(Component)]
+pub(crate) struct DetectRigidSpidersButton;
+
+#[derive(Component)]
+pub(crate) struct AcceptRigidSpiderButton;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RigidSpiderAction {
+    Previous,
+    Next,
+    Reject,
+}
+
+#[derive(Component)]
+pub(crate) struct RigidSpiderActionButton(pub RigidSpiderAction);
+
+#[derive(Component)]
+pub(crate) struct RigidSpiderCandidateText;
 
 #[derive(Component)]
 pub(crate) struct OpenResultButton;
@@ -1300,13 +1329,41 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
 
             // ── § Contact detection ──────────────────────────────────────
             section(panel, "CONTACT DETECTION", |sec| {
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 0.0,
+                    max: 10.0,
+                    value: 0.05,
+                    label: "Search gap (model units)",
+                    id: SliderId::ContactSearchGap,
+                });
+                action_button(
+                    sec,
+                    "Edit search gap exactly",
+                    ContactParameterButton(ContactParameter::SearchGap),
+                    "EditContactSearchGapButton",
+                );
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 0.0,
+                    max: 90.0,
+                    value: 20.0,
+                    label: "Normal tolerance (deg)",
+                    id: SliderId::ContactSearchAngle,
+                });
+                action_button(
+                    sec,
+                    "Edit normal tolerance exactly",
+                    ContactParameterButton(ContactParameter::SearchAngle),
+                    "EditContactSearchAngleButton",
+                );
                 action_button(
                     sec,
                     "Detect Contact Candidates",
                     DetectContactsButton,
                     "DetectContactsButton",
                 );
-                hint_text(sec, "Searches nearby opposing or coincident boundary faces");
+                hint_text(sec, "Surface gap search; coarse side = Master, fine side = Slave");
             });
             divider(panel);
 
@@ -1390,13 +1447,105 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             ContactCandidateActionButton(ContactCandidateAction::Reject),
                             "RejectContactCandidateButton",
                         );
-                        action_button(row, "Accept", AcceptContactButton, "AcceptContactButton");
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(28.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(5.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            AcceptContactButton,
+                            Name::new("AcceptContactButton"),
+                        ))
+                        .with_child((
+                            Text::new("Accept as Small sliding"),
+                            TextFont {
+                                font_size: FontSize::Px(11.5),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                            AcceptContactLabel,
+                        ));
                     });
                 });
                 hint_text(
                     sec,
-                    "Review display only — analysis coordinates and export are unchanged",
+                    "Accept uses BEHAVIOR and friction settings above; review separation is display only",
                 );
+            });
+            divider(panel);
+
+            // ── § MPC / rigid spider ────────────────────────────────────
+            section(panel, "MPC / RIGID SPIDER", |sec| {
+                spawn_slider(sec, SliderConfig {
+                    width: 272.0,
+                    min: 0.0,
+                    max: 20.0,
+                    value: 1.0,
+                    label: "Search radius (model units)",
+                    id: SliderId::RigidSpiderRadius,
+                });
+                action_button(
+                    sec,
+                    "Edit radius exactly",
+                    ContactParameterButton(ContactParameter::SpiderRadius),
+                    "EditRigidSpiderRadiusButton",
+                );
+                action_button(
+                    sec,
+                    "Detect MPC Spiders",
+                    DetectRigidSpidersButton,
+                    "DetectRigidSpidersButton",
+                );
+                sec.spawn((
+                    Text::new("No MPC candidates — run Detect MPC Spiders"),
+                    TextFont { font_size: FontSize::Px(10.5), ..default() },
+                    TextColor(TEXT_MUTED),
+                    RigidSpiderCandidateText,
+                ));
+                sec.spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(6.0),
+                    ..default()
+                },)).with_children(|row| {
+                    action_button(
+                        row,
+                        "Previous",
+                        RigidSpiderActionButton(RigidSpiderAction::Previous),
+                        "PreviousRigidSpiderButton",
+                    );
+                    action_button(
+                        row,
+                        "Next",
+                        RigidSpiderActionButton(RigidSpiderAction::Next),
+                        "NextRigidSpiderButton",
+                    );
+                });
+                sec.spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(6.0),
+                    ..default()
+                },)).with_children(|row| {
+                    action_button(
+                        row,
+                        "Reject",
+                        RigidSpiderActionButton(RigidSpiderAction::Reject),
+                        "RejectRigidSpiderButton",
+                    );
+                    action_button(
+                        row,
+                        "Create !EQUATION",
+                        AcceptRigidSpiderButton,
+                        "AcceptRigidSpiderButton",
+                    );
+                });
+                hint_text(sec, "Center = magenta, solid boundary nodes = cyan; isolated centers transfer translations only");
             });
             divider(panel);
 
@@ -3441,7 +3590,7 @@ pub(crate) fn mesh_load_system(
             // .msh: HECMW project loader captures assignments and contact
             // pairs, then falls back to Gmsh when this is not a HEC-MW file.
             match hecmw::load_mesh_file_with_setup_and_contacts(&path) {
-                Ok((mesh, materials, sections, contact_pairs)) => {
+                Ok((mesh, materials, sections, contact_pairs, mut equations)) => {
                     let mesh_index = if import { model.meshes.len() } else { 0 };
                     apply_mesh(
                         mesh,
@@ -3472,6 +3621,15 @@ pub(crate) fn mesh_load_system(
                     }
                     for s in sections {
                         setup.sections.push(s);
+                        changed = true;
+                    }
+                    for equation in &mut equations {
+                        for term in &mut equation.terms {
+                            term.mesh_index = mesh_index;
+                        }
+                    }
+                    if !equations.is_empty() {
+                        setup.mpc_equations.extend(equations);
                         changed = true;
                     }
                     if changed {
@@ -3821,6 +3979,24 @@ pub(crate) fn contact_penalty_toggle_button_system(
                     "FrontISTR input value",
                     slider_value(&sliders, SliderId::ContactPenaltyFactor, 1.0e5),
                 ),
+                ContactParameter::SearchGap => (
+                    SliderId::ContactSearchGap,
+                    "Contact search gap",
+                    "model units",
+                    slider_value(&sliders, SliderId::ContactSearchGap, 0.05),
+                ),
+                ContactParameter::SearchAngle => (
+                    SliderId::ContactSearchAngle,
+                    "Contact normal tolerance",
+                    "degrees",
+                    slider_value(&sliders, SliderId::ContactSearchAngle, 20.0),
+                ),
+                ContactParameter::SpiderRadius => (
+                    SliderId::RigidSpiderRadius,
+                    "MPC spider search radius",
+                    "model units",
+                    slider_value(&sliders, SliderId::RigidSpiderRadius, 1.0),
+                ),
             };
             measurement.begin_slider_value(slider_id, label, units, value);
         }
@@ -3875,6 +4051,24 @@ pub(crate) fn contact_parameter_button_system(
                     "Contact penalty factor",
                     "FrontISTR input value",
                     1.0e5,
+                ),
+                ContactParameter::SearchGap => (
+                    SliderId::ContactSearchGap,
+                    "Contact search gap",
+                    "model units",
+                    0.05,
+                ),
+                ContactParameter::SearchAngle => (
+                    SliderId::ContactSearchAngle,
+                    "Contact normal tolerance",
+                    "degrees",
+                    20.0,
+                ),
+                ContactParameter::SpiderRadius => (
+                    SliderId::RigidSpiderRadius,
+                    "MPC spider search radius",
+                    "model units",
+                    1.0,
                 ),
             };
             measurement.begin_slider_value(
@@ -3942,7 +4136,12 @@ pub(crate) fn sync_contact_measurement_box(
     if *page != SidebarPage::Contact || *tool != ViewportTool::Selection {
         return;
     }
-    if settings.contact_type == ContactType::Tied {
+    if settings.contact_type == ContactType::Tied
+        && matches!(
+            settings.active_parameter,
+            ContactParameter::Friction | ContactParameter::PenaltyFactor
+        )
+    {
         if matches!(
             measurement.target,
             Some(MeasurementTarget::SliderValue {
@@ -3974,6 +4173,24 @@ pub(crate) fn sync_contact_measurement_box(
             "Contact penalty factor",
             "FrontISTR input value",
             1.0e5,
+        ),
+        ContactParameter::SearchGap => (
+            SliderId::ContactSearchGap,
+            "Contact search gap",
+            "model units",
+            0.05,
+        ),
+        ContactParameter::SearchAngle => (
+            SliderId::ContactSearchAngle,
+            "Contact normal tolerance",
+            "degrees",
+            20.0,
+        ),
+        ContactParameter::SpiderRadius => (
+            SliderId::RigidSpiderRadius,
+            "MPC spider search radius",
+            "model units",
+            1.0,
         ),
     };
     let slider = sliders.iter().find(|slider| slider.id == slider_id);
@@ -4156,20 +4373,9 @@ fn create_contact_from_draft(
     if !slave_matches_kind {
         return Err("Captured slave does not match the selected topology".to_string());
     }
-    let (friction_coefficient, penalty_factor) = match contact_type {
-        ContactType::Tied => (0.0, None),
-        ContactType::SmallSliding | ContactType::FiniteSliding => {
-            if !friction_coefficient.is_finite() || friction_coefficient < 0.0 {
-                return Err("Friction coefficient must be zero or greater".to_string());
-            }
-            if penalty_factor.is_some_and(|factor| !factor.is_finite() || factor <= 0.0) {
-                return Err("Custom penalty factor must be greater than zero".to_string());
-            }
-            (friction_coefficient, penalty_factor)
-        }
-    };
-    let pair_number = model.contacts.len() + 1;
-    let pair_name = format!("CONTACT_{pair_number}");
+    let (friction_coefficient, penalty_factor) =
+        validated_contact_parameters(contact_type, friction_coefficient, penalty_factor)?;
+    let pair_name = next_contact_name(model);
 
     let master_ref = {
         let mesh = model
@@ -4226,6 +4432,71 @@ fn create_contact_from_draft(
         .contacts
         .push(contact.with_contact_parameters(friction_coefficient, penalty_factor));
     Ok(model.contacts.len() - 1)
+}
+
+fn create_contact_from_candidate(
+    model: &mut FemModel,
+    candidate: &ContactCandidate,
+    contact_type: ContactType,
+    friction_coefficient: f32,
+    penalty_factor: Option<f32>,
+) -> Result<usize, String> {
+    let (friction_coefficient, penalty_factor) =
+        validated_contact_parameters(contact_type, friction_coefficient, penalty_factor)?;
+    if model.contact_candidate_is_defined(candidate) {
+        return Err("This contact interface is already defined".to_string());
+    }
+
+    let name = next_contact_name(model);
+    let index = model
+        .accept_contact_candidate(candidate, name, contact_type)
+        .ok_or_else(|| "The detected contact faces are no longer available".to_string())?;
+    let contact = model
+        .contacts
+        .get_mut(index)
+        .ok_or_else(|| "The accepted contact could not be updated".to_string())?;
+    contact.friction_coefficient = friction_coefficient;
+    contact.penalty_factor = penalty_factor;
+
+    Ok(index)
+}
+
+fn validated_contact_parameters(
+    contact_type: ContactType,
+    friction_coefficient: f32,
+    penalty_factor: Option<f32>,
+) -> Result<(f32, Option<f32>), String> {
+    match contact_type {
+        ContactType::Tied => Ok((0.0, None)),
+        ContactType::SmallSliding | ContactType::FiniteSliding => {
+            if !friction_coefficient.is_finite() || friction_coefficient < 0.0 {
+                return Err("Friction coefficient must be zero or greater".to_string());
+            }
+            if penalty_factor.is_some_and(|factor| !factor.is_finite() || factor <= 0.0) {
+                return Err("Custom penalty factor must be greater than zero".to_string());
+            }
+
+            Ok((friction_coefficient, penalty_factor))
+        }
+    }
+}
+
+fn next_contact_name(model: &FemModel) -> String {
+    let mut number = model.contacts.len() + 1;
+
+    loop {
+        let name = format!("CONTACT_{number}");
+
+        if !model
+            .contacts
+            .iter()
+            .any(|contact| contact.name.eq_ignore_ascii_case(&name))
+        {
+            return name;
+        }
+
+        number += 1;
+    }
 }
 
 pub(crate) fn finalize_contact_button_system(
@@ -4337,6 +4608,7 @@ pub(crate) fn update_contact_draft_status(
 pub(crate) fn detect_contacts_button_system(
     model: Option<Res<FemModel>>,
     mut state: ResMut<ContactCandidateState>,
+    mut spiders: ResMut<RigidSpiderCandidateState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<DetectContactsButton>,
@@ -4345,6 +4617,8 @@ pub(crate) fn detect_contacts_button_system(
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             if let Some(model) = model.as_deref() {
+                spiders.candidates.clear();
+                spiders.selected = None;
                 state.refresh(model);
             }
         }
@@ -4360,6 +4634,170 @@ pub(crate) fn detect_contacts_button_system(
     }
 }
 
+/// Copies the visible detection controls into the reusable contact-search
+/// resource. Changing a criterion invalidates old candidates so the review
+/// panel never presents results produced with stale tolerances.
+pub(crate) fn sync_contact_search_params(
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut state: ResMut<ContactCandidateState>,
+) {
+    let max_gap = slider_value(&sliders, SliderId::ContactSearchGap, 0.05).max(0.0);
+    let normal_tolerance_deg =
+        slider_value(&sliders, SliderId::ContactSearchAngle, 20.0).clamp(0.0, 90.0);
+
+    if (state.params.max_gap - max_gap).abs() <= f32::EPSILON
+        && (state.params.normal_tolerance_deg - normal_tolerance_deg).abs() <= f32::EPSILON
+    {
+        return;
+    }
+
+    state.params.max_gap = max_gap;
+    state.params.normal_tolerance_deg = normal_tolerance_deg;
+    state.candidates.clear();
+    state.selected = None;
+}
+
+pub(crate) fn sync_rigid_spider_search_params(
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut state: ResMut<RigidSpiderCandidateState>,
+) {
+    let radius = slider_value(&sliders, SliderId::RigidSpiderRadius, 1.0).max(0.0);
+    if (state.params.radius - radius).abs() <= f32::EPSILON {
+        return;
+    }
+    state.params.radius = radius;
+    state.candidates.clear();
+    state.selected = None;
+}
+
+pub(crate) fn detect_rigid_spiders_button_system(
+    model: Option<Res<FemModel>>,
+    mut state: ResMut<RigidSpiderCandidateState>,
+    mut contacts: ResMut<ContactCandidateState>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        With<DetectRigidSpidersButton>,
+    >,
+) {
+    for (interaction, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            if let Some(model) = model.as_deref() {
+                contacts.candidates.clear();
+                contacts.selected = None;
+                state.refresh(model);
+            }
+        }
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn rigid_spider_action_button_system(
+    mut state: ResMut<RigidSpiderCandidateState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &RigidSpiderActionButton,
+        ),
+        With<RigidSpiderActionButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, action) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            match action.0 {
+                RigidSpiderAction::Previous => state.select_previous(),
+                RigidSpiderAction::Next => state.select_next(),
+                RigidSpiderAction::Reject => state.remove_selected(),
+            }
+        }
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn accept_rigid_spider_button_system(
+    model: Option<Res<FemModel>>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
+    mut state: ResMut<RigidSpiderCandidateState>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        With<AcceptRigidSpiderButton>,
+    >,
+) {
+    for (interaction, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let candidate = state.selected_candidate().cloned();
+            if let (Some(model), Some(candidate)) = (model.as_deref(), candidate) {
+                let name = format!("SPIDER_{}", setup.mpc_equations.len() + 1);
+                if let Some(equations) = model.rigid_spider_equations(&candidate, &name) {
+                    if !equations.is_empty() {
+                        setup.mpc_equations.extend(equations);
+                        state.remove_selected();
+                    }
+                }
+            }
+        }
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn update_rigid_spider_candidate_text(
+    state: Res<RigidSpiderCandidateState>,
+    model: Option<Res<FemModel>>,
+    setup: Res<fem_core::AnalysisSetup>,
+    mut query: Query<&mut Text, With<RigidSpiderCandidateText>>,
+) {
+    let Ok(mut text) = query.single_mut() else {
+        return;
+    };
+    let Some(candidate) = state.selected_candidate() else {
+        **text = format!(
+            "No MPC candidates — run Detect MPC Spiders\nDefined equations: {}",
+            setup.mpc_equations.len()
+        );
+        return;
+    };
+    let index = state.selected.unwrap_or(0) + 1;
+    let mode = match candidate.mode {
+        RigidSpiderMode::TranslationOnly => "translation only",
+        RigidSpiderMode::RigidBody => "rigid body (6 DOF center)",
+    };
+    **text = format!(
+        "MPC candidate {index}/{}\nCenter: {} / node {}\nSolid: {} / {} boundary nodes\nMode: {mode}",
+        state.candidates.len(),
+        mesh_label(model.as_deref(), candidate.master_mesh),
+        candidate.master_node.0,
+        mesh_label(model.as_deref(), candidate.slave_mesh),
+        candidate.slave_nodes.len(),
+    );
+}
+
+pub(crate) fn sync_rigid_spider_review(
+    page: Res<SidebarPage>,
+    state: Res<RigidSpiderCandidateState>,
+    mut review: ResMut<visualization::RigidSpiderReviewSettings>,
+) {
+    let active = *page == SidebarPage::Contact && state.selected_candidate().is_some();
+    if review.active != active {
+        review.active = active;
+    }
+}
+
 /// Materializes the currently selected [`ContactCandidate`] into a
 /// [`ContactPair`](fem_core::ContactPair) via
 /// [`FemModel::accept_contact_candidate`], then advances
@@ -4367,35 +4805,72 @@ pub(crate) fn detect_contacts_button_system(
 pub(crate) fn accept_contact_button_system(
     mut model: Option<ResMut<FemModel>>,
     mut state: ResMut<ContactCandidateState>,
+    mut settings: ResMut<ContactDefinitionSettings>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<AcceptContactButton>,
     >,
+    mut labels: Query<&mut Text, With<AcceptContactLabel>>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             let candidate = state.selected_candidate().cloned();
+            let friction_coefficient = if settings.contact_type == ContactType::Tied {
+                0.0
+            } else {
+                slider_value(&sliders, SliderId::ContactFriction, 0.0)
+            };
+            let penalty_factor = (settings.contact_type != ContactType::Tied
+                && settings.use_penalty_factor)
+                .then(|| slider_value(&sliders, SliderId::ContactPenaltyFactor, 1.0e5));
+            let result = model
+                .as_deref_mut()
+                .ok_or_else(|| "No model is loaded".to_string())
+                .and_then(|model| {
+                    let candidate = candidate
+                        .as_ref()
+                        .ok_or_else(|| "No contact candidate is selected".to_string())?;
+                    create_contact_from_candidate(
+                        model,
+                        candidate,
+                        settings.contact_type,
+                        friction_coefficient,
+                        penalty_factor,
+                    )
+                });
 
-            if let (Some(model), Some(candidate)) = (model.as_deref_mut(), candidate) {
-                let name = format!("CONTACT_{}", model.contacts.len() + 1);
-
-                if model
-                    .accept_contact_candidate(&candidate, name, ContactType::Tied)
-                    .is_some()
-                {
+            match result {
+                Ok(index) => {
+                    let name = model
+                        .as_deref()
+                        .and_then(|model| model.contacts.get(index))
+                        .map(|contact| contact.name.clone())
+                        .unwrap_or_else(|| "contact".to_string());
                     state.remove_selected();
+                    settings.message = format!(
+                        "Accepted {name} as {} surface-to-surface contact",
+                        settings.contact_type.label()
+                    );
                 }
+                Err(message) => settings.message = message,
             }
         }
 
-        let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+        let ready = state.selected_candidate().is_some();
+        let color = match (*interaction, ready) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
+        *border = BorderColor::all(if ready { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+
+    for mut label in &mut labels {
+        **label = format!("Accept as {}", settings.contact_type.label());
     }
 }
 
@@ -4602,10 +5077,23 @@ pub(crate) fn rebuild_boundary_loads_list(
 
     commands.entity(container).with_children(|list| {
         for (index, bc) in setup.boundary_conditions.iter().enumerate() {
+            let center_label = bc
+                .rotation_center
+                .as_ref()
+                .map(|center| {
+                    center
+                        .ngrp_name
+                        .clone()
+                        .or_else(|| center.node.map(|node| node.0.to_string()))
+                        .map(|token| format!(" about {token}"))
+                        .unwrap_or_else(|| " about unresolved center".to_string())
+                })
+                .unwrap_or_default();
             let label = format!(
-                "[BC] {}  {}  ({} nodes)  val={:.4}",
+                "[BC] {}  {}{}  ({} nodes)  val={:.4}",
                 bc.name,
                 bc.dof_label(),
+                center_label,
                 bc.nodes.len(),
                 bc.value
             );
@@ -4624,20 +5112,34 @@ pub(crate) fn rebuild_boundary_loads_list(
                 continue;
             }
             seen_load_names.push(&load.name);
-            let dof_label = match load.dof {
-                1 => "Fx",
-                2 => "Fy",
-                3 => "Fz",
-                _ => "?",
-            };
-            let count = setup
+            let group: Vec<_> = setup
                 .nodal_loads
                 .iter()
                 .filter(|l| l.name == load.name)
-                .count();
+                .collect();
+            let components: BTreeSet<_> = group.iter().map(|load| load.dof_label()).collect();
+            let nodes: BTreeSet<_> = group
+                .iter()
+                .map(|load| (load.mesh_index, load.node))
+                .collect();
+            let center_label = group
+                .iter()
+                .find_map(|load| load.rotation_center.as_ref())
+                .map(|center| {
+                    center
+                        .ngrp_name
+                        .clone()
+                        .or_else(|| center.node.map(|node| node.0.to_string()))
+                        .map(|token| format!(" about {token}"))
+                        .unwrap_or_else(|| " about unresolved center".to_string())
+                })
+                .unwrap_or_default();
             let label = format!(
-                "[Load] {}  {}={:.3}  ({} nodes)",
-                load.name, dof_label, load.value, count
+                "[Load] {}  {}{}  ({} nodes)",
+                load.name,
+                components.into_iter().collect::<Vec<_>>().join("/"),
+                center_label,
+                nodes.len()
             );
             setup_entry_row(
                 list,
@@ -5081,7 +5583,15 @@ pub(crate) fn update_apply_load_label(
         .filter(|value| value.abs() > f32::EPSILON)
         .count();
 
-    **text = if n > 0 {
+    let needs_center = editor.load_moment_mode == RotationalInputMode::AboutCenter
+        && editor.nodal_components[3..]
+            .iter()
+            .any(|value| value.abs() > f32::EPSILON)
+        && editor.rotation_center.is_none();
+
+    **text = if needs_center {
+        "Apply Load - set one rotation center".to_string()
+    } else if n > 0 {
         format!("Apply {component_count} load components  ({n} nodes)")
     } else {
         "Apply Load - no nodes selected".to_string()
@@ -5246,13 +5756,20 @@ pub(crate) fn apply_load_button_system(
 
     for (interaction, mut bg, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let needs_center = editor.load_moment_mode == RotationalInputMode::AboutCenter
+                && editor.nodal_components[3..]
+                    .iter()
+                    .any(|value| value.abs() > f32::EPSILON);
+            if needs_center && editor.resolved_rotation_center().is_none() {
+                continue;
+            }
             let components: Vec<_> = editor
                 .nodal_components
                 .iter()
                 .copied()
                 .enumerate()
                 .filter(|(_, value)| value.is_finite() && value.abs() > f32::EPSILON)
-                .map(|(index, value)| (index as u8 + 1, value))
+                .map(|(index, value)| (index, value))
                 .collect();
             if components.is_empty() {
                 continue;
@@ -5266,13 +5783,17 @@ pub(crate) fn apply_load_button_system(
 
                 let name = setup.next_auto_name_pub("LOAD");
 
-                for node in nodes {
-                    for &(dof, value) in &components {
+                for &(index, value) in &components {
+                    let Some((dof, rotation_center)) = editor.load_solver_component(index) else {
+                        continue;
+                    };
+                    for &node in &nodes {
                         setup.nodal_loads.push(fem_core::NodalLoad {
                             name: name.clone(),
                             mesh_index,
                             node,
                             ngrp_name: None,
+                            rotation_center: rotation_center.clone(),
                             dof,
                             value,
                         });
@@ -5329,12 +5850,7 @@ pub(crate) fn dload_kind_button_system(
                     editor.gravity_acceleration,
                 ),
             };
-            measurement.begin_slider_value(
-                SliderId::DloadMagnitude,
-                label,
-                units,
-                value,
-            );
+            measurement.begin_slider_value(SliderId::DloadMagnitude, label, units, value);
         }
 
         let active = *selected == btn.0;
@@ -5474,77 +5990,88 @@ pub(crate) fn update_boundary_load_preview(
                     });
                 }
                 if let Some(axis) = moment_axis {
-                    next.moments.push(BoundaryLoadPreviewMoment {
-                        origin: position,
-                        axis,
-                    });
-                }
-            }
-        }
-        ActiveLoadEditor::Distributed => {
-            match *kind {
-                SelectedDloadKind::Pressure => {
-                    let magnitude = editor.pressure;
-                    next.kind = Some(BoundaryLoadPreviewKind::Pressure);
-                    for (mesh_index, face_refs) in
-                        selected_faces_from_faces_or_elements(&selection, model)
-                    {
-                        let Some(mesh) = model.meshes.get(mesh_index) else {
-                            continue;
-                        };
-                        let selected: BTreeSet<_> = face_refs.into_iter().collect();
-                        next.arrows.extend(
-                            mesh.cached_boundary_faces()
-                                .iter()
-                                .filter(|face| {
-                                    face.element_face_ref()
-                                        .is_some_and(|face_ref| selected.contains(&face_ref))
-                                })
-                                .filter_map(|face| mesh.face_geometry(face))
-                                .map(|geometry| BoundaryLoadPreviewArrow {
-                                    origin: geometry.centroid,
-                                    direction: signed_preview_direction(
-                                        -geometry.normal,
-                                        magnitude,
-                                    ),
-                                }),
-                        );
+                    if editor.load_moment_mode == RotationalInputMode::DirectDof {
+                        next.moments.push(BoundaryLoadPreviewMoment {
+                            origin: position,
+                            axis,
+                        });
                     }
                 }
-                SelectedDloadKind::Gravity => {
-                    let magnitude = editor.gravity_acceleration;
-                    let direction = editor.normalized_gravity_direction().unwrap_or(Vec3::ZERO);
-                    next.kind = Some(BoundaryLoadPreviewKind::Gravity);
-                    for (mesh_index, element_ids) in
-                        selected_elements_from_faces_or_elements(&selection, model)
-                    {
-                        let Some(mesh) = model.meshes.get(mesh_index) else {
-                            continue;
-                        };
-                        let selected: BTreeSet<_> = element_ids.into_iter().collect();
-                        let mut centroid = Vec3::ZERO;
-                        let mut count = 0usize;
-                        for element in &mesh.elements {
-                            if !selected.contains(&element.id) {
-                                continue;
-                            }
-                            if let Some(positions) = mesh.node_positions(&element.nodes) {
-                                for position in positions {
-                                    centroid += position;
-                                    count += 1;
-                                }
-                            }
-                        }
-                        if count > 0 {
-                            next.arrows.push(BoundaryLoadPreviewArrow {
-                                origin: centroid / count as f32,
-                                direction: signed_preview_direction(direction, magnitude),
-                            });
+            }
+            if let (Some(axis), Some(center)) = (moment_axis, editor.rotation_center) {
+                if editor.load_moment_mode == RotationalInputMode::AboutCenter {
+                    if let FemEntityId::Node(node) = center.entity {
+                        if let Some(origin) = model
+                            .meshes
+                            .get(center.mesh_index)
+                            .and_then(|mesh| mesh.node_position(node))
+                        {
+                            next.moments
+                                .push(BoundaryLoadPreviewMoment { origin, axis });
                         }
                     }
                 }
             }
         }
+        ActiveLoadEditor::Distributed => match *kind {
+            SelectedDloadKind::Pressure => {
+                let magnitude = editor.pressure;
+                next.kind = Some(BoundaryLoadPreviewKind::Pressure);
+                for (mesh_index, face_refs) in
+                    selected_faces_from_faces_or_elements(&selection, model)
+                {
+                    let Some(mesh) = model.meshes.get(mesh_index) else {
+                        continue;
+                    };
+                    let selected: BTreeSet<_> = face_refs.into_iter().collect();
+                    next.arrows.extend(
+                        mesh.cached_boundary_faces()
+                            .iter()
+                            .filter(|face| {
+                                face.element_face_ref()
+                                    .is_some_and(|face_ref| selected.contains(&face_ref))
+                            })
+                            .filter_map(|face| mesh.face_geometry(face))
+                            .map(|geometry| BoundaryLoadPreviewArrow {
+                                origin: geometry.centroid,
+                                direction: signed_preview_direction(-geometry.normal, magnitude),
+                            }),
+                    );
+                }
+            }
+            SelectedDloadKind::Gravity => {
+                let magnitude = editor.gravity_acceleration;
+                let direction = editor.normalized_gravity_direction().unwrap_or(Vec3::ZERO);
+                next.kind = Some(BoundaryLoadPreviewKind::Gravity);
+                for (mesh_index, element_ids) in
+                    selected_elements_from_faces_or_elements(&selection, model)
+                {
+                    let Some(mesh) = model.meshes.get(mesh_index) else {
+                        continue;
+                    };
+                    let selected: BTreeSet<_> = element_ids.into_iter().collect();
+                    let mut centroid = Vec3::ZERO;
+                    let mut count = 0usize;
+                    for element in &mesh.elements {
+                        if !selected.contains(&element.id) {
+                            continue;
+                        }
+                        if let Some(positions) = mesh.node_positions(&element.nodes) {
+                            for position in positions {
+                                centroid += position;
+                                count += 1;
+                            }
+                        }
+                    }
+                    if count > 0 {
+                        next.arrows.push(BoundaryLoadPreviewArrow {
+                            origin: centroid / count as f32,
+                            direction: signed_preview_direction(direction, magnitude),
+                        });
+                    }
+                }
+            }
+        },
     }
 
     if *preview != next {
@@ -5689,15 +6216,14 @@ pub(crate) fn update_apply_dload_label(
         SelectedDloadKind::Gravity => "Gravity",
     };
 
-    **text = if *kind == SelectedDloadKind::Gravity
-        && editor.normalized_gravity_direction().is_none()
-    {
-        "Apply Gravity - direction must be non-zero".to_string()
-    } else if n > 0 {
-        format!("Apply {kind_label} {mag:.2}  ({n} {unit})")
-    } else {
-        format!("Apply {kind_label}  - no faces/elements selected")
-    };
+    **text =
+        if *kind == SelectedDloadKind::Gravity && editor.normalized_gravity_direction().is_none() {
+            "Apply Gravity - direction must be non-zero".to_string()
+        } else if n > 0 {
+            format!("Apply {kind_label} {mag:.2}  ({n} {unit})")
+        } else {
+            format!("Apply {kind_label}  - no faces/elements selected")
+        };
 }
 
 /// Creates a [`fem_core::DistributedLoad`] from the currently selected faces
@@ -6782,7 +7308,7 @@ fn contact_candidate_summary(state: &ContactCandidateState, model: Option<&FemMo
     };
 
     format!(
-        "Contact candidate {}/{total} ({kind})\n{mesh_a} <-> {mesh_b}\nFaces: {} / {}  Pairs: {}  Avg gap: {:.4}",
+        "Contact candidate {}/{total} ({kind})\nMaster: {mesh_a}\nSlave: {mesh_b}\nFaces M/S: {} / {}  Pairs: {}  Avg gap: {:.4}",
         selected_index + 1,
         candidate.faces_a.len(),
         candidate.faces_b.len(),
@@ -7439,11 +7965,12 @@ pub(crate) fn export_button_system(
                         String::new()
                     };
                     let message = format!(
-                        "OK {stem}.*{part_note}\n{}N/{}E  BC:{} Ld:{} Mat:{} Sec:{} Ctc:{}",
+                        "OK {stem}.*{part_note}\n{}N/{}E  BC:{} Ld:{} MPC:{} Mat:{} Sec:{} Ctc:{}",
                         summary.node_count,
                         summary.element_count,
                         summary.boundary_condition_count,
                         summary.load_count,
+                        summary.mpc_equation_count,
                         summary.material_count,
                         summary.section_count,
                         summary.contact_count,
@@ -7621,10 +8148,11 @@ pub(crate) fn update_analysis_setup_stats_text(
             .sum();
 
         format!(
-            "Setup: BC {} ({} nodes)  Loads {}  Materials {}  Sections {}",
+            "Setup: BC {} ({} nodes)  Loads {}  MPC {}  Materials {}  Sections {}",
             setup.boundary_conditions.len(),
             constrained_nodes,
             setup.nodal_loads.len() + setup.distributed_loads.len(),
+            setup.mpc_equations.len(),
             setup.materials.len(),
             setup.sections.len(),
         )
@@ -7978,7 +8506,10 @@ pub(crate) fn apply_slider_to_results(
             | SliderId::AssemblyRotationDegrees
             | SliderId::ContactFriction
             | SliderId::ContactPenaltyFactor
-            | SliderId::ContactReviewSeparation => {}
+            | SliderId::ContactReviewSeparation
+            | SliderId::ContactSearchGap
+            | SliderId::ContactSearchAngle
+            | SliderId::RigidSpiderRadius => {}
         }
     }
 
@@ -8107,18 +8638,19 @@ mod sidebar_page_tests {
     use super::{
         CameraFitRequest, ContactDefinitionSettings, ContactPairKind, SELECTION_GUIDE_TEXT,
         SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
-        SurfaceSelectionSettings, apply_mesh, create_contact_from_draft, merge_mesh_contact_pairs,
-        page_supports_part_position, page_supports_tool, selected_nodes_by_mesh,
-        selection_context_for_page, selection_operation_hint, sidebar_page_display,
-        signed_preview_direction, supports_surface_growth, surface_selection_hint,
-        sync_contact_measurement_box, update_hover_preview_group,
+        SurfaceSelectionSettings, apply_mesh, create_contact_from_candidate,
+        create_contact_from_draft, merge_mesh_contact_pairs, page_supports_part_position,
+        page_supports_tool, selected_nodes_by_mesh, selection_context_for_page,
+        selection_operation_hint, sidebar_page_display, signed_preview_direction,
+        supports_surface_growth, surface_selection_hint, sync_contact_measurement_box,
+        update_hover_preview_group,
     };
     use crate::measurement::{MeasurementBoxState, MeasurementTarget};
     use bevy::prelude::{App, Display, Update, Vec3};
     use fem_core::{
-        AnalysisSetup, ElementId, ElementType, FemElement, FemEntityId, FemEntityRef, FemMesh,
-        FemModel, FemModelVersion, FemNode, HoverPreviewTargets, MeshLoadStatus, NodeId,
-        SelectionHit, SelectionLevel, ViewportTool,
+        AnalysisSetup, ContactCandidate, ElementId, ElementType, FemElement, FemEntityId,
+        FemEntityRef, FemMesh, FemModel, FemModelVersion, FemNode, HoverPreviewTargets,
+        MeshLoadStatus, NodeId, SelectionHit, SelectionLevel, ViewportTool,
     };
     use interaction::HoverResult;
     use selection::{SelectionOperation, SelectionState};
@@ -8344,6 +8876,41 @@ mod sidebar_page_tests {
         assert!(model.contacts.is_empty());
         assert!(model.meshes[0].node_sets.is_empty());
         assert!(model.meshes[0].surface_sets.is_empty());
+    }
+
+    #[test]
+    fn detected_contact_uses_selected_behavior_and_exact_parameters() {
+        let mut model = FemModel::demo_hex8();
+        model.add_mesh("Second", FemMesh::demo_hex8());
+        let candidate = ContactCandidate {
+            mesh_a: 0,
+            mesh_b: 1,
+            faces_a: vec![model.meshes[0].cached_boundary_faces()[0].id],
+            faces_b: vec![model.meshes[1].cached_boundary_faces()[0].id],
+            pair_count: 1,
+            average_gap: 0.0,
+        };
+
+        let index = create_contact_from_candidate(
+            &mut model,
+            &candidate,
+            fem_core::ContactType::FiniteSliding,
+            0.27,
+            Some(3.5e5),
+        )
+        .unwrap();
+
+        assert_eq!(model.contacts[index].name, "CONTACT_1");
+        assert_eq!(
+            model.contacts[index].contact_type,
+            fem_core::ContactType::FiniteSliding
+        );
+        assert_eq!(model.contacts[index].friction_coefficient, 0.27);
+        assert_eq!(model.contacts[index].penalty_factor, Some(3.5e5));
+        assert!(matches!(
+            model.contacts[index].slave,
+            fem_core::ContactSlaveRef::Surface(_)
+        ));
     }
 
     #[test]

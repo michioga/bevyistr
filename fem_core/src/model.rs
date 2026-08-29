@@ -339,6 +339,18 @@ impl FemMesh {
             .collect()
     }
 
+    /// Indices into [`FemMesh::nodes`] within `radius` of `point`.
+    /// Used by automatic MPC/spider discovery and other node-neighbourhood
+    /// tools that need the same BVH acceleration as viewport picking.
+    pub fn node_indices_near(&self, point: Vec3, radius: f32) -> Vec<usize> {
+        self.topology
+            .node_bvh
+            .query_radius(point, radius.max(0.0))
+            .into_iter()
+            .map(|index| index as usize)
+            .collect()
+    }
+
     /// Indices into [`FemMesh::cached_boundary_edges`] whose AABB overlaps
     /// `aabb`. Intended for box-select.
     pub fn boundary_edge_indices_in_aabb(&self, aabb: Aabb) -> Vec<usize> {

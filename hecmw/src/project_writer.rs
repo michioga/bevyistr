@@ -9,7 +9,7 @@ use std::{fmt, io, path::Path};
 
 use fem_core::{
     AnalysisSetup, BoundaryCondition, DistributedLoad, DistributedLoadTarget, ElementFaceRef,
-    FemModel, NodalLoad,
+    FemModel, NodalLoad, RotationCenter,
 };
 
 use crate::msh_writer::part_group_prefix;
@@ -28,6 +28,7 @@ pub struct FrontistrExportSummary {
     pub material_count: usize,
     pub section_count: usize,
     pub contact_count: usize,
+    pub mpc_equation_count: usize,
 }
 
 #[derive(Debug)]
@@ -116,6 +117,7 @@ pub fn write_frontistr_project(
         material_count,
         section_count,
         contact_count,
+        mpc_equation_count: setup.mpc_equations.len(),
     })
 }
 
@@ -133,6 +135,10 @@ pub fn remap_setup_for_assembly(setup: &AnalysisSetup, offsets: &[(u32, u32)]) -
                 .iter()
                 .map(|&node| remap_node(offsets, condition.mesh_index, node))
                 .collect(),
+            rotation_center: condition
+                .rotation_center
+                .as_ref()
+                .map(|center| remap_rotation_center(center, offsets)),
             ..condition.clone()
         })
         .collect();
@@ -142,6 +148,10 @@ pub fn remap_setup_for_assembly(setup: &AnalysisSetup, offsets: &[(u32, u32)]) -
         .iter()
         .map(|load| NodalLoad {
             node: remap_node(offsets, load.mesh_index, load.node),
+            rotation_center: load
+                .rotation_center
+                .as_ref()
+                .map(|center| remap_rotation_center(center, offsets)),
             ..load.clone()
         })
         .collect();
@@ -180,6 +190,15 @@ pub fn remap_setup_for_assembly(setup: &AnalysisSetup, offsets: &[(u32, u32)]) -
     remapped
 }
 
+fn remap_rotation_center(center: &RotationCenter, offsets: &[(u32, u32)]) -> RotationCenter {
+    RotationCenter {
+        node: center
+            .node
+            .map(|node| remap_node(offsets, center.mesh_index, node)),
+        ..center.clone()
+    }
+}
+
 /// Keeps compact node-group references in `.cnt` aligned with the part
 /// prefixes used by the flattened assembly's `.msh` groups.
 fn prefix_assembly_group_references(setup: &mut AnalysisSetup, model: &FemModel) {
@@ -191,11 +210,22 @@ fn prefix_assembly_group_references(setup: &mut AnalysisSetup, model: &FemModel)
                 group
             );
         }
+        prefix_rotation_center_group(condition.rotation_center.as_mut(), model);
     }
     for load in &mut setup.nodal_loads {
         if let Some(group) = &mut load.ngrp_name {
             *group = format!("{}_{}", part_group_prefix(model, load.mesh_index), group);
         }
+        prefix_rotation_center_group(load.rotation_center.as_mut(), model);
+    }
+}
+
+fn prefix_rotation_center_group(center: Option<&mut RotationCenter>, model: &FemModel) {
+    let Some(center) = center else {
+        return;
+    };
+    if let Some(group) = &mut center.ngrp_name {
+        *group = format!("{}_{}", part_group_prefix(model, center.mesh_index), group);
     }
 }
 
@@ -203,8 +233,8 @@ fn prefix_assembly_group_references(setup: &mut AnalysisSetup, model: &FemModel)
 mod tests {
     use fem_core::{
         BoundaryCondition, ContactPair, ContactType, DistributedLoad, DistributedLoadKind,
-        DistributedLoadTarget, ElementFaceRef, ElementId, FemSurfaceSet, LocalFaceId, NodalLoad,
-        NodeId, SectionKind, SurfaceSetRef,
+        DistributedLoadTarget, ElementFaceRef, ElementId, FemMesh, FemSurfaceSet, LocalFaceId,
+        MpcEquation, MpcTerm, NodalLoad, NodeId, SectionKind, SurfaceSetRef,
     };
 
     use super::*;
@@ -217,6 +247,7 @@ mod tests {
                 mesh_index: 1,
                 nodes: vec![NodeId(2)],
                 ngrp_name: None,
+                rotation_center: Some(RotationCenter::from_node(1, NodeId(4))),
                 dof_start: 1,
                 dof_end: 3,
                 value: 0.0,
@@ -226,6 +257,7 @@ mod tests {
                 mesh_index: 1,
                 node: NodeId(3),
                 ngrp_name: None,
+                rotation_center: Some(RotationCenter::from_node(1, NodeId(5))),
                 dof: 1,
                 value: 10.0,
             }],
@@ -248,6 +280,20 @@ mod tests {
         assert_eq!(remapped.boundary_conditions[0].nodes, vec![NodeId(102)]);
         assert_eq!(remapped.nodal_loads[0].node, NodeId(103));
         assert_eq!(
+            remapped.boundary_conditions[0]
+                .rotation_center
+                .as_ref()
+                .and_then(|center| center.node),
+            Some(NodeId(104))
+        );
+        assert_eq!(
+            remapped.nodal_loads[0]
+                .rotation_center
+                .as_ref()
+                .and_then(|center| center.node),
+            Some(NodeId(105))
+        );
+        assert_eq!(
             remapped.distributed_loads[0].target,
             DistributedLoadTarget::Faces(vec![
                 ElementFaceRef::new(ElementId(204), LocalFaceId(2),)
@@ -266,6 +312,7 @@ mod tests {
                 mesh_index: 1,
                 nodes: vec![NodeId(0)],
                 ngrp_name: Some("FIX".into()),
+                rotation_center: Some(RotationCenter::from_group(1, "CENTER", Some(NodeId(0)))),
                 dof_start: 1,
                 dof_end: 3,
                 value: 0.0,
@@ -275,6 +322,7 @@ mod tests {
                 mesh_index: 1,
                 node: NodeId(0),
                 ngrp_name: Some("LOAD".into()),
+                rotation_center: None,
                 dof: 1,
                 value: 1.0,
             }],
@@ -290,6 +338,13 @@ mod tests {
         assert_eq!(
             setup.nodal_loads[0].ngrp_name.as_deref(),
             Some("SECOND_LOAD")
+        );
+        assert_eq!(
+            setup.boundary_conditions[0]
+                .rotation_center
+                .as_ref()
+                .and_then(|center| center.ngrp_name.as_deref()),
+            Some("SECOND_CENTER")
         );
     }
 
@@ -336,6 +391,43 @@ mod tests {
         assert!(control_text.contains(" CP1"));
 
         for file in ["hecmw_ctrl.dat", "contact.msh", "contact.cnt"] {
+            std::fs::remove_file(dir.join(file)).unwrap();
+        }
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn assembly_export_offsets_mpc_nodes_exactly_once() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "bevyistr_frontistr_mpc_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir(&dir).unwrap();
+
+        let mut model = FemModel::demo_hex8();
+        model.add_mesh("SECOND", FemMesh::demo_hex8());
+        let mut setup = AnalysisSetup::default();
+        setup.mpc_equations.push(MpcEquation::new(
+            "PART_LINK",
+            0.0,
+            vec![
+                MpcTerm::new(0, NodeId(1), 1, 1.0),
+                MpcTerm::new(1, NodeId(1), 1, -1.0),
+            ],
+        ));
+
+        let summary = write_frontistr_project(&dir, "mpc", &model, &setup).unwrap();
+        let mesh_text = std::fs::read_to_string(dir.join("mpc.msh")).unwrap();
+
+        assert_eq!(summary.mpc_equation_count, 1);
+        assert!(mesh_text.contains(" 1,1,1.000000000e0,9,1,-1.000000000e0"));
+
+        for file in ["hecmw_ctrl.dat", "mpc.msh", "mpc.cnt"] {
             std::fs::remove_file(dir.join(file)).unwrap();
         }
         std::fs::remove_dir(dir).unwrap();
