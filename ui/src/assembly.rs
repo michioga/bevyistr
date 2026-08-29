@@ -7,13 +7,14 @@
 
 use crate::measurement::MeasurementBoxState;
 use crate::slider::{SliderId, SliderState, SliderTrack};
+use bevy::camera::visibility::RenderLayers;
 use bevy::math::primitives::{Cone, Cuboid, Cylinder, Torus};
 use bevy::mesh::Mesh3d;
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use fem_core::{
-    ContactCandidateState, FemModel, FemModelVersion, InteractionMode, UiKeyboardState,
-    UiPointerState, ViewportTool,
+    ContactCandidateState, FemModel, FemModelVersion, InteractionMode, MainViewportCamera,
+    UiKeyboardState, UiPointerState, ViewportTool,
 };
 use visualization::{FemPartVisual, build_part_edge_mesh, build_part_surface_mesh};
 
@@ -22,6 +23,7 @@ const GIZMO_LENGTH_FACTOR: f32 = 0.24;
 const ROTATION_RING_FACTOR: f32 = 0.36;
 const ROTATION_RING_RADIUS: f32 = 0.92;
 const ROTATION_PICK_TOLERANCE: f32 = 0.12;
+const ASSEMBLY_GIZMO_RENDER_LAYER: usize = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum AssemblyGizmoMode {
@@ -124,6 +126,18 @@ pub(crate) struct AssemblyGizmoPiece {
     active_material: Handle<StandardMaterial>,
 }
 
+#[derive(Component)]
+pub(crate) struct AssemblyGizmoOverlayCamera;
+
+type MainAssemblyCameraFilter = (
+    With<MainViewportCamera>,
+    Without<AssemblyGizmoOverlayCamera>,
+);
+type AssemblyOverlayCameraFilter = (
+    With<AssemblyGizmoOverlayCamera>,
+    Without<MainViewportCamera>,
+);
+
 pub(crate) fn reference_size(model: &FemModel, part_index: usize) -> f32 {
     let part_size = model
         .part_bounds(part_index)
@@ -142,6 +156,19 @@ pub(crate) fn spawn_assembly_viewport_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: 10,
+            is_active: false,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
+        AssemblyGizmoOverlayCamera,
+        Name::new("Assembly gizmo X-ray camera"),
+    ));
+
     let hover_material = materials.add(StandardMaterial {
         base_color: Color::srgba(1.0, 0.78, 0.08, 0.30),
         alpha_mode: AlphaMode::Blend,
@@ -187,13 +214,15 @@ pub(crate) fn spawn_assembly_viewport_visuals(
     }
 
     let active_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(1.0, 0.95, 0.55),
+        base_color: Color::srgba(1.0, 0.95, 0.55, 0.90),
         emissive: LinearRgba::rgb(1.4, 1.2, 0.25),
+        alpha_mode: AlphaMode::Blend,
         unlit: true,
         ..default()
     });
     let root_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.90, 0.94, 0.98),
+        base_color: Color::srgba(0.90, 0.94, 0.98, 0.86),
+        alpha_mode: AlphaMode::Blend,
         unlit: true,
         ..default()
     });
@@ -201,6 +230,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(0.10, 0.10, 0.10))),
         MeshMaterial3d(root_material.clone()),
+        RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
         Transform::default(),
         Visibility::Hidden,
         AssemblyGizmoPiece {
@@ -215,12 +245,13 @@ pub(crate) fn spawn_assembly_viewport_visuals(
     ));
 
     for (axis, color, label) in [
-        (Vec3::X, Color::srgb(0.92, 0.16, 0.18), "X"),
-        (Vec3::Y, Color::srgb(0.20, 0.82, 0.30), "Y"),
-        (Vec3::Z, Color::srgb(0.18, 0.42, 1.0), "Z"),
+        (Vec3::X, Color::srgba(0.92, 0.16, 0.18, 0.86), "X"),
+        (Vec3::Y, Color::srgba(0.20, 0.82, 0.30, 0.86), "Y"),
+        (Vec3::Z, Color::srgba(0.18, 0.42, 1.0, 0.86), "Z"),
     ] {
         let normal_material = materials.add(StandardMaterial {
             base_color: color,
+            alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
         });
@@ -232,6 +263,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
                 half_height: 0.32,
             })),
             MeshMaterial3d(normal_material.clone()),
+            RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
             Transform::default(),
             Visibility::Hidden,
             AssemblyGizmoPiece {
@@ -251,6 +283,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
                 height: 0.20,
             })),
             MeshMaterial3d(normal_material.clone()),
+            RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
             Transform::default(),
             Visibility::Hidden,
             AssemblyGizmoPiece {
@@ -268,13 +301,14 @@ pub(crate) fn spawn_assembly_viewport_visuals(
             base_color: color,
             cull_mode: None,
             double_sided: true,
+            alpha_mode: AlphaMode::Blend,
             unlit: true,
-            depth_bias: 6.0,
             ..default()
         });
         commands.spawn((
             Mesh3d(meshes.add(Torus::new(0.84, 1.0))),
             MeshMaterial3d(ring_material.clone()),
+            RenderLayers::layer(ASSEMBLY_GIZMO_RENDER_LAYER),
             Transform::default(),
             Visibility::Hidden,
             AssemblyGizmoPiece {
@@ -290,9 +324,37 @@ pub(crate) fn spawn_assembly_viewport_visuals(
     }
 }
 
+/// Mirrors the engineering camera into a second render pass that contains
+/// only the manipulation gizmo. Its independent depth buffer makes the
+/// semi-transparent handles visible even when the selected part surrounds
+/// its centroid.
+pub(crate) fn sync_assembly_overlay_camera(
+    tool: Res<ViewportTool>,
+    main_camera: Query<(&Transform, &Projection), MainAssemblyCameraFilter>,
+    mut overlay_camera: Query<
+        (&mut Camera, &mut Transform, &mut Projection),
+        AssemblyOverlayCameraFilter,
+    >,
+) {
+    let Ok((mut camera, mut transform, mut projection)) = overlay_camera.single_mut() else {
+        return;
+    };
+    camera.is_active = *tool == ViewportTool::Assembly;
+    if !camera.is_active {
+        return;
+    }
+
+    let Ok((main_transform, main_projection)) = main_camera.single() else {
+        camera.is_active = false;
+        return;
+    };
+    *transform = *main_transform;
+    *projection = main_projection.clone();
+}
+
 pub(crate) fn assembly_viewport_hover_system(
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     model: Res<FemModel>,
     tool: Res<ViewportTool>,
     ui_pointer: Res<UiPointerState>,
@@ -362,7 +424,7 @@ pub(crate) fn assembly_viewport_input_system(
     keyboard: Res<ButtonInput<KeyCode>>,
     keyboard_state: Res<UiKeyboardState>,
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     tool: Res<ViewportTool>,
     ui_pointer: Res<UiPointerState>,
     mut mode: ResMut<InteractionMode>,

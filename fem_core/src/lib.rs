@@ -2,20 +2,20 @@ use bevy::prelude::*;
 use std::path::PathBuf;
 
 pub mod boundary;
-pub mod contact;
 pub mod connected;
+pub mod contact;
 pub mod model;
 pub mod planar;
 pub mod result;
 pub mod spatial;
 
 pub use boundary::*;
-pub use contact::*;
 pub use connected::{
     DEFAULT_FEATURE_EDGE_ANGLE_DEG, expand_connected_boundary_edges,
     expand_connected_boundary_faces, expand_connected_elements, expand_connected_feature_edges,
     expand_continuous_feature_edges,
 };
+pub use contact::*;
 pub use model::*;
 pub use planar::{
     expand_coplanar_from_element, expand_coplanar_from_face, expand_smooth_from_element,
@@ -47,6 +47,13 @@ pub enum ViewportTool {
 
     Assembly,
 }
+
+/// Identifies the camera that owns the engineering model viewport.
+///
+/// Auxiliary cameras such as the Navigation Cube and X-ray gizmo overlay
+/// must not be mistaken for the model camera by picking and box selection.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct MainViewportCamera;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SelectionLevel {

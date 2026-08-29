@@ -165,7 +165,7 @@ pub fn perform_box_selection(
     mut selection: ResMut<SelectionState>,
     mut click_sequence: ResMut<selection::ClickSequence>,
 
-    camera_query: Query<(&Camera, &GlobalTransform)>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<fem_core::MainViewportCamera>>,
 
     selectable_query: Query<(Entity, &GlobalTransform, &Selectable)>,
     selected_query: Query<Entity, With<Selected>>,
@@ -284,7 +284,8 @@ fn select_model_targets_in_rect(
     level: SelectionLevel,
     selection: &mut SelectionState,
 ) {
-    let Some(world_bounds) = screen_rect_world_bounds(camera, camera_transform, min, max, model) else {
+    let Some(world_bounds) = screen_rect_world_bounds(camera, camera_transform, min, max, model)
+    else {
         return;
     };
 
@@ -309,9 +310,10 @@ fn select_model_targets_in_rect(
                 for index in mesh.boundary_edge_indices_in_aabb(world_bounds) {
                     let edge = &edges[index];
 
-                    let (Some(start), Some(end)) =
-                        (mesh.node_position(edge.nodes[0]), mesh.node_position(edge.nodes[1]))
-                    else {
+                    let (Some(start), Some(end)) = (
+                        mesh.node_position(edge.nodes[0]),
+                        mesh.node_position(edge.nodes[1]),
+                    ) else {
                         continue;
                     };
 
@@ -410,9 +412,7 @@ fn select_model_targets_in_rect(
                         let matches = if crossing {
                             let edges = element.edge_node_ids();
                             if edges.is_empty() {
-                                points
-                                    .iter()
-                                    .any(|&point| point_in_rect(point, min, max))
+                                points.iter().any(|&point| point_in_rect(point, min, max))
                             } else {
                                 edges.into_iter().any(|edge| {
                                     let Some(edge_points) =
@@ -429,16 +429,11 @@ fn select_model_targets_in_rect(
                                 })
                             }
                         } else {
-                            points
-                                .iter()
-                                .all(|&point| point_in_rect(point, min, max))
+                            points.iter().all(|&point| point_in_rect(point, min, max))
                         };
 
                         if matches {
-                            push_target(
-                                selection,
-                                FemEntityRef::element(mesh_index, element.id),
-                            );
+                            push_target(selection, FemEntityRef::element(mesh_index, element.id));
                         }
                     }
                 }
@@ -463,9 +458,7 @@ fn project_node(
     camera_transform: &GlobalTransform,
 ) -> Option<Vec2> {
     let position = mesh.node_position(node_id)?;
-    camera
-        .world_to_viewport(camera_transform, position)
-        .ok()
+    camera.world_to_viewport(camera_transform, position).ok()
 }
 
 fn project_nodes(
@@ -490,9 +483,7 @@ fn polygon_matches_rect(points: &[Vec2], min: Vec2, max: Vec2, crossing: bool) -
     }
 
     if !crossing {
-        return points
-            .iter()
-            .all(|&point| point_in_rect(point, min, max));
+        return points.iter().all(|&point| point_in_rect(point, min, max));
     }
 
     if points.iter().any(|&point| point_in_rect(point, min, max)) {
@@ -516,12 +507,7 @@ fn polygon_matches_rect(points: &[Vec2], min: Vec2, max: Vec2, crossing: bool) -
         return false;
     }
 
-    let rect_corners = [
-        min,
-        Vec2::new(max.x, min.y),
-        max,
-        Vec2::new(min.x, max.y),
-    ];
+    let rect_corners = [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)];
     rect_corners
         .into_iter()
         .any(|corner| point_in_polygon(corner, points))
@@ -532,12 +518,7 @@ fn segment_intersects_rect(start: Vec2, end: Vec2, min: Vec2, max: Vec2) -> bool
         return true;
     }
 
-    let corners = [
-        min,
-        Vec2::new(max.x, min.y),
-        max,
-        Vec2::new(min.x, max.y),
-    ];
+    let corners = [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)];
 
     corners
         .into_iter()
@@ -585,8 +566,7 @@ fn point_in_polygon(point: Vec2, polygon: &[Vec2]) -> bool {
     for &current in polygon {
         let crosses = (current.y > point.y) != (previous.y > point.y);
         if crosses {
-            let x = (previous.x - current.x) * (point.y - current.y)
-                / (previous.y - current.y)
+            let x = (previous.x - current.x) * (point.y - current.y) / (previous.y - current.y)
                 + current.x;
             if point.x < x {
                 inside = !inside;
@@ -681,11 +661,6 @@ mod tests {
             Vec2::new(0.0, 10.0),
         ];
 
-        assert!(polygon_matches_rect(
-            &surrounding_polygon,
-            min,
-            max,
-            true,
-        ));
+        assert!(polygon_matches_rect(&surrounding_polygon, min, max, true,));
     }
 }

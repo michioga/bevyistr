@@ -28,6 +28,11 @@ pub enum SliderId {
     /// View-only separation of a detected contact pair, as a percentage of
     /// the complete model size.
     ContactReviewSeparation,
+    /// Coulomb friction coefficient for a new sliding contact pair.
+    ContactFriction,
+    /// Optional user-specified contact penalty factor. When automatic
+    /// penalty is selected this slider value is retained but not exported.
+    ContactPenaltyFactor,
 }
 
 #[derive(Component, Debug, Clone)]

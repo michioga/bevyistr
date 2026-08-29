@@ -226,11 +226,23 @@ impl ContactPairKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ContactParameter {
+    #[default]
+    Friction,
+
+    PenaltyFactor,
+}
+
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct ContactDefinitionSettings {
     pub pair_kind: ContactPairKind,
 
     pub contact_type: ContactType,
+
+    pub use_penalty_factor: bool,
+
+    pub active_parameter: ContactParameter,
 
     pub message: String,
 }
@@ -240,6 +252,8 @@ impl Default for ContactDefinitionSettings {
         Self {
             pair_kind: ContactPairKind::NodeSurface,
             contact_type: ContactType::SmallSliding,
+            use_penalty_factor: false,
+            active_parameter: ContactParameter::Friction,
             message: "Select slave nodes, then capture Slave".to_string(),
         }
     }
@@ -250,6 +264,21 @@ pub(crate) struct ContactPairKindButton(pub ContactPairKind);
 
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct ContactBehaviorButton(pub ContactType);
+
+#[derive(Component)]
+pub(crate) struct ContactSlidingParameterControls;
+
+#[derive(Component)]
+pub(crate) struct ContactPenaltyControls;
+
+#[derive(Component)]
+pub(crate) struct ContactPenaltyToggleButton;
+
+#[derive(Component)]
+pub(crate) struct ContactPenaltyToggleLabel;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct ContactParameterButton(pub ContactParameter);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContactCaptureSide {
@@ -653,6 +682,10 @@ impl SidebarPageContent {
         Self(Self::LOADS | Self::MATERIALS | Self::SOLVE)
     }
 
+    const fn part_position() -> Self {
+        Self(Self::MODEL | Self::CONTACT)
+    }
+
     const fn contains(self, page: SidebarPage) -> bool {
         self.0 & Self::page(page).0 != 0
     }
@@ -743,7 +776,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             ))
             .with_children(|panel| {
 
-            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Model), "ModelPage", |panel| {
+            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Model), "ModelFilePage", |panel| {
 
             // ── § File ──────────────────────────────────────────────────
             section(panel, "FILE", |sec| {
@@ -834,8 +867,12 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             });
             divider(panel);
 
+            }); // end ModelFilePage
+
+            sidebar_page_group(panel, SidebarPageContent::part_position(), "PartPositionPage", |panel| {
+
             // ── § Assembly ──────────────────────────────────────────────
-            section(panel, "ASSEMBLY", |sec| {
+            section(panel, "PART POSITION", |sec| {
                 sec.spawn((
                     Button,
                     Node {
@@ -897,6 +934,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     sec,
                     "Move: drag X/Y/Z arrow   Rotate: drag RX/RY/RZ ring",
                 );
+                hint_text(sec, "Turn Edit OFF to return to node/face selection");
                 sec.spawn((
                     Node {
                         flex_direction: FlexDirection::Column,
@@ -961,9 +999,13 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                     AssemblyTransformButton { action: AssemblyTransformAction::Reset },
                     "AssemblyResetPoseButton",
                 );
-                hint_text(sec, "The transformed mesh coordinates are used for selection, contact search, and export");
+                hint_text(sec, "Real mesh coordinates are updated. Contact candidates are cleared after movement; run Detect again");
             });
             divider(panel);
+
+            }); // end PartPositionPage
+
+            sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Model), "ModelSelectionPage", |panel| {
 
             // ── § Selection ─────────────────────────────────────────────
             section(panel, "SELECTION", |sec| {
@@ -991,7 +1033,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             });
             divider(panel);
 
-            }); // end ModelPage
+            }); // end ModelSelectionPage
 
             sidebar_page_group(panel, SidebarPageContent::page(SidebarPage::Model), "ModelSetsPage", |panel| {
 
@@ -1128,6 +1170,90 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                             TextColor(TEXT_MAIN),
                         ));
                     }
+                });
+                sec.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(5.0),
+                        ..default()
+                    },
+                    ContactSlidingParameterControls,
+                    Name::new("ContactSlidingParameterControls"),
+                ))
+                .with_children(|parameters| {
+                    spawn_slider(
+                        parameters,
+                        SliderConfig {
+                            width: 272.0,
+                            min: 0.0,
+                            max: 1.0,
+                            value: 0.0,
+                            label: "Friction coefficient",
+                            id: SliderId::ContactFriction,
+                        },
+                    );
+                    action_button(
+                        parameters,
+                        "Edit friction exactly",
+                        ContactParameterButton(ContactParameter::Friction),
+                        "EditContactFrictionButton",
+                    );
+                    parameters
+                        .spawn((
+                            Button,
+                            Node {
+                                width: percent(100.0),
+                                height: px(25.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            ContactPenaltyToggleButton,
+                            Name::new("ContactPenaltyToggleButton"),
+                        ))
+                        .with_child((
+                            Text::new("Penalty factor: AUTO"),
+                            TextFont {
+                                font_size: FontSize::Px(10.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                            ContactPenaltyToggleLabel,
+                        ));
+                    parameters
+                        .spawn((
+                            Node {
+                                display: Display::None,
+                                flex_direction: FlexDirection::Column,
+                                row_gap: px(5.0),
+                                ..default()
+                            },
+                            ContactPenaltyControls,
+                            Name::new("ContactPenaltyControls"),
+                        ))
+                        .with_children(|penalty| {
+                            spawn_slider(
+                                penalty,
+                                SliderConfig {
+                                    width: 272.0,
+                                    min: 0.0,
+                                    max: 1.0e6,
+                                    value: 1.0e5,
+                                    label: "Penalty factor",
+                                    id: SliderId::ContactPenaltyFactor,
+                                },
+                            );
+                            action_button(
+                                penalty,
+                                "Edit penalty exactly",
+                                ContactParameterButton(ContactParameter::PenaltyFactor),
+                                "EditContactPenaltyButton",
+                            );
+                        });
                 });
                 sec.spawn((Node {
                     flex_direction: FlexDirection::Row,
@@ -2611,7 +2737,7 @@ pub(crate) fn sidebar_page_button_system(
             if page_changed {
                 measurement.clear();
             }
-            if button.page != SidebarPage::Model {
+            if !page_supports_part_position(button.page) {
                 *tool = ViewportTool::Selection;
             }
             for mut scroll in &mut scroll_areas {
@@ -2632,6 +2758,10 @@ pub(crate) fn sidebar_page_button_system(
         *background = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
     }
+}
+
+fn page_supports_part_position(page: SidebarPage) -> bool {
+    matches!(page, SidebarPage::Model | SidebarPage::Contact)
 }
 
 /// Shows only content associated with the current sidebar task. Inactive
@@ -3620,6 +3750,211 @@ pub(crate) fn contact_behavior_button_system(
     }
 }
 
+pub(crate) fn contact_penalty_toggle_button_system(
+    mut settings: ResMut<ContactDefinitionSettings>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut measurement: ResMut<MeasurementBoxState>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        With<ContactPenaltyToggleButton>,
+    >,
+    mut labels: Query<&mut Text, With<ContactPenaltyToggleLabel>>,
+) {
+    for (interaction, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            settings.use_penalty_factor = !settings.use_penalty_factor;
+            settings.active_parameter = if settings.use_penalty_factor {
+                ContactParameter::PenaltyFactor
+            } else {
+                ContactParameter::Friction
+            };
+            let (slider_id, label, units, value) = match settings.active_parameter {
+                ContactParameter::Friction => (
+                    SliderId::ContactFriction,
+                    "Friction coefficient",
+                    "dimensionless",
+                    slider_value(&sliders, SliderId::ContactFriction, 0.0),
+                ),
+                ContactParameter::PenaltyFactor => (
+                    SliderId::ContactPenaltyFactor,
+                    "Contact penalty factor",
+                    "FrontISTR input value",
+                    slider_value(&sliders, SliderId::ContactPenaltyFactor, 1.0e5),
+                ),
+            };
+            measurement.begin_slider_value(slider_id, label, units, value);
+        }
+
+        let active = settings.use_penalty_factor;
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
+    }
+
+    for mut label in &mut labels {
+        **label = format!(
+            "Penalty factor: {}",
+            if settings.use_penalty_factor {
+                "CUSTOM"
+            } else {
+                "AUTO"
+            }
+        );
+    }
+}
+
+pub(crate) fn contact_parameter_button_system(
+    mut settings: ResMut<ContactDefinitionSettings>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
+    mut measurement: ResMut<MeasurementBoxState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &ContactParameterButton,
+        ),
+        With<ContactParameterButton>,
+    >,
+) {
+    for (interaction, mut background, button) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            settings.active_parameter = button.0;
+            let (slider_id, label, units, fallback) = match button.0 {
+                ContactParameter::Friction => (
+                    SliderId::ContactFriction,
+                    "Friction coefficient",
+                    "dimensionless",
+                    0.0,
+                ),
+                ContactParameter::PenaltyFactor => (
+                    SliderId::ContactPenaltyFactor,
+                    "Contact penalty factor",
+                    "FrontISTR input value",
+                    1.0e5,
+                ),
+            };
+            measurement.begin_slider_value(
+                slider_id,
+                label,
+                units,
+                slider_value(&sliders, slider_id, fallback),
+            );
+        }
+
+        let active = settings.active_parameter == button.0;
+        *background = BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        });
+    }
+}
+
+pub(crate) fn update_contact_parameter_controls(
+    settings: Res<ContactDefinitionSettings>,
+    mut sliding: Query<
+        &mut Node,
+        (
+            With<ContactSlidingParameterControls>,
+            Without<ContactPenaltyControls>,
+        ),
+    >,
+    mut penalty: Query<
+        &mut Node,
+        (
+            With<ContactPenaltyControls>,
+            Without<ContactSlidingParameterControls>,
+        ),
+    >,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let sliding_visible = settings.contact_type != ContactType::Tied;
+    for mut node in &mut sliding {
+        node.display = if sliding_visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for mut node in &mut penalty {
+        node.display = if sliding_visible && settings.use_penalty_factor {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
+pub(crate) fn sync_contact_measurement_box(
+    page: Res<SidebarPage>,
+    tool: Res<ViewportTool>,
+    settings: Res<ContactDefinitionSettings>,
+    sliders: Query<Ref<SliderState>, With<SliderTrack>>,
+    mut measurement: ResMut<MeasurementBoxState>,
+) {
+    if *page != SidebarPage::Contact || *tool != ViewportTool::Selection {
+        return;
+    }
+    if settings.contact_type == ContactType::Tied {
+        if matches!(
+            measurement.target,
+            Some(MeasurementTarget::SliderValue {
+                slider_id: SliderId::ContactFriction | SliderId::ContactPenaltyFactor,
+                ..
+            })
+        ) {
+            measurement.clear();
+        }
+        return;
+    }
+
+    let parameter = if settings.active_parameter == ContactParameter::PenaltyFactor
+        && !settings.use_penalty_factor
+    {
+        ContactParameter::Friction
+    } else {
+        settings.active_parameter
+    };
+    let (slider_id, label, units, fallback) = match parameter {
+        ContactParameter::Friction => (
+            SliderId::ContactFriction,
+            "Friction coefficient",
+            "dimensionless",
+            0.0,
+        ),
+        ContactParameter::PenaltyFactor => (
+            SliderId::ContactPenaltyFactor,
+            "Contact penalty factor",
+            "FrontISTR input value",
+            1.0e5,
+        ),
+    };
+    let slider = sliders.iter().find(|slider| slider.id == slider_id);
+    let value = slider
+        .as_ref()
+        .map(|slider| slider.value)
+        .unwrap_or(fallback);
+    let target_matches = matches!(
+        measurement.target,
+        Some(MeasurementTarget::SliderValue {
+            slider_id: target,
+            ..
+        }) if target == slider_id
+    );
+    if !target_matches {
+        measurement.begin_slider_value(slider_id, label, units, value);
+    } else if slider.is_some_and(|slider| slider.is_changed()) {
+        measurement.update_slider_value(slider_id, value);
+    }
+}
+
 fn contact_nodes_from_selection(
     selection: &SelectionState,
 ) -> Result<(usize, Vec<fem_core::NodeId>), String> {
@@ -3757,6 +4092,8 @@ fn create_contact_from_draft(
     draft: &ContactDraftPreview,
     pair_kind: ContactPairKind,
     contact_type: ContactType,
+    friction_coefficient: f32,
+    penalty_factor: Option<f32>,
 ) -> Result<usize, String> {
     let master = draft
         .master
@@ -3779,6 +4116,18 @@ fn create_contact_from_draft(
     if !slave_matches_kind {
         return Err("Captured slave does not match the selected topology".to_string());
     }
+    let (friction_coefficient, penalty_factor) = match contact_type {
+        ContactType::Tied => (0.0, None),
+        ContactType::SmallSliding | ContactType::FiniteSliding => {
+            if !friction_coefficient.is_finite() || friction_coefficient < 0.0 {
+                return Err("Friction coefficient must be zero or greater".to_string());
+            }
+            if penalty_factor.is_some_and(|factor| !factor.is_finite() || factor <= 0.0) {
+                return Err("Custom penalty factor must be greater than zero".to_string());
+            }
+            (friction_coefficient, penalty_factor)
+        }
+    };
     let pair_number = model.contacts.len() + 1;
     let pair_name = format!("CONTACT_{pair_number}");
 
@@ -3833,7 +4182,9 @@ fn create_contact_from_draft(
         _ => return Err("Captured slave does not match the selected topology".to_string()),
     };
 
-    model.contacts.push(contact);
+    model
+        .contacts
+        .push(contact.with_contact_parameters(friction_coefficient, penalty_factor));
     Ok(model.contacts.len() - 1)
 }
 
@@ -3843,6 +4194,7 @@ pub(crate) fn finalize_contact_button_system(
     mut draft: ResMut<ContactDraftPreview>,
     mut defined: ResMut<DefinedContactPreview>,
     mut candidates: ResMut<ContactCandidateState>,
+    sliders: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<FinalizeContactButton>,
@@ -3850,6 +4202,14 @@ pub(crate) fn finalize_contact_button_system(
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
+            let friction_coefficient = if settings.contact_type == ContactType::Tied {
+                0.0
+            } else {
+                slider_value(&sliders, SliderId::ContactFriction, 0.0)
+            };
+            let penalty_factor = (settings.contact_type != ContactType::Tied
+                && settings.use_penalty_factor)
+                .then(|| slider_value(&sliders, SliderId::ContactPenaltyFactor, 1.0e5));
             let result = model
                 .as_deref_mut()
                 .ok_or_else(|| "No model is loaded".to_string())
@@ -3859,6 +4219,8 @@ pub(crate) fn finalize_contact_button_system(
                         &draft,
                         settings.pair_kind,
                         settings.contact_type,
+                        friction_coefficient,
+                        penalty_factor,
                     )
                 });
             match result {
@@ -6249,7 +6611,11 @@ pub(crate) fn rebuild_contact_definitions_list(
             let parameters = match contact.contact_type {
                 ContactType::Tied => String::new(),
                 ContactType::SmallSliding | ContactType::FiniteSliding => {
-                    format!(" | mu={:.4}", contact.friction_coefficient)
+                    let penalty = contact
+                        .penalty_factor
+                        .map(|factor| format!(" | penalty={factor:.3e}"))
+                        .unwrap_or_default();
+                    format!(" | mu={:.4}{penalty}", contact.friction_coefficient)
                 }
             };
             contact_definition_button(
@@ -7601,6 +7967,8 @@ pub(crate) fn apply_slider_to_results(
             | SliderId::PlaybackSpeed
             | SliderId::AssemblyMovePercent
             | SliderId::AssemblyRotationDegrees
+            | SliderId::ContactFriction
+            | SliderId::ContactPenaltyFactor
             | SliderId::ContactReviewSeparation => {}
         }
     }
@@ -7728,18 +8096,20 @@ mod sidebar_page_tests {
     use std::path::PathBuf;
 
     use super::{
-        CameraFitRequest, ContactPairKind, SELECTION_GUIDE_TEXT, SelectionGuideState, SidebarPage,
-        SidebarPageContent, SurfaceSelectionMode, SurfaceSelectionSettings, apply_mesh,
-        create_contact_from_draft, merge_mesh_contact_pairs, selected_nodes_by_mesh,
-        selection_context_for_page, selection_operation_hint, sidebar_page_display,
-        signed_preview_direction, supports_surface_growth, surface_selection_hint,
+        CameraFitRequest, ContactDefinitionSettings, ContactPairKind, SELECTION_GUIDE_TEXT,
+        SelectionGuideState, SidebarPage, SidebarPageContent, SurfaceSelectionMode,
+        SurfaceSelectionSettings, apply_mesh, create_contact_from_draft, merge_mesh_contact_pairs,
+        page_supports_part_position, selected_nodes_by_mesh, selection_context_for_page,
+        selection_operation_hint, sidebar_page_display, signed_preview_direction,
+        supports_surface_growth, surface_selection_hint, sync_contact_measurement_box,
         update_hover_preview_group,
     };
+    use crate::measurement::{MeasurementBoxState, MeasurementTarget};
     use bevy::prelude::{App, Display, Update, Vec3};
     use fem_core::{
         AnalysisSetup, ElementId, ElementType, FemElement, FemEntityId, FemEntityRef, FemMesh,
         FemModel, FemModelVersion, FemNode, HoverPreviewTargets, MeshLoadStatus, NodeId,
-        SelectionHit, SelectionLevel,
+        SelectionHit, SelectionLevel, ViewportTool,
     };
     use interaction::HoverResult;
     use selection::{SelectionOperation, SelectionState};
@@ -7755,6 +8125,37 @@ mod sidebar_page_tests {
         assert!(pages.contains(SidebarPage::Materials));
         assert!(pages.contains(SidebarPage::Solve));
         assert!(!pages.contains(SidebarPage::Results));
+    }
+
+    #[test]
+    fn part_position_controls_are_shared_by_model_and_contact() {
+        let pages = SidebarPageContent::part_position();
+
+        assert!(pages.contains(SidebarPage::Model));
+        assert!(pages.contains(SidebarPage::Contact));
+        assert!(!pages.contains(SidebarPage::Loads));
+        assert!(page_supports_part_position(SidebarPage::Model));
+        assert!(page_supports_part_position(SidebarPage::Contact));
+        assert!(!page_supports_part_position(SidebarPage::Materials));
+    }
+
+    #[test]
+    fn contact_measurement_sync_preserves_part_position_input() {
+        let mut measurement = MeasurementBoxState::default();
+        measurement.begin_assembly_translation(0, Vec3::X);
+
+        let mut app = App::new();
+        app.insert_resource(SidebarPage::Contact);
+        app.insert_resource(ViewportTool::Assembly);
+        app.init_resource::<ContactDefinitionSettings>();
+        app.insert_resource(measurement);
+        app.add_systems(Update, sync_contact_measurement_box);
+        app.update();
+
+        assert!(matches!(
+            app.world().resource::<MeasurementBoxState>().target,
+            Some(MeasurementTarget::AssemblyTranslation { .. })
+        ));
     }
 
     #[test]
@@ -7852,6 +8253,8 @@ mod sidebar_page_tests {
             &draft,
             ContactPairKind::NodeSurface,
             fem_core::ContactType::FiniteSliding,
+            0.15,
+            Some(2.5e5),
         )
         .unwrap();
 
@@ -7866,6 +8269,52 @@ mod sidebar_page_tests {
             model.contacts[0].contact_type,
             fem_core::ContactType::FiniteSliding
         );
+        assert_eq!(model.contacts[0].friction_coefficient, 0.15);
+        assert_eq!(model.contacts[0].penalty_factor, Some(2.5e5));
+    }
+
+    #[test]
+    fn sliding_contact_rejects_invalid_parameters_before_creating_groups() {
+        let mut model = FemModel::demo_hex8();
+        let master_face = model.meshes[0].cached_boundary_faces()[0]
+            .element_face_ref()
+            .unwrap();
+        let draft = ContactDraftPreview {
+            master: Some(ContactDraftSurface {
+                mesh_index: 0,
+                surfaces: vec![master_face],
+            }),
+            slave: Some(ContactDraftSlave::Nodes {
+                mesh_index: 0,
+                nodes: vec![NodeId(0)],
+            }),
+            active: true,
+        };
+
+        let friction_error = create_contact_from_draft(
+            &mut model,
+            &draft,
+            ContactPairKind::NodeSurface,
+            fem_core::ContactType::FiniteSliding,
+            -0.1,
+            None,
+        )
+        .unwrap_err();
+        assert!(friction_error.contains("Friction coefficient"));
+
+        let penalty_error = create_contact_from_draft(
+            &mut model,
+            &draft,
+            ContactPairKind::NodeSurface,
+            fem_core::ContactType::FiniteSliding,
+            0.1,
+            Some(0.0),
+        )
+        .unwrap_err();
+        assert!(penalty_error.contains("penalty factor"));
+        assert!(model.contacts.is_empty());
+        assert!(model.meshes[0].node_sets.is_empty());
+        assert!(model.meshes[0].surface_sets.is_empty());
     }
 
     #[test]

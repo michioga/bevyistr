@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use box_select::BoxSelectPlugin;
 use camera::{CameraPlugin, OrbitCamera, fit_bounds, radius_limits};
-use fem_core::FemModel;
+use fem_core::{FemModel, MainViewportCamera};
 use gmsh;
 use interaction::InteractionPlugin;
 use picking::PickingPlugin;
@@ -167,6 +167,8 @@ fn setup(mut commands: Commands, model: Option<Res<FemModel>>) {
     commands.spawn((
         Camera3d::default(),
         Camera::default(),
+        IsDefaultUiCamera,
+        MainViewportCamera,
         Transform::from_translation(camera_position).looking_at(focus, Vec3::Y),
         OrbitCamera {
             focus,
