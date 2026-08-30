@@ -802,6 +802,9 @@ fn write_mpc_equations(
 
     writeln!(out, "!EQUATION").unwrap();
     for (equation, terms) in resolved {
+        if let Some(group) = equation.group.as_deref().filter(|group| !group.is_empty()) {
+            writeln!(out, "!! {} {}", crate::MPC_GROUP_COMMENT_PREFIX, group).unwrap();
+        }
         if !equation.name.is_empty() {
             writeln!(out, "!! {}", equation.name).unwrap();
         }
@@ -971,7 +974,8 @@ mod tests {
                 MpcTerm::new(0, NodeId(2), 1, 1.0),
                 MpcTerm::new(1, NodeId(3), 1, -1.0),
             ],
-        );
+        )
+        .with_group("SPIDER_1");
         let mut text = String::new();
 
         write_mpc_equations(&mut text, &[equation], |mesh_index, node| {
@@ -979,7 +983,14 @@ mod tests {
         });
 
         assert!(text.starts_with("!EQUATION\n"));
+        assert!(text.contains("!! @bevyistr-group: SPIDER_1\n"));
         assert!(text.contains("!! SPIDER_1_UX\n 2,0.000000000e0\n"));
         assert!(text.contains(" 12,1,1.000000000e0,103,1,-1.000000000e0\n"));
+
+        let source = format!("!NODE\n 12,0,0,0\n 103,1,0,0\n{text}!END\n");
+        let mesh = crate::parse_mesh_str(&source).unwrap();
+        let equations = crate::parse_msh_equations(&source, &mesh);
+        assert_eq!(equations.len(), 1);
+        assert_eq!(equations[0].group.as_deref(), Some("SPIDER_1"));
     }
 }

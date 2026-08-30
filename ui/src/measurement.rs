@@ -39,6 +39,13 @@ pub(crate) enum MeasurementTarget {
         label: &'static str,
         units: &'static str,
     },
+    MpcConstant {
+        equation: usize,
+    },
+    MpcCoefficient {
+        equation: usize,
+        term: usize,
+    },
 }
 
 #[derive(Resource, Debug, Clone, Default)]
@@ -139,6 +146,20 @@ impl MeasurementBoxState {
             self.value = value;
             self.error = None;
         }
+    }
+
+    pub fn begin_mpc_constant(&mut self, equation: usize, value: f32) {
+        self.target = Some(MeasurementTarget::MpcConstant { equation });
+        self.value = value;
+        self.dragging = false;
+        self.error = None;
+    }
+
+    pub fn begin_mpc_coefficient(&mut self, equation: usize, term: usize, value: f32) {
+        self.target = Some(MeasurementTarget::MpcCoefficient { equation, term });
+        self.value = value;
+        self.dragging = false;
+        self.error = None;
     }
 
     pub fn clear(&mut self) {
@@ -273,6 +294,7 @@ pub(crate) fn measurement_box_input_system(
     mut version: ResMut<FemModelVersion>,
     mut contact_candidates: ResMut<ContactCandidateState>,
     mut sliders: Query<&mut SliderState, With<SliderTrack>>,
+    mut setup: ResMut<fem_core::AnalysisSetup>,
     mut input_query: Query<(Entity, &mut EditableText), With<MeasurementValueInput>>,
     root_query: Query<(&ComputedNode, &UiGlobalTransform), With<MeasurementBoxRoot>>,
 ) {
@@ -369,6 +391,33 @@ pub(crate) fn measurement_box_input_system(
             slider.value = requested;
             false
         }
+        MeasurementTarget::MpcConstant { equation } => {
+            match apply_mpc_value(setup.bypass_change_detection(), equation, None, requested) {
+                Ok(true) => setup.set_changed(),
+                Ok(false) => {}
+                Err(message) => {
+                    state.error = Some(message.to_string());
+                    return;
+                }
+            }
+            false
+        }
+        MeasurementTarget::MpcCoefficient { equation, term } => {
+            match apply_mpc_value(
+                setup.bypass_change_detection(),
+                equation,
+                Some(term),
+                requested,
+            ) {
+                Ok(true) => setup.set_changed(),
+                Ok(false) => {}
+                Err(message) => {
+                    state.error = Some(message.to_string());
+                    return;
+                }
+            }
+            false
+        }
     };
 
     if changed {
@@ -381,6 +430,11 @@ pub(crate) fn measurement_box_input_system(
         MeasurementTarget::AssemblyRotation { .. } => state.commit_rotation(requested),
         MeasurementTarget::SliderValue { slider_id, .. } => {
             state.update_slider_value(slider_id, requested)
+        }
+        MeasurementTarget::MpcConstant { .. } | MeasurementTarget::MpcCoefficient { .. } => {
+            state.value = requested;
+            state.dragging = false;
+            state.error = None;
         }
     }
     input_focus.clear();
@@ -402,6 +456,9 @@ pub(crate) fn update_measurement_box_visuals(
         MeasurementTarget::AssemblyTranslation { .. }
         | MeasurementTarget::AssemblyRotation { .. } => *tool == ViewportTool::Assembly,
         MeasurementTarget::SliderValue { .. } => *tool == ViewportTool::Selection,
+        MeasurementTarget::MpcConstant { .. } | MeasurementTarget::MpcCoefficient { .. } => {
+            *tool == ViewportTool::Selection
+        }
     });
     if let Ok(mut visibility) = roots.single_mut() {
         *visibility = if visible {
@@ -427,6 +484,20 @@ pub(crate) fn update_measurement_box_visuals(
             (format!("Angle R{}", axis_label(axis)), "degrees", "angle")
         }
         MeasurementTarget::SliderValue { label, units, .. } => (label.to_string(), units, "value"),
+        MeasurementTarget::MpcConstant { equation } => (
+            format!("MPC equation {} constant", equation + 1),
+            "FrontISTR equation value",
+            "constant",
+        ),
+        MeasurementTarget::MpcCoefficient { equation, term } => (
+            format!(
+                "MPC equation {} term {} coefficient",
+                equation + 1,
+                term + 1
+            ),
+            "dimensionless / equation units",
+            "coefficient",
+        ),
     };
     if let Ok(mut label) = labels.single_mut() {
         **label = label_text;
@@ -468,6 +539,41 @@ pub(crate) fn update_measurement_box_visuals(
             format!("{units}  |  click value, Enter = apply exact {value_name}")
         };
     }
+}
+
+fn apply_mpc_value(
+    setup: &mut fem_core::AnalysisSetup,
+    equation_index: usize,
+    term_index: Option<usize>,
+    value: f32,
+) -> Result<bool, &'static str> {
+    if !value.is_finite() {
+        return Err("MPC value must be finite");
+    }
+    let equation = setup
+        .mpc_equations
+        .get(equation_index)
+        .ok_or("The selected MPC equation no longer exists")?;
+    let current = if let Some(term_index) = term_index {
+        equation
+            .terms
+            .get(term_index)
+            .ok_or("The selected MPC term no longer exists")?
+            .coefficient
+    } else {
+        equation.constant
+    };
+    if current.to_bits() == value.to_bits() {
+        return Ok(false);
+    }
+
+    let equation = &mut setup.mpc_equations[equation_index];
+    if let Some(term_index) = term_index {
+        equation.terms[term_index].coefficient = value;
+    } else {
+        equation.constant = value;
+    }
+    Ok(true)
 }
 
 fn cursor_is_over_root(
@@ -557,6 +663,26 @@ mod tests {
         assert_eq!(format_measurement(12.5), "12.5");
         assert_eq!(format_measurement(-0.125), "-0.125");
         assert_eq!(format_measurement(0.0), "0");
+    }
+
+    #[test]
+    fn exact_mpc_values_update_only_the_requested_field() {
+        let mut setup = fem_core::AnalysisSetup::default();
+        setup.mpc_equations.push(fem_core::MpcEquation::new(
+            "MPC",
+            0.0,
+            vec![
+                fem_core::MpcTerm::new(0, fem_core::NodeId(1), 1, 1.0),
+                fem_core::MpcTerm::new(0, fem_core::NodeId(2), 1, -1.0),
+            ],
+        ));
+
+        assert_eq!(apply_mpc_value(&mut setup, 0, None, 2.5), Ok(true));
+        assert_eq!(apply_mpc_value(&mut setup, 0, Some(1), -0.25), Ok(true));
+        assert_eq!(setup.mpc_equations[0].constant, 2.5);
+        assert_eq!(setup.mpc_equations[0].terms[0].coefficient, 1.0);
+        assert_eq!(setup.mpc_equations[0].terms[1].coefficient, -0.25);
+        assert!(apply_mpc_value(&mut setup, 1, None, 0.0).is_err());
     }
 
     #[test]

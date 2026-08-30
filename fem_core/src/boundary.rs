@@ -52,6 +52,12 @@ pub struct MpcEquation {
     pub constant: f32,
 
     pub terms: Vec<MpcTerm>,
+
+    /// Optional operation-level group. One reviewed rigid spider or one
+    /// compact source equation can expand into many explicit HEC-MW
+    /// equations; retaining that relationship lets the UI manage the whole
+    /// constraint without accidentally deleting only one DOF.
+    pub group: Option<String>,
 }
 
 impl MpcEquation {
@@ -60,7 +66,13 @@ impl MpcEquation {
             name: name.into(),
             constant,
             terms,
+            group: None,
         }
+    }
+
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
     }
 
     pub fn is_valid(&self) -> bool {

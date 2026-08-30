@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use fem_core::{
     ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, ElementFaceRef, FaceId,
     FemEdge, FemElement, FemEntityId, FemEntityRef, FemFace, FemMesh, FemModel, FemNode,
-    FemResultSet, NodeId, RigidSpiderCandidateState, SurfaceSetRef, rainbow_color,
+    FemResultSet, MpcEquation, NodeId, RigidSpiderCandidateState, SurfaceSetRef, rainbow_color,
 };
 use interaction::HoverResult;
 use std::collections::BTreeSet;
@@ -70,6 +70,37 @@ impl Default for ContactReviewSettings {
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RigidSpiderReviewSettings {
     pub active: bool,
+}
+
+/// View-only selection of an MPC equation already present in the analysis
+/// setup. Positive- and negative-coefficient nodes are rendered with the two
+/// existing MPC highlight colours so imported equations can be audited in the
+/// viewport without changing their exported values.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DefinedMpcPreview {
+    pub selected: Option<usize>,
+
+    pub active: bool,
+}
+
+/// Two nodes captured while a simple equal-displacement MPC is being built
+/// from viewport selections. The positive/reference node uses the existing
+/// magenta MPC marker and the negative/coupled node uses cyan.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MpcPairDraftPreview {
+    pub positive: Option<(usize, NodeId)>,
+
+    pub negative: Option<(usize, NodeId)>,
+
+    pub active: bool,
+}
+
+impl MpcPairDraftPreview {
+    pub fn clear(&mut self) {
+        self.positive = None;
+        self.negative = None;
+        self.active = false;
+    }
 }
 
 /// View-only selection of a contact pair already defined in the model.
@@ -1452,6 +1483,9 @@ pub(crate) fn update_rigid_spider_highlights(
     model: Option<Res<FemModel>>,
     state: Res<RigidSpiderCandidateState>,
     settings: Res<RigidSpiderReviewSettings>,
+    setup: Res<fem_core::AnalysisSetup>,
+    defined: Res<DefinedMpcPreview>,
+    pair_draft: Res<MpcPairDraftPreview>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut query: Query<(
         &RigidSpiderHighlight,
@@ -1462,32 +1496,62 @@ pub(crate) fn update_rigid_spider_highlights(
 ) {
     let rebuild = state.is_changed()
         || settings.is_changed()
+        || setup.is_changed()
+        || defined.is_changed()
+        || pair_draft.is_changed()
         || model.as_ref().is_some_and(|model| model.is_changed());
     let candidate = settings
         .active
         .then(|| state.selected_candidate())
         .flatten();
+    let draft_node = |positive: bool| {
+        pair_draft.active.then_some(if positive {
+            pair_draft.positive
+        } else {
+            pair_draft.negative
+        })?
+    };
+    let equation = defined
+        .active
+        .then(|| {
+            defined
+                .selected
+                .and_then(|index| setup.mpc_equations.get(index))
+        })
+        .flatten();
 
     for (highlight, mut mesh, mut visibility, mut availability) in &mut query {
         if rebuild {
             let built = model.as_deref().and_then(|model| {
-                let candidate = candidate?;
                 let radius = model_visual_scale(model)
                     * match highlight {
                         RigidSpiderHighlight::Master => 0.012,
                         RigidSpiderHighlight::Slave => 0.006,
                     };
-                match highlight {
-                    RigidSpiderHighlight::Master => build_highlight_nodes_mesh(
-                        model.meshes.get(candidate.master_mesh)?,
-                        &[candidate.master_node],
+                if let Some(candidate) = candidate {
+                    match highlight {
+                        RigidSpiderHighlight::Master => build_highlight_nodes_mesh(
+                            model.meshes.get(candidate.master_mesh)?,
+                            &[candidate.master_node],
+                            radius,
+                        ),
+                        RigidSpiderHighlight::Slave => build_highlight_nodes_mesh(
+                            model.meshes.get(candidate.slave_mesh)?,
+                            &candidate.slave_nodes,
+                            radius,
+                        ),
+                    }
+                } else if let Some((mesh_index, node)) =
+                    draft_node(matches!(highlight, RigidSpiderHighlight::Master))
+                {
+                    build_highlight_nodes_mesh(model.meshes.get(mesh_index)?, &[node], radius)
+                } else {
+                    build_mpc_equation_highlight(
+                        model,
+                        equation?,
+                        matches!(highlight, RigidSpiderHighlight::Master),
                         radius,
-                    ),
-                    RigidSpiderHighlight::Slave => build_highlight_nodes_mesh(
-                        model.meshes.get(candidate.slave_mesh)?,
-                        &candidate.slave_nodes,
-                        radius,
-                    ),
+                    )
                 }
             });
 
@@ -1500,12 +1564,54 @@ pub(crate) fn update_rigid_spider_highlights(
             availability.0 = true;
         }
 
-        *visibility = if candidate.is_some() && availability.0 {
+        *visibility = if (candidate.is_some()
+            || draft_node(matches!(highlight, RigidSpiderHighlight::Master)).is_some()
+            || equation.is_some())
+            && availability.0
+        {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
     }
+}
+
+fn build_mpc_equation_highlight(
+    model: &FemModel,
+    equation: &MpcEquation,
+    positive: bool,
+    radius: f32,
+) -> Option<Mesh> {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut rendered = BTreeSet::new();
+
+    for term in &equation.terms {
+        let matching_sign = if positive {
+            term.coefficient > 0.0
+        } else {
+            term.coefficient < 0.0
+        };
+        if !matching_sign || !rendered.insert((term.mesh_index, term.node)) {
+            continue;
+        }
+        let center = model
+            .meshes
+            .get(term.mesh_index)
+            .and_then(|mesh| mesh.node_position(term.node));
+        if let Some(center) = center {
+            append_octahedron(&mut positions, &mut normals, center, radius);
+        }
+    }
+
+    (!positions.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    })
 }
 
 fn build_draft_contact_highlight(
@@ -2721,7 +2827,8 @@ fn face_normal(points: &[Vec3]) -> Option<Vec3> {
 mod tests {
     use bevy::mesh::VertexAttributeValues;
     use fem_core::{
-        ElementId, ElementType, FemElement, FemMesh, FemNode, FemSurfaceSet, NodeId, SurfaceSetRef,
+        ElementId, ElementType, FemElement, FemMesh, FemNode, FemSurfaceSet, MpcTerm, NodeId,
+        SurfaceSetRef,
     };
 
     use super::*;
@@ -2852,6 +2959,26 @@ mod tests {
             build_highlight_nodes_mesh(&model.meshes[0], &[NodeId(0), NodeId(1)], 0.01).unwrap();
 
         assert_eq!(rendered.count_vertices(), 48);
+    }
+
+    #[test]
+    fn defined_mpc_highlight_splits_coefficient_signs_and_deduplicates_nodes() {
+        let model = FemModel::demo_hex8();
+        let equation = MpcEquation::new(
+            "MPC",
+            0.0,
+            vec![
+                MpcTerm::new(0, NodeId(0), 1, 1.0),
+                MpcTerm::new(0, NodeId(1), 1, -1.0),
+                MpcTerm::new(0, NodeId(1), 4, -0.5),
+            ],
+        );
+
+        let positive = build_mpc_equation_highlight(&model, &equation, true, 0.01).unwrap();
+        let negative = build_mpc_equation_highlight(&model, &equation, false, 0.01).unwrap();
+
+        assert_eq!(positive.count_vertices(), 24);
+        assert_eq!(negative.count_vertices(), 24);
     }
 
     #[test]

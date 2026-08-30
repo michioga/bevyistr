@@ -527,6 +527,11 @@ mod contact_search_tests {
 
         assert_eq!(equations.len(), candidate.slave_nodes.len() * 3);
         assert!(equations.iter().all(MpcEquation::is_valid));
+        assert!(
+            equations
+                .iter()
+                .all(|equation| equation.group.as_deref() == Some("SPIDER_1"))
+        );
         assert!(equations.iter().any(|equation| {
             equation
                 .terms
@@ -1070,7 +1075,9 @@ impl FemModel {
                     );
                 }
 
-                equations.push(MpcEquation::new(format!("{base_name}_U{dof}"), 0.0, terms));
+                equations.push(
+                    MpcEquation::new(format!("{base_name}_U{dof}"), 0.0, terms).with_group(name),
+                );
             }
         }
 

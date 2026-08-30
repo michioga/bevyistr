@@ -158,11 +158,13 @@ pub fn load_mesh_file_with_setup_and_contacts(
     ),
     HecmwLoadError,
 > {
+    let path = path.as_ref();
     let source = fs::read_to_string(path)?;
     let mesh = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
     let (materials, sections) = parse_msh_setup(&source, 0);
     let contacts = parse_msh_contact_pairs(&source);
-    let equations = parse_msh_equations(&source, &mesh);
+    let equation_source = expand_msh_equation_inputs(&source, path)?;
+    let equations = parse_msh_equations(&equation_source, &mesh);
     Ok((mesh, materials, sections, contacts, equations))
 }
 
@@ -171,6 +173,52 @@ struct RawMpcTerm {
     target: String,
     dof: u8,
     coefficient: f32,
+}
+
+pub(crate) const MPC_GROUP_COMMENT_PREFIX: &str = "@bevyistr-group:";
+
+fn expand_msh_equation_inputs(source: &str, mesh_path: &Path) -> std::io::Result<String> {
+    let base_dir = mesh_path.parent().unwrap_or_else(|| Path::new("."));
+    expand_msh_equation_inputs_with(source, base_dir, |path| fs::read_to_string(path))
+}
+
+fn expand_msh_equation_inputs_with(
+    source: &str,
+    base_dir: &Path,
+    mut read_include: impl FnMut(&Path) -> std::io::Result<String>,
+) -> std::io::Result<String> {
+    let mut expanded = String::with_capacity(source.len());
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let input = trimmed
+            .to_ascii_uppercase()
+            .starts_with("!EQUATION")
+            .then(|| keyword_parameter(trimmed, "INPUT"))
+            .flatten();
+
+        if let Some(input) = input {
+            let input = input.trim_matches(|c| c == '\'' || c == '"');
+            let include_path = base_dir.join(input);
+            let included = read_include(&include_path)?;
+
+            // The HEC-MW lexer switches the input stream immediately after
+            // the !EQUATION header, so the external file contains only data
+            // rows rather than another !EQUATION keyword. Replacing the
+            // INPUT header with an ordinary block reproduces that stream for
+            // the existing parser while preserving following mesh keywords.
+            expanded.push_str("!EQUATION\n");
+            expanded.push_str(&included);
+            if !included.ends_with('\n') && !included.ends_with('\r') {
+                expanded.push('\n');
+            }
+        } else {
+            expanded.push_str(line);
+            expanded.push('\n');
+        }
+    }
+
+    Ok(expanded)
 }
 
 /// Parses numeric and node-group forms of the official HEC-MW `!EQUATION`
@@ -190,6 +238,7 @@ fn parse_msh_equations(source: &str, mesh: &FemMesh) -> Vec<fem_core::MpcEquatio
         }
         index += 1;
         let mut pending_name = None;
+        let mut pending_group = None;
 
         while index < lines.len() {
             let line = lines[index].trim();
@@ -201,12 +250,52 @@ fn parse_msh_equations(source: &str, mesh: &FemMesh) -> Vec<fem_core::MpcEquatio
                 continue;
             }
             if let Some(comment) = line.strip_prefix("!!") {
-                pending_name = Some(comment.trim().to_string());
+                let comment = comment.trim();
+                if let Some(group) = comment.strip_prefix(MPC_GROUP_COMMENT_PREFIX) {
+                    pending_group = Some(group.trim().to_string());
+                } else {
+                    pending_name = Some(comment.to_string());
+                }
                 index += 1;
                 continue;
             }
 
             let header: Vec<_> = line.split(',').map(str::trim).collect();
+            if header[0].eq_ignore_ascii_case("LINK") {
+                let linked_nodes = header.get(1..3).and_then(|items| {
+                    let first = items[0].parse::<u32>().ok().map(fem_core::NodeId)?;
+                    let second = items[1].parse::<u32>().ok().map(fem_core::NodeId)?;
+                    (mesh.node_position(first).is_some() && mesh.node_position(second).is_some())
+                        .then_some((first, second))
+                });
+                index += 1;
+
+                if let Some((first, second)) = linked_nodes {
+                    let name = pending_name
+                        .take()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| format!("MPC_{serial}"));
+                    let group = pending_group
+                        .take()
+                        .filter(|group| !group.is_empty())
+                        .unwrap_or_else(|| name.clone());
+                    serial += 1;
+
+                    equations.extend((1..=3).map(|dof| {
+                        fem_core::MpcEquation::new(
+                            format!("{name}_DOF{dof}"),
+                            0.0,
+                            vec![
+                                fem_core::MpcTerm::new(0, first, dof, 1.0),
+                                fem_core::MpcTerm::new(0, second, dof, -1.0),
+                            ],
+                        )
+                        .with_group(group.clone())
+                    }));
+                }
+
+                continue;
+            }
             let Ok(term_count) = header[0].parse::<usize>() else {
                 index += 1;
                 continue;
@@ -220,7 +309,16 @@ fn parse_msh_equations(source: &str, mesh: &FemMesh) -> Vec<fem_core::MpcEquatio
 
             while index < lines.len() && raw_terms.len() < term_count {
                 let term_line = lines[index].trim();
-                if term_line.starts_with('!') || term_line.starts_with('#') {
+                if term_line.is_empty() || term_line.starts_with('#') || term_line.starts_with("!!")
+                {
+                    // HEC-MW's lexer accepts both `#` and `!!` full-line
+                    // comments anywhere in an !EQUATION block. FrontISTR's
+                    // own MPC regression meshes put separator comments
+                    // between NEQ/CONST and the first coefficient line.
+                    index += 1;
+                    continue;
+                }
+                if term_line.starts_with('!') {
                     break;
                 }
                 let values: Vec<_> = term_line.split(',').map(str::trim).collect();
@@ -250,7 +348,17 @@ fn parse_msh_equations(source: &str, mesh: &FemMesh) -> Vec<fem_core::MpcEquatio
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| format!("MPC_{serial}"));
             serial += 1;
-            equations.extend(expand_mpc_groups(mesh, &name, constant, &raw_terms));
+            let mut expanded = expand_mpc_groups(mesh, &name, constant, &raw_terms);
+            let group = pending_group
+                .take()
+                .filter(|group| !group.is_empty())
+                .or_else(|| (expanded.len() > 1).then(|| name.clone()));
+            if let Some(group) = group {
+                for equation in &mut expanded {
+                    equation.group = Some(group.clone());
+                }
+            }
+            equations.extend(expanded);
         }
     }
 
@@ -269,40 +377,92 @@ fn expand_mpc_groups(
             .find(|group| group.name.eq_ignore_ascii_case(target))
             .map(|group| group.nodes.as_slice())
     };
-    let group_len = raw_terms
-        .iter()
-        .filter_map(|term| group_nodes(&term.target).map(<[_]>::len))
-        .next()
-        .unwrap_or(1);
+    let uses_groups = raw_terms
+        .first()
+        .is_some_and(|term| term.target.parse::<u32>().is_err());
 
+    // HEC-MW deliberately rejects equations that mix numeric node IDs and
+    // node-group names (HECMW-IO-HEC-E0702). Keep the same boundary here so
+    // a file accepted by bevyistr will not fail later in FrontISTR.
     if raw_terms
         .iter()
-        .filter_map(|term| group_nodes(&term.target))
-        .any(|nodes| nodes.len() != group_len)
+        .any(|term| term.target.parse::<u32>().is_err() != uses_groups)
     {
         return Vec::new();
     }
 
+    let group_len = if uses_groups {
+        let Some(group_len) = raw_terms
+            .first()
+            .and_then(|term| group_nodes(&term.target))
+            .map(<[_]>::len)
+        else {
+            return Vec::new();
+        };
+
+        if raw_terms
+            .iter()
+            .any(|term| group_nodes(&term.target).is_none_or(|nodes| nodes.len() != group_len))
+        {
+            return Vec::new();
+        }
+
+        group_len
+    } else {
+        1
+    };
+    let all_translational_dofs = raw_terms.iter().any(|term| term.dof == 0);
+
     (0..group_len)
-        .filter_map(|group_index| {
-            let terms = raw_terms
+        .flat_map(|group_index| {
+            let Some(terms) = raw_terms
                 .iter()
                 .map(|term| {
                     let node = if let Ok(id) = term.target.parse::<u32>() {
-                        fem_core::NodeId(id)
+                        let node = fem_core::NodeId(id);
+                        mesh.node_position(node).map(|_| node)?
                     } else {
                         *group_nodes(&term.target)?.get(group_index)?
                     };
                     Some(fem_core::MpcTerm::new(0, node, term.dof, term.coefficient))
                 })
-                .collect::<Option<Vec<_>>>()?;
-            let expanded_name = if group_len == 1 {
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Vec::new();
+            };
+            let base_name = if group_len == 1 {
                 name.to_string()
             } else {
                 format!("{name}_{}", group_index + 1)
             };
-            let equation = fem_core::MpcEquation::new(expanded_name, constant, terms);
-            equation.is_valid().then_some(equation)
+
+            if all_translational_dofs {
+                (1..=3)
+                    .filter_map(|dof| {
+                        let terms = terms
+                            .iter()
+                            .cloned()
+                            .map(|mut term| {
+                                term.dof = dof;
+                                term
+                            })
+                            .collect();
+                        let equation = fem_core::MpcEquation::new(
+                            format!("{base_name}_DOF{dof}"),
+                            constant,
+                            terms,
+                        );
+                        equation.is_valid().then_some(equation)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                let equation = fem_core::MpcEquation::new(base_name, constant, terms);
+                equation
+                    .is_valid()
+                    .then_some(equation)
+                    .into_iter()
+                    .collect()
+            }
         })
         .collect()
 }
@@ -1294,5 +1454,178 @@ mod tests {
         assert_eq!(equations[0].name, "DIRECT");
         assert_eq!(equations[1].name, "GROUP_PAIR_1");
         assert_eq!(equations[2].terms[1].node, NodeId(4));
+    }
+
+    #[test]
+    fn parses_frontistr_equations_with_separator_comments() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+!EQUATION
+ 2,0.0
+# FrontISTR regression meshes use separators here
+ 1,1,1.0
+ 2,1,-1.0
+###
+ 2,0.5
+!! comments are also legal between the header and terms
+ 1,2,1.0,2,2,-1.0
+!END
+"#;
+        let mesh = parse_mesh_str(source).unwrap();
+        let equations = parse_msh_equations(source, &mesh);
+
+        assert_eq!(equations.len(), 2);
+        assert_eq!(equations[0].terms.len(), 2);
+        assert_eq!(equations[1].constant, 0.5);
+        assert_eq!(equations[1].terms[0].dof, 2);
+    }
+
+    #[test]
+    fn expands_frontistr_dof_zero_to_three_translation_equations() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+!EQUATION
+!! ALL_TRANSLATIONS
+ 2,0.0
+ 1,0,1.0,2,0,-1.0
+!END
+"#;
+        let mesh = parse_mesh_str(source).unwrap();
+        let equations = parse_msh_equations(source, &mesh);
+
+        assert_eq!(equations.len(), 3);
+        assert_eq!(
+            equations
+                .iter()
+                .map(|equation| equation.terms[0].dof)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(equations.iter().all(|equation| {
+            equation
+                .terms
+                .iter()
+                .all(|term| term.dof == equation.terms[0].dof)
+        }));
+        assert!(
+            equations
+                .iter()
+                .all(|equation| equation.group.as_deref() == Some("ALL_TRANSLATIONS"))
+        );
+    }
+
+    #[test]
+    fn rejects_equations_that_mix_node_ids_and_node_groups() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+!NGROUP,NGRP=B
+ 2
+!EQUATION
+ 2,0.0
+ 1,1,1.0,B,1,-1.0
+!END
+"#;
+        let mesh = parse_mesh_str(source).unwrap();
+
+        assert!(parse_msh_equations(source, &mesh).is_empty());
+    }
+
+    #[test]
+    fn expands_frontistr_link_shorthand_to_three_translation_equations() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+!EQUATION
+!! RIGID_LINK
+ LINK,1,2
+!END
+"#;
+        let mesh = parse_mesh_str(source).unwrap();
+        let equations = parse_msh_equations(source, &mesh);
+
+        assert_eq!(equations.len(), 3);
+        for (index, equation) in equations.iter().enumerate() {
+            let dof = index as u8 + 1;
+            assert_eq!(equation.name, format!("RIGID_LINK_DOF{dof}"));
+            assert_eq!(equation.group.as_deref(), Some("RIGID_LINK"));
+            assert_eq!(
+                equation.terms[0],
+                fem_core::MpcTerm::new(0, NodeId(1), dof, 1.0)
+            );
+            assert_eq!(
+                equation.terms[1],
+                fem_core::MpcTerm::new(0, NodeId(2), dof, -1.0)
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_bevyistr_mpc_groups_across_explicit_equations() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+!EQUATION
+!! @bevyistr-group: SPIDER_1
+!! SPIDER_1_U1
+ 2,0.0
+ 1,1,1.0,2,1,-1.0
+!! @bevyistr-group: SPIDER_1
+!! SPIDER_1_U2
+ 2,0.0
+ 1,2,1.0,2,2,-1.0
+!END
+"#;
+        let mesh = parse_mesh_str(source).unwrap();
+        let equations = parse_msh_equations(source, &mesh);
+
+        assert_eq!(equations.len(), 2);
+        assert_eq!(equations[0].name, "SPIDER_1_U1");
+        assert_eq!(equations[1].name, "SPIDER_1_U2");
+        assert!(
+            equations
+                .iter()
+                .all(|equation| equation.group.as_deref() == Some("SPIDER_1"))
+        );
+    }
+
+    #[test]
+    fn resolves_equation_input_relative_to_the_mesh_file() {
+        let source = r#"
+!NODE
+ 1,0,0,0
+ 2,1,0,0
+ 3,2,0,0
+!EQUATION
+!! DIRECT
+ 2,0.0
+ 1,1,1.0,2,1,-1.0
+!EQUATION, INPUT=constraints/links.eqn
+!END
+"#;
+        let included = "!! INCLUDED\nLINK,2,3\n";
+        let base_dir = Path::new("project");
+        let mut requested_path = None;
+        let expanded = expand_msh_equation_inputs_with(source, base_dir, |path| {
+            requested_path = Some(path.to_path_buf());
+            Ok(included.to_string())
+        })
+        .unwrap();
+        let mesh = parse_mesh_str(source).unwrap();
+        let equations = parse_msh_equations(&expanded, &mesh);
+        let expected_path = Path::new("project").join("constraints/links.eqn");
+
+        assert_eq!(requested_path.as_deref(), Some(expected_path.as_path()));
+        assert_eq!(equations.len(), 4);
+        assert_eq!(equations[0].name, "DIRECT");
+        assert_eq!(equations[1].name, "INCLUDED_DOF1");
+        assert_eq!(equations[3].terms[1].node, NodeId(3));
     }
 }
