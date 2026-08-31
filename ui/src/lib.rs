@@ -1,9 +1,15 @@
 mod assembly;
 mod boundary_editor;
+mod contact_ui;
 mod layout;
 mod load_direction;
 mod measurement;
+mod mpc_ui;
+mod project_io;
+mod results_ui;
+mod selection_ui;
 pub mod slider;
+mod solver_editor;
 
 use bevy::prelude::*;
 use interaction::InteractionSystems;
@@ -20,48 +26,36 @@ use boundary_editor::{
     rotational_input_mode_button_system, sync_quick_load_controls, update_apply_constraint_label,
     update_dload_exact_field_visibility, update_rotation_center_status,
 };
+use contact_ui::{
+    ContactDefinitionSettings, accept_contact_button_system, capture_contact_side_button_system,
+    contact_behavior_button_system, contact_candidate_action_button_system,
+    contact_ghost_toggle_button_system, contact_pair_kind_button_system,
+    contact_parameter_button_system, contact_penalty_toggle_button_system,
+    create_contact_button_system, create_surface_button_system, defined_contact_button_system,
+    detect_contacts_button_system, finalize_contact_button_system,
+    rebuild_contact_definitions_list, sync_contact_measurement_box, sync_contact_search_params,
+    sync_defined_contact_preview, update_contact_candidate_text, update_contact_draft_status,
+    update_contact_parameter_controls, update_contact_review_controls,
+    update_contact_review_settings,
+};
 use layout::{
-    ActiveLoadEditor, CameraFitRequest, ContactDefinitionSettings, MpcEquationEditorState,
-    MpcPairDraftState, PlaybackState, SelectedDloadKind, SelectedEgrp, SelectedLoadDirection,
-    SelectedMaterialForSection, SelectedSectionType, SelectionGuideState, SidebarPage,
-    SurfaceSelectionSettings, UndoInProgress, UndoStack, accept_contact_button_system,
-    accept_rigid_spider_button_system, add_section_button_system, analysis_type_button_system,
-    apply_dload_button_system, apply_load_button_system, apply_pending_cnt_system,
-    apply_slider_to_results, assembly_gizmo_mode_button_system, assembly_mode_button_system,
-    assembly_part_button_system, assembly_transform_button_system, camera_refit_on_reload,
-    capture_contact_side_button_system, capture_mpc_pair_node_button_system,
-    clear_all_bc_loads_button_system, clear_mpc_pair_button_system,
-    constraint_preset_button_system, contact_behavior_button_system,
-    contact_candidate_action_button_system, contact_ghost_toggle_button_system,
-    contact_pair_kind_button_system, contact_parameter_button_system,
-    contact_penalty_toggle_button_system, create_contact_button_system,
-    create_mpc_pair_button_system, create_surface_button_system, defined_contact_button_system,
-    defined_mpc_action_button_system, delete_setup_entry_button_system,
-    detect_contacts_button_system, detect_rigid_spiders_button_system, dload_kind_button_system,
-    egrp_select_button_system, export_button_system, finalize_contact_button_system,
-    handle_panel_wheel, handle_scrollable_list_wheel, import_mesh_button_system,
-    load_direction_button_system, make_element_group_button_system, make_node_group_button_system,
-    material_preset_button_system, material_select_button_system, mesh_load_system,
-    mpc_pair_dof_button_system, open_mesh_button_system, open_project_button_system,
-    open_result_button_system, open_setup_button_system, playback_advance_system,
-    playback_button_system, push_undo_before_setup_change, rebuild_assembly_parts,
-    rebuild_boundary_loads_list, rebuild_contact_definitions_list, rebuild_materials_sections_list,
+    ActiveLoadEditor, SelectedDloadKind, SelectedEgrp, SelectedLoadDirection,
+    SelectedMaterialForSection, SelectedSectionType, SidebarPage, UndoInProgress, UndoStack,
+    add_section_button_system, analysis_type_button_system, apply_dload_button_system,
+    apply_load_button_system, assembly_gizmo_mode_button_system, assembly_mode_button_system,
+    assembly_part_button_system, assembly_transform_button_system,
+    clear_all_bc_loads_button_system, constraint_preset_button_system,
+    delete_setup_entry_button_system, dload_kind_button_system, egrp_select_button_system,
+    handle_panel_wheel, handle_scrollable_list_wheel, load_direction_button_system,
+    material_preset_button_system, material_select_button_system, push_undo_before_setup_change,
+    rebuild_assembly_parts, rebuild_boundary_loads_list, rebuild_materials_sections_list,
     rebuild_section_def_panel, rebuild_sets_list, render_mode_button_system,
-    rigid_spider_action_button_system, section_type_button_system, selection_guide_toggle_system,
-    selection_level_button_system, set_button_system, sidebar_page_button_system,
-    solver_method_button_system, spawn_ui, step_keyboard_navigation,
-    surface_selection_mode_button_system, sync_contact_measurement_box, sync_contact_search_params,
-    sync_defined_contact_preview, sync_defined_mpc_preview, sync_load_measurement_box,
-    sync_mpc_pair_draft_preview, sync_rigid_spider_review, sync_rigid_spider_search_params,
+    section_type_button_system, set_button_system, sidebar_page_button_system,
+    solver_method_button_system, spawn_ui, sync_load_measurement_box,
     toggle_constraints_button_system, toggle_loads_button_system, undo_redo_system,
     update_analysis_setup_stats_text, update_apply_dload_label, update_apply_load_label,
     update_assembly_status_text, update_boundary_load_preview, update_constraint_button_labels,
-    update_contact_candidate_text, update_contact_draft_status, update_contact_parameter_controls,
-    update_contact_review_controls, update_contact_review_settings, update_defined_mpc_text,
-    update_hover_preview_group, update_mesh_stats_text, update_mpc_pair_draft_text,
-    update_result_stats_text, update_rigid_spider_candidate_text, update_selection_context,
-    update_selection_info_text, update_selection_operation_hint, update_selection_stats_text,
-    update_sidebar_page_visibility, update_surface_selection_hint, update_ui_pointer_state,
+    update_mesh_stats_text, update_sidebar_page_visibility, update_ui_pointer_state,
 };
 use load_direction::{
     LoadDirectionPickerState, load_direction_picker_button_system,
@@ -72,6 +66,32 @@ use measurement::{
     MeasurementBoxState, measurement_box_input_system, spawn_measurement_box,
     update_measurement_box_visuals, update_ui_keyboard_state,
 };
+use mpc_ui::{
+    MpcEquationEditorState, MpcPairDraftState, accept_rigid_spider_button_system,
+    capture_mpc_pair_node_button_system, clear_mpc_pair_button_system,
+    create_mpc_pair_button_system, defined_mpc_action_button_system,
+    detect_rigid_spiders_button_system, mpc_pair_dof_button_system,
+    rigid_spider_action_button_system, sync_defined_mpc_preview, sync_mpc_pair_draft_preview,
+    sync_rigid_spider_review, sync_rigid_spider_search_params, update_defined_mpc_text,
+    update_mpc_pair_draft_text, update_rigid_spider_candidate_text,
+};
+use project_io::{
+    CameraFitRequest, apply_pending_cnt_system, camera_refit_on_reload, export_button_system,
+    import_mesh_button_system, mesh_load_system, open_mesh_button_system,
+    open_project_button_system, open_setup_button_system,
+};
+use results_ui::{
+    PlaybackState, apply_slider_to_results, open_result_button_system, playback_advance_system,
+    playback_button_system, step_keyboard_navigation, update_result_stats_text,
+};
+use selection_ui::{
+    SelectionGuideState, SurfaceSelectionSettings, make_element_group_button_system,
+    make_node_group_button_system, selection_guide_toggle_system, selection_level_button_system,
+    surface_selection_mode_button_system, update_hover_preview_group, update_selection_context,
+    update_selection_info_text, update_selection_operation_hint, update_selection_stats_text,
+    update_surface_selection_hint,
+};
+use solver_editor::{SolverEditorState, solver_numeric_input_system};
 
 pub use slider::{SliderConfig, SliderId, SliderState, SliderThumb, SliderTrack, spawn_slider};
 
@@ -117,6 +137,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<ContactDefinitionSettings>();
         app.init_resource::<MpcEquationEditorState>();
         app.init_resource::<MpcPairDraftState>();
+        app.init_resource::<SolverEditorState>();
         app.init_resource::<SelectedDloadKind>();
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
@@ -138,10 +159,12 @@ impl Plugin for UiPlugin {
                 update_ui_keyboard_state
                     .before(measurement_box_input_system)
                     .before(engineering_numeric_input_system)
+                    .before(solver_numeric_input_system)
                     .before(selection::selection_filter_shortcut_system)
                     .before(selection::clear_selection_shortcut_system),
                 measurement_box_input_system,
                 engineering_numeric_input_system.after(update_ui_keyboard_state),
+                solver_numeric_input_system.after(update_ui_keyboard_state),
             )
                 .in_set(InteractionSystems::UiInput),
         );
@@ -372,6 +395,7 @@ impl Plugin for UiPlugin {
                 push_undo_before_setup_change
                     .after(defined_mpc_action_button_system)
                     .after(create_mpc_pair_button_system)
+                    .after(solver_numeric_input_system)
                     .after(measurement_box_input_system),
                 undo_redo_system
                     .after(push_undo_before_setup_change)

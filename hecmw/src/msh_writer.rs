@@ -619,7 +619,7 @@ fn write_mesh_section(out: &mut String, section: &Section, element_group: &str) 
     }
 }
 
-fn element_type_code(et: &ElementType) -> Option<&'static str> {
+pub(crate) fn element_type_code(et: &ElementType) -> Option<&'static str> {
     match et {
         ElementType::Rod2 => Some("111"),
         ElementType::Rod3 => Some("112"),

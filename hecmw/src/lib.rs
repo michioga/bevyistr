@@ -21,7 +21,9 @@ pub use msh_writer::{
     write_msh_assembly_with_setup, write_msh_file, write_msh_file_with_setup,
 };
 pub use project_writer::{
-    FrontistrExportError, FrontistrExportSummary, remap_setup_for_assembly, write_frontistr_project,
+    FrontistrExportError, FrontistrExportSummary, FrontistrValidationIssue,
+    FrontistrValidationReport, FrontistrValidationSeverity, remap_setup_for_assembly,
+    validate_frontistr_project, write_frontistr_project,
 };
 pub use result::{ResultLoadError, load_result_file, parse_result_str};
 pub use series::{detect_series, load_series};

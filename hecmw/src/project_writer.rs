@@ -5,14 +5,15 @@
 //! remapping analysis targets into the flattened ID space. Keeping this out
 //! of the UI makes export behaviour testable without Bevy systems.
 
-use std::{fmt, io, path::Path};
+use std::{collections::BTreeSet, fmt, io, path::Path};
 
 use fem_core::{
-    AnalysisSetup, BoundaryCondition, DistributedLoad, DistributedLoadTarget, ElementFaceRef,
-    FemModel, NodalLoad, RotationCenter,
+    AnalysisSetup, AnalysisType, BoundaryCondition, ContactSlaveRef, DistributedLoad,
+    DistributedLoadKind, DistributedLoadTarget, ElementFaceRef, FemModel, NodalLoad,
+    RotationCenter, SectionKind,
 };
 
-use crate::msh_writer::part_group_prefix;
+use crate::msh_writer::{element_type_code, part_group_prefix};
 use crate::{
     HecmwCtrlParams, assembly_id_offsets, remap_element, remap_node, write_cnt_file_with_contacts,
     write_hecmw_ctrl, write_msh_assembly_with_setup, write_msh_file_with_setup,
@@ -31,30 +32,633 @@ pub struct FrontistrExportSummary {
     pub mpc_equation_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontistrValidationSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontistrValidationIssue {
+    pub severity: FrontistrValidationSeverity,
+    pub location: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrontistrValidationReport {
+    pub issues: Vec<FrontistrValidationIssue>,
+}
+
+impl FrontistrValidationReport {
+    pub fn error_count(&self) -> usize {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == FrontistrValidationSeverity::Error)
+            .count()
+    }
+
+    pub fn warning_count(&self) -> usize {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == FrontistrValidationSeverity::Warning)
+            .count()
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.error_count() > 0
+    }
+
+    pub fn summary(&self, max_issues: usize) -> String {
+        let mut lines = vec![format!(
+            "Preflight: {} error(s), {} warning(s)",
+            self.error_count(),
+            self.warning_count()
+        )];
+        for issue in self.issues.iter().take(max_issues) {
+            let severity = match issue.severity {
+                FrontistrValidationSeverity::Error => "ERROR",
+                FrontistrValidationSeverity::Warning => "WARN",
+            };
+            lines.push(format!("{severity} {}: {}", issue.location, issue.message));
+        }
+        if self.issues.len() > max_issues {
+            lines.push(format!(
+                "... and {} more issue(s)",
+                self.issues.len() - max_issues
+            ));
+        }
+        lines.join("\n")
+    }
+
+    fn push(
+        &mut self,
+        severity: FrontistrValidationSeverity,
+        location: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        self.issues.push(FrontistrValidationIssue {
+            severity,
+            location: location.into(),
+            message: message.into(),
+        });
+    }
+
+    fn error(&mut self, location: impl Into<String>, message: impl Into<String>) {
+        self.push(FrontistrValidationSeverity::Error, location, message);
+    }
+
+    fn warning(&mut self, location: impl Into<String>, message: impl Into<String>) {
+        self.push(FrontistrValidationSeverity::Warning, location, message);
+    }
+}
+
 #[derive(Debug)]
 pub struct FrontistrExportError {
     artifact: String,
-    source: io::Error,
+    source: Option<io::Error>,
+
+    detail: Option<String>,
 }
 
 impl FrontistrExportError {
     fn new(artifact: impl Into<String>, source: io::Error) -> Self {
         Self {
             artifact: artifact.into(),
-            source,
+            source: Some(source),
+            detail: None,
+        }
+    }
+
+    fn validation(report: &FrontistrValidationReport) -> Self {
+        Self {
+            artifact: "project preflight".to_string(),
+            source: None,
+            detail: Some(report.summary(12)),
         }
     }
 }
 
 impl fmt::Display for FrontistrExportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.artifact, self.source)
+        if let Some(source) = &self.source {
+            write!(formatter, "{}: {source}", self.artifact)
+        } else if let Some(detail) = &self.detail {
+            write!(formatter, "{}: {detail}", self.artifact)
+        } else {
+            formatter.write_str(&self.artifact)
+        }
     }
 }
 
 impl std::error::Error for FrontistrExportError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
+        self.source
+            .as_ref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// Checks solver-facing references and numeric values before any project
+/// files are written. Warnings describe incomplete but still exportable
+/// setups; errors identify data that would be invalid or silently omitted.
+pub fn validate_frontistr_project(
+    model: &FemModel,
+    setup: &AnalysisSetup,
+) -> FrontistrValidationReport {
+    let mut report = FrontistrValidationReport::default();
+
+    if model.meshes.is_empty() {
+        report.error("Model", "no meshes are loaded");
+        return report;
+    }
+
+    for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+        let location = format!("Mesh[{}]", mesh_index + 1);
+        if mesh.nodes.is_empty() {
+            report.error(&location, "contains no nodes");
+        }
+        if mesh.elements.is_empty() {
+            report.warning(&location, "contains no elements");
+        }
+
+        let mut node_ids = BTreeSet::new();
+        for node in &mesh.nodes {
+            if !node_ids.insert(node.id) {
+                report.error(&location, format!("duplicate node ID {}", node.id.0));
+            }
+            if !node.position.is_finite() {
+                report.error(
+                    &location,
+                    format!("node {} has a non-finite coordinate", node.id.0),
+                );
+            }
+        }
+
+        let mut element_ids = BTreeSet::new();
+        for element in &mesh.elements {
+            let element_location = format!("{location}/Element {}", element.id.0);
+            if !element_ids.insert(element.id) {
+                report.error(&location, format!("duplicate element ID {}", element.id.0));
+            }
+            if element_type_code(&element.element_type).is_none() {
+                report.error(
+                    &element_location,
+                    format!(
+                        "element type {:?} cannot be written as a FrontISTR element",
+                        element.element_type
+                    ),
+                );
+            }
+            if element.nodes.is_empty() {
+                report.error(&element_location, "has empty connectivity");
+            }
+            if let Some(expected) = element.element_type.node_count() {
+                if element.nodes.len() != expected {
+                    report.error(
+                        &element_location,
+                        format!(
+                            "requires {expected} connectivity nodes, but has {}",
+                            element.nodes.len()
+                        ),
+                    );
+                }
+            }
+            for node in &element.nodes {
+                if !node_ids.contains(node) {
+                    report.error(
+                        &element_location,
+                        format!("references missing node {}", node.0),
+                    );
+                }
+            }
+        }
+
+        for set in &mesh.node_sets {
+            let set_location = format!("{location}/NGRP {}", set.name);
+            for node in &set.nodes {
+                if !node_ids.contains(node) {
+                    report.error(&set_location, format!("contains missing node {}", node.0));
+                }
+            }
+        }
+        for set in &mesh.element_sets {
+            let set_location = format!("{location}/EGRP {}", set.name);
+            for element in &set.elements {
+                if !element_ids.contains(element) {
+                    report.error(
+                        &set_location,
+                        format!("contains missing element {}", element.0),
+                    );
+                }
+            }
+        }
+        for set in &mesh.surface_sets {
+            let set_location = format!("{location}/SGRP {}", set.name);
+            for surface in &set.surfaces {
+                let Some(element) = mesh
+                    .elements
+                    .iter()
+                    .find(|element| element.id == surface.element)
+                else {
+                    report.error(
+                        &set_location,
+                        format!("contains missing element {}", surface.element.0),
+                    );
+                    continue;
+                };
+                let face_count = element.face_node_ids().len() as u32;
+                if surface.local_face.0 == 0 || surface.local_face.0 > face_count {
+                    report.error(
+                        &set_location,
+                        format!(
+                            "element {} has no local face {}",
+                            surface.element.0, surface.local_face.0
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    validate_analysis_setup(model, setup, &mut report);
+    validate_contacts(model, setup, &mut report);
+    report
+}
+
+fn validate_analysis_setup(
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    report: &mut FrontistrValidationReport,
+) {
+    for (index, condition) in setup.boundary_conditions.iter().enumerate() {
+        let location = format!("BC[{}] {}", index + 1, condition.name);
+        let Some(mesh) = model.meshes.get(condition.mesh_index) else {
+            report.error(
+                &location,
+                format!("missing mesh {}", condition.mesh_index + 1),
+            );
+            continue;
+        };
+        validate_node_target(
+            report,
+            &location,
+            mesh,
+            &condition.nodes,
+            condition.ngrp_name.as_deref(),
+        );
+        let max_dof = if condition.rotation_center.is_some() {
+            3
+        } else {
+            6
+        };
+        if condition.dof_start == 0
+            || condition.dof_start > condition.dof_end
+            || condition.dof_end > max_dof
+        {
+            report.error(
+                &location,
+                format!(
+                    "invalid DOF range {}..={} (allowed 1..={max_dof})",
+                    condition.dof_start, condition.dof_end
+                ),
+            );
+        }
+        if !condition.value.is_finite() {
+            report.error(&location, "prescribed value is not finite");
+        }
+        if let Some(center) = &condition.rotation_center {
+            validate_rotation_center(report, &location, model, center);
+        }
+    }
+
+    for (index, load) in setup.nodal_loads.iter().enumerate() {
+        let location = format!("CLOAD[{}] {}", index + 1, load.name);
+        let Some(mesh) = model.meshes.get(load.mesh_index) else {
+            report.error(&location, format!("missing mesh {}", load.mesh_index + 1));
+            continue;
+        };
+        validate_node_target(
+            report,
+            &location,
+            mesh,
+            &[load.node],
+            load.ngrp_name.as_deref(),
+        );
+        let max_dof = if load.rotation_center.is_some() { 3 } else { 6 };
+        if load.dof == 0 || load.dof > max_dof {
+            report.error(
+                &location,
+                format!("invalid DOF {} (allowed 1..={max_dof})", load.dof),
+            );
+        }
+        if !load.value.is_finite() {
+            report.error(&location, "load value is not finite");
+        }
+        if let Some(center) = &load.rotation_center {
+            validate_rotation_center(report, &location, model, center);
+        }
+    }
+
+    for (index, load) in setup.distributed_loads.iter().enumerate() {
+        let location = format!("DLOAD[{}] {}", index + 1, load.name);
+        let Some(mesh) = model.meshes.get(load.mesh_index) else {
+            report.error(&location, format!("missing mesh {}", load.mesh_index + 1));
+            continue;
+        };
+        if load.target.is_empty() {
+            report.error(&location, "has no target elements or faces");
+        }
+        if !load.value.is_finite() {
+            report.error(&location, "load value is not finite");
+        }
+        if load.kind == DistributedLoadKind::Pressure
+            && matches!(&load.target, DistributedLoadTarget::Elements(_))
+        {
+            report.warning(
+                &location,
+                "pressure has no local-face data; export will use P1",
+            );
+        }
+        if load.kind == DistributedLoadKind::Gravity {
+            if let Some(direction) = load.direction {
+                if !direction.is_finite() || direction.length_squared() <= f32::EPSILON {
+                    report.error(&location, "gravity direction must be finite and non-zero");
+                }
+            }
+        }
+        for element_id in load.target.element_ids() {
+            if !mesh.elements.iter().any(|element| element.id == element_id) {
+                report.error(
+                    &location,
+                    format!("references missing element {}", element_id.0),
+                );
+            }
+        }
+        if let DistributedLoadTarget::Faces(faces) = &load.target {
+            for face in faces {
+                if let Some(element) = mesh.elements.iter().find(|item| item.id == face.element) {
+                    let face_count = element.face_node_ids().len() as u32;
+                    if face.local_face.0 == 0 || face.local_face.0 > face_count {
+                        report.error(
+                            &location,
+                            format!(
+                                "element {} has no local face P{}",
+                                face.element.0, face.local_face.0
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut material_names = BTreeSet::new();
+    for (index, material) in setup.materials.iter().enumerate() {
+        let location = format!("Material[{}] {}", index + 1, material.name);
+        if material.name.trim().is_empty() {
+            report.error(&location, "name is empty");
+        } else if !material_names.insert(material.name.as_str()) {
+            report.error(&location, "material name is duplicated");
+        }
+        match material.young_modulus {
+            Some(value) if value.is_finite() && value > 0.0 => {}
+            Some(_) => report.error(&location, "Young's modulus must be finite and positive"),
+            None => report.error(&location, "Young's modulus is not defined"),
+        }
+        match material.poisson_ratio {
+            Some(value) if value.is_finite() && value > -1.0 && value < 0.5 => {}
+            Some(_) => report.error(
+                &location,
+                "Poisson ratio must be finite and between -1 and 0.5",
+            ),
+            None => report.warning(&location, "Poisson ratio is not defined; export uses 0"),
+        }
+        if let Some(density) = material.density {
+            if !density.is_finite() || density <= 0.0 {
+                report.error(&location, "density must be finite and positive");
+            }
+        }
+    }
+
+    for (index, section) in setup.sections.iter().enumerate() {
+        let location = format!("Section[{}] {}", index + 1, section.name);
+        let Some(mesh) = model.meshes.get(section.mesh_index) else {
+            report.error(
+                &location,
+                format!("missing mesh {}", section.mesh_index + 1),
+            );
+            continue;
+        };
+        if !setup
+            .materials
+            .iter()
+            .any(|material| material.name == section.material_name)
+        {
+            report.error(
+                &location,
+                format!("references missing material {}", section.material_name),
+            );
+        }
+        if let Some(group) = section.element_set_name.as_deref() {
+            if !mesh.element_sets.iter().any(|set| set.name == group) {
+                report.error(
+                    &location,
+                    format!("references missing element group {group}"),
+                );
+            }
+        }
+        match section.kind {
+            SectionKind::Solid => {}
+            SectionKind::Shell { thickness } => {
+                if !thickness.is_finite() || thickness <= 0.0 {
+                    report.error(&location, "shell thickness must be finite and positive");
+                }
+            }
+            SectionKind::Beam { area } => {
+                if !area.is_finite() || area <= 0.0 {
+                    report.error(&location, "beam area must be finite and positive");
+                }
+            }
+        }
+    }
+
+    for (index, equation) in setup.mpc_equations.iter().enumerate() {
+        let location = format!("MPC[{}] {}", index + 1, equation.name);
+        if !equation.is_valid() {
+            report.error(
+                &location,
+                "requires at least two finite terms, valid DOFs, and a finite constant",
+            );
+        }
+        for (term_index, term) in equation.terms.iter().enumerate() {
+            let exists = model
+                .meshes
+                .get(term.mesh_index)
+                .is_some_and(|mesh| mesh.node_position(term.node).is_some());
+            if !exists {
+                report.error(
+                    &location,
+                    format!(
+                        "term {} references missing part {} / node {}",
+                        term_index + 1,
+                        term.mesh_index + 1,
+                        term.node.0
+                    ),
+                );
+            }
+        }
+    }
+
+    if setup.solver.substeps == 0 {
+        report.error("Solver", "substeps must be at least 1");
+    }
+    if setup.solver.max_iterations == 0 {
+        report.error("Solver", "maximum iterations must be at least 1");
+    }
+    if !setup.solver.convergence_tol.is_finite() || setup.solver.convergence_tol <= 0.0 {
+        report.error(
+            "Solver",
+            "convergence tolerance must be finite and positive",
+        );
+    }
+
+    if setup.boundary_conditions.is_empty() {
+        report.warning("Setup", "no boundary conditions are defined");
+    }
+    if setup.materials.is_empty() {
+        report.warning("Setup", "no materials are defined");
+    }
+    if setup.sections.is_empty() {
+        report.warning("Setup", "no sections are assigned");
+    }
+}
+
+fn validate_node_target(
+    report: &mut FrontistrValidationReport,
+    location: &str,
+    mesh: &fem_core::FemMesh,
+    nodes: &[fem_core::NodeId],
+    group: Option<&str>,
+) {
+    if let Some(group) = group {
+        if group.trim().is_empty() {
+            report.error(location, "node group name is empty");
+        } else if !mesh.node_sets.iter().any(|set| set.name == group) {
+            report.error(location, format!("references missing node group {group}"));
+        }
+        return;
+    }
+    if nodes.is_empty() {
+        report.error(location, "has no target nodes");
+    }
+    for node in nodes {
+        if mesh.node_position(*node).is_none() {
+            report.error(location, format!("references missing node {}", node.0));
+        }
+    }
+}
+
+fn validate_rotation_center(
+    report: &mut FrontistrValidationReport,
+    location: &str,
+    model: &FemModel,
+    center: &RotationCenter,
+) {
+    let Some(mesh) = model.meshes.get(center.mesh_index) else {
+        report.error(
+            location,
+            format!(
+                "rotation center references missing mesh {}",
+                center.mesh_index + 1
+            ),
+        );
+        return;
+    };
+    if let Some(group) = center.ngrp_name.as_deref() {
+        if group.trim().is_empty() || !mesh.node_sets.iter().any(|set| set.name == group) {
+            report.error(
+                location,
+                format!("rotation center references missing node group {group}"),
+            );
+        }
+    } else if let Some(node) = center.node {
+        if mesh.node_position(node).is_none() {
+            report.error(
+                location,
+                format!("rotation center references missing node {}", node.0),
+            );
+        }
+    } else {
+        report.error(location, "rotation center has no node or node group");
+    }
+}
+
+fn validate_contacts(
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    report: &mut FrontistrValidationReport,
+) {
+    let mut names = BTreeSet::new();
+    for (index, contact) in model.contacts.iter().enumerate() {
+        let location = format!("Contact[{}] {}", index + 1, contact.name);
+        if contact.name.trim().is_empty() {
+            report.error(&location, "name is empty");
+        } else if !names.insert(contact.name.as_str()) {
+            report.error(&location, "contact name is duplicated");
+        }
+        validate_surface_ref(report, &location, model, contact.master, "master");
+        match contact.slave {
+            ContactSlaveRef::Surface(reference) => {
+                validate_surface_ref(report, &location, model, reference, "slave")
+            }
+            ContactSlaveRef::Nodes(reference) => {
+                let valid = model
+                    .meshes
+                    .get(reference.mesh_index)
+                    .and_then(|mesh| mesh.node_sets.get(reference.node_set_index));
+                match valid {
+                    Some(set) if !set.nodes.is_empty() => {}
+                    Some(_) => report.error(&location, "slave node group is empty"),
+                    None => report.error(&location, "slave node group does not exist"),
+                }
+            }
+        }
+        if !contact.friction_coefficient.is_finite() || contact.friction_coefficient < 0.0 {
+            report.error(
+                &location,
+                "friction coefficient must be finite and non-negative",
+            );
+        }
+        if let Some(penalty) = contact.penalty_factor {
+            if !penalty.is_finite() || penalty <= 0.0 {
+                report.error(&location, "penalty factor must be finite and positive");
+            }
+        }
+    }
+    if !model.contacts.is_empty() && setup.solver.analysis_type != AnalysisType::NlStatic {
+        report.error(
+            "Solver",
+            "contact definitions require Nonlinear static analysis",
+        );
+    }
+}
+
+fn validate_surface_ref(
+    report: &mut FrontistrValidationReport,
+    location: &str,
+    model: &FemModel,
+    reference: fem_core::SurfaceSetRef,
+    side: &str,
+) {
+    let valid = model
+        .meshes
+        .get(reference.mesh_index)
+        .and_then(|mesh| mesh.surface_sets.get(reference.surface_set_index));
+    match valid {
+        Some(set) if !set.surfaces.is_empty() => {}
+        Some(_) => report.error(location, format!("{side} surface group is empty")),
+        None => report.error(location, format!("{side} surface group does not exist")),
     }
 }
 
@@ -70,6 +674,10 @@ pub fn write_frontistr_project(
     setup: &AnalysisSetup,
 ) -> Result<FrontistrExportSummary, FrontistrExportError> {
     let dir = dir.as_ref();
+    let validation = validate_frontistr_project(model, setup);
+    if validation.has_errors() {
+        return Err(FrontistrExportError::validation(&validation));
+    }
 
     write_hecmw_ctrl(
         dir,
@@ -379,8 +987,9 @@ mod tests {
             ContactType::Tied,
         ));
 
-        let summary =
-            write_frontistr_project(&dir, "contact", &model, &AnalysisSetup::default()).unwrap();
+        let mut setup = AnalysisSetup::default();
+        setup.solver.analysis_type = AnalysisType::NlStatic;
+        let summary = write_frontistr_project(&dir, "contact", &model, &setup).unwrap();
         let mesh_text = std::fs::read_to_string(dir.join("contact.msh")).unwrap();
         let control_text = std::fs::read_to_string(dir.join("contact.cnt")).unwrap();
 
@@ -393,6 +1002,69 @@ mod tests {
         for file in ["hecmw_ctrl.dat", "contact.msh", "contact.cnt"] {
             std::fs::remove_file(dir.join(file)).unwrap();
         }
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn preflight_reports_invalid_solver_references_and_values() {
+        let model = FemModel::demo_hex8();
+        let mut setup = AnalysisSetup::default();
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "BAD_BC".into(),
+            mesh_index: 0,
+            nodes: vec![NodeId(999)],
+            ngrp_name: None,
+            rotation_center: None,
+            dof_start: 0,
+            dof_end: 7,
+            value: f32::NAN,
+        });
+        setup.mpc_equations.push(MpcEquation::new(
+            "BAD_MPC",
+            0.0,
+            vec![
+                MpcTerm::new(0, NodeId(0), 1, 1.0),
+                MpcTerm::new(1, NodeId(1), 1, -1.0),
+            ],
+        ));
+        setup.solver.substeps = 0;
+
+        let report = validate_frontistr_project(&model, &setup);
+
+        assert!(report.has_errors());
+        let summary = report.summary(20);
+        assert!(summary.contains("BC[1] BAD_BC: references missing node 999"));
+        assert!(summary.contains("invalid DOF range 0..=7"));
+        assert!(summary.contains("MPC[1] BAD_MPC: term 2 references missing part 2"));
+        assert!(summary.contains("Solver: substeps must be at least 1"));
+    }
+
+    #[test]
+    fn failed_preflight_does_not_write_partial_project_files() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "bevyistr_frontistr_invalid_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let model = FemModel::demo_hex8();
+        let mut setup = AnalysisSetup::default();
+        setup.mpc_equations.push(MpcEquation::new(
+            "INVALID",
+            0.0,
+            vec![MpcTerm::new(0, NodeId(0), 1, 1.0)],
+        ));
+
+        let error = write_frontistr_project(&dir, "invalid", &model, &setup).unwrap_err();
+
+        assert!(error.to_string().contains("project preflight"));
+        assert!(!dir.join("hecmw_ctrl.dat").exists());
+        assert!(!dir.join("invalid.msh").exists());
+        assert!(!dir.join("invalid.cnt").exists());
         std::fs::remove_dir(dir).unwrap();
     }
 
