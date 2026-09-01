@@ -5,7 +5,8 @@
 //! expose all six structural degrees of freedom and are copied to
 //! [`fem_core::AnalysisSetup`] only by an explicit Apply action.
 
-use crate::layout::{ActiveLoadEditor, SelectedDloadKind, SelectedLoadDirection, UiInputCapture};
+use crate::bc_loads_ui::{ActiveLoadEditor, SelectedDloadKind, SelectedLoadDirection};
+use crate::layout::UiInputCapture;
 use crate::measurement::{editable_value, format_measurement, parse_measurement};
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::input_focus::InputFocus;

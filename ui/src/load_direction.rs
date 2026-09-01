@@ -7,8 +7,8 @@
 //! shared numeric measurement box and is committed only by Apply Load.
 
 use crate::assembly::VIEWPORT_GIZMO_RENDER_LAYER;
+use crate::bc_loads_ui::{ActiveLoadEditor, SelectedLoadDirection};
 use crate::boundary_editor::BoundaryLoadEditorState;
-use crate::layout::{ActiveLoadEditor, SelectedLoadDirection};
 use crate::measurement::MeasurementBoxState;
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::camera::visibility::RenderLayers;

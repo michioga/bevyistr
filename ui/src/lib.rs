@@ -1,14 +1,17 @@
 mod assembly;
+mod bc_loads_ui;
 mod boundary_editor;
 mod contact_ui;
 mod layout;
 mod load_direction;
+mod materials_ui;
 mod measurement;
 mod mpc_ui;
 mod project_io;
 mod results_ui;
 mod selection_ui;
 pub mod slider;
+mod solve_ui;
 mod solver_editor;
 
 use bevy::prelude::*;
@@ -18,6 +21,15 @@ use assembly::{
     AssemblyEditorState, assembly_viewport_hover_system, assembly_viewport_input_system,
     spawn_assembly_viewport_visuals, sync_assembly_overlay_camera, update_assembly_gizmo_visuals,
     update_assembly_part_overlays,
+};
+
+use bc_loads_ui::{
+    ActiveLoadEditor, SelectedDloadKind, SelectedLoadDirection, apply_dload_button_system,
+    apply_load_button_system, clear_all_bc_loads_button_system, constraint_preset_button_system,
+    dload_kind_button_system, load_direction_button_system, rebuild_boundary_loads_list,
+    sync_load_measurement_box, toggle_constraints_button_system, toggle_loads_button_system,
+    update_apply_dload_label, update_apply_load_label, update_boundary_load_preview,
+    update_constraint_button_labels,
 };
 
 use boundary_editor::{
@@ -39,28 +51,23 @@ use contact_ui::{
     update_contact_review_settings,
 };
 use layout::{
-    ActiveLoadEditor, SelectedDloadKind, SelectedEgrp, SelectedLoadDirection,
-    SelectedMaterialForSection, SelectedSectionType, SidebarPage, UndoInProgress, UndoStack,
-    add_section_button_system, analysis_type_button_system, apply_dload_button_system,
-    apply_load_button_system, assembly_gizmo_mode_button_system, assembly_mode_button_system,
-    assembly_part_button_system, assembly_transform_button_system,
-    clear_all_bc_loads_button_system, constraint_preset_button_system,
-    delete_setup_entry_button_system, dload_kind_button_system, egrp_select_button_system,
-    handle_panel_wheel, handle_scrollable_list_wheel, load_direction_button_system,
-    material_preset_button_system, material_select_button_system, push_undo_before_setup_change,
-    rebuild_assembly_parts, rebuild_boundary_loads_list, rebuild_materials_sections_list,
-    rebuild_section_def_panel, rebuild_sets_list, render_mode_button_system,
-    section_type_button_system, set_button_system, sidebar_page_button_system,
-    solver_method_button_system, spawn_ui, sync_load_measurement_box,
-    toggle_constraints_button_system, toggle_loads_button_system, undo_redo_system,
-    update_analysis_setup_stats_text, update_apply_dload_label, update_apply_load_label,
-    update_assembly_status_text, update_boundary_load_preview, update_constraint_button_labels,
-    update_mesh_stats_text, update_sidebar_page_visibility, update_ui_pointer_state,
+    SidebarPage, UndoInProgress, UndoStack, assembly_gizmo_mode_button_system,
+    assembly_mode_button_system, assembly_part_button_system, assembly_transform_button_system,
+    delete_setup_entry_button_system, handle_panel_wheel, handle_scrollable_list_wheel,
+    push_undo_before_setup_change, rebuild_assembly_parts, rebuild_sets_list,
+    render_mode_button_system, set_button_system, sidebar_page_button_system, spawn_ui,
+    undo_redo_system, update_assembly_status_text, update_mesh_stats_text,
+    update_sidebar_page_visibility, update_ui_pointer_state,
 };
 use load_direction::{
     LoadDirectionPickerState, load_direction_picker_button_system,
     load_direction_picker_hover_system, load_direction_picker_input_system,
     spawn_load_direction_gizmo, update_load_direction_gizmo_visuals,
+};
+use materials_ui::{
+    SelectedEgrp, SelectedMaterialForSection, SelectedSectionType, add_section_button_system,
+    egrp_select_button_system, material_preset_button_system, material_select_button_system,
+    rebuild_materials_sections_list, rebuild_section_def_panel, section_type_button_system,
 };
 use measurement::{
     MeasurementBoxState, measurement_box_input_system, spawn_measurement_box,
@@ -90,6 +97,9 @@ use selection_ui::{
     surface_selection_mode_button_system, update_hover_preview_group, update_selection_context,
     update_selection_info_text, update_selection_operation_hint, update_selection_stats_text,
     update_surface_selection_hint,
+};
+use solve_ui::{
+    analysis_type_button_system, solver_method_button_system, update_analysis_setup_stats_text,
 };
 use solver_editor::{SolverEditorState, solver_numeric_input_system};
 

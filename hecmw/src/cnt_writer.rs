@@ -325,10 +325,21 @@ mod tests {
     use bevy::prelude::Vec3;
     use fem_core::{
         BoundaryCondition, ContactPair, ContactType, DistributedLoad, DistributedLoadKind,
-        DistributedLoadTarget, ElementId, NodalLoad, NodeId, SurfaceSetRef,
+        DistributedLoadTarget, ElementId, LinearSolverMethod, NodalLoad, NodeId, SurfaceSetRef,
     };
 
     use super::*;
+
+    #[test]
+    fn preserves_mumps_as_the_frontistr_solver_method() {
+        let mut setup = AnalysisSetup::default();
+        setup.solver.solver_method = LinearSolverMethod::Mumps;
+
+        let text = build_cnt(&setup, &[]);
+
+        assert!(text.contains("!SOLVER, METHOD=MUMPS,"));
+        assert!(!text.contains("METHOD=DIRECT"));
+    }
 
     #[test]
     fn writes_tied_and_sliding_contact_interactions() {

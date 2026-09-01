@@ -471,6 +471,7 @@ impl AnalysisType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinearSolverMethod {
     Cg,
+    Mumps,
     Direct,
     Gmres,
 }
@@ -479,6 +480,7 @@ impl LinearSolverMethod {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Cg => "CG",
+            Self::Mumps => "MUMPS",
             Self::Direct => "Direct",
             Self::Gmres => "GMRES",
         }
@@ -486,6 +488,7 @@ impl LinearSolverMethod {
     pub const fn frontistr_method(self) -> &'static str {
         match self {
             Self::Cg => "CG",
+            Self::Mumps => "MUMPS",
             Self::Direct => "DIRECT",
             Self::Gmres => "GMRES",
         }

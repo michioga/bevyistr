@@ -308,7 +308,8 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 if let Some(method) = header.params.get("METHOD") {
                     solver.solver_method = match method.to_ascii_uppercase().as_str() {
                         "GMRES" => LinearSolverMethod::Gmres,
-                        "DIRECT" | "MUMPS" | "MKL" | "PARDISO" | "MKL_PARDISO" => {
+                        "MUMPS" => LinearSolverMethod::Mumps,
+                        "DIRECT" | "DIRECTMKL" | "MKL" | "PARDISO" | "MKL_PARDISO" => {
                             LinearSolverMethod::Direct
                         }
                         _ => LinearSolverMethod::Cg,
@@ -853,7 +854,7 @@ mod tests {
         assert_eq!(solver.substeps, 100);
         assert_eq!(solver.max_iterations, 1000);
         assert_eq!(solver.convergence_tol, 1.0e-4);
-        assert_eq!(solver.solver_method, LinearSolverMethod::Direct);
+        assert_eq!(solver.solver_method, LinearSolverMethod::Mumps);
 
         let mut contacts = vec![ContactPair::new(
             "cp1",

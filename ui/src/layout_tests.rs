@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use super::{
     SidebarPage, SidebarPageContent, page_supports_part_position, page_supports_tool,
-    selected_nodes_by_mesh, sidebar_page_display, signed_preview_direction,
+    sidebar_page_display,
 };
+use crate::bc_loads_ui::{selected_nodes_by_mesh, signed_preview_direction};
 use crate::contact_ui::{
     ContactDefinitionSettings, ContactPairKind, create_contact_from_candidate,
     create_contact_from_draft, sync_contact_measurement_box,
