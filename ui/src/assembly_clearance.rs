@@ -31,6 +31,17 @@ pub(crate) struct AssemblyClearanceButton;
 #[derive(Component)]
 pub(crate) struct AssemblyClearanceText;
 
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AssemblyClearanceReviewButton {
+    action: ClearanceReviewAction,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ClearanceReviewAction {
+    Previous,
+    Next,
+}
+
 /// Separate gizmo styling keeps the clearance measurement legible without
 /// changing the grid and other viewport guides that use Bevy's default group.
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -50,8 +61,12 @@ struct ClearanceReport {
     other_part: usize,
     kind: ClearanceKind,
     distance: f32,
-    affected_parts: usize,
     closest_points: Option<(Vec3, Vec3)>,
+}
+
+struct ClearanceEvaluation {
+    reports: Vec<ClearanceReport>,
+    skipped_parts: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -64,7 +79,9 @@ struct PartCollider {
 pub(crate) struct AssemblyClearanceState {
     collider_version: Option<u64>,
     colliders: Vec<Result<PartCollider, String>>,
-    report: Option<ClearanceReport>,
+    reports: Vec<ClearanceReport>,
+    selected_report: Option<usize>,
+    skipped_parts: usize,
     message: String,
     tone: ClearanceTone,
 }
@@ -83,7 +100,9 @@ impl Default for AssemblyClearanceState {
         Self {
             collider_version: None,
             colliders: Vec::new(),
-            report: None,
+            reports: Vec::new(),
+            selected_report: None,
+            skipped_parts: 0,
             message: "Select a part, then check clearance".to_string(),
             tone: ClearanceTone::Muted,
         }
@@ -91,6 +110,11 @@ impl Default for AssemblyClearanceState {
 }
 
 impl AssemblyClearanceState {
+    fn active_report(&self) -> Option<&ClearanceReport> {
+        self.selected_report
+            .and_then(|index| self.reports.get(index))
+    }
+
     fn rebuild_colliders(&mut self, model: &FemModel, version: u64) {
         if self.collider_version == Some(version) && self.colliders.len() == model.parts.len() {
             return;
@@ -111,7 +135,9 @@ impl AssemblyClearanceState {
     }
 
     fn check(&mut self, model: &FemModel, version: u64, selected_part: Option<usize>) {
-        self.report = None;
+        self.reports.clear();
+        self.selected_report = None;
+        self.skipped_parts = 0;
 
         let Some(selected_part) = selected_part else {
             self.set_message(
@@ -136,18 +162,49 @@ impl AssemblyClearanceState {
         }
 
         self.rebuild_colliders(model, version);
-        let report = match evaluate_selected_part(model, &self.colliders, selected_part, version) {
-            Ok(report) => report,
-            Err(error) => {
-                self.set_message(error, ClearanceTone::Error);
-                return;
+        let evaluation =
+            match evaluate_selected_part(model, &self.colliders, selected_part, version) {
+                Ok(evaluation) => evaluation,
+                Err(error) => {
+                    self.set_message(error, ClearanceTone::Error);
+                    return;
+                }
+            };
+
+        self.reports = evaluation.reports;
+        self.selected_report = Some(0);
+        self.skipped_parts = evaluation.skipped_parts;
+        self.refresh_message(model);
+    }
+
+    fn navigate(&mut self, action: ClearanceReviewAction, model: &FemModel) {
+        if self.reports.is_empty() {
+            return;
+        }
+        let current = self
+            .selected_report
+            .unwrap_or(0)
+            .min(self.reports.len() - 1);
+        self.selected_report = Some(match action {
+            ClearanceReviewAction::Previous => {
+                current.checked_sub(1).unwrap_or(self.reports.len() - 1)
             }
+            ClearanceReviewAction::Next => (current + 1) % self.reports.len(),
+        });
+        self.refresh_message(model);
+    }
+
+    fn refresh_message(&mut self, model: &FemModel) {
+        let Some(report) = self.active_report().cloned() else {
+            return;
         };
 
         let selected_name = &model.parts[report.selected_part].name;
         let other_name = &model.parts[report.other_part].name;
-        let suffix = if report.affected_parts > 1 {
-            format!(" (+{} more)", report.affected_parts - 1)
+        let position = self.selected_report.unwrap_or(0) + 1;
+        let total = self.reports.len();
+        let skipped = if self.skipped_parts > 0 {
+            format!("\n{} unsupported part(s) skipped", self.skipped_parts)
         } else {
             String::new()
         };
@@ -158,7 +215,7 @@ impl AssemblyClearanceState {
             ClearanceKind::Separated => self.set_message(
                 if let Some(vector) = gap_vector {
                     format!(
-                        "Clearance: {:.6} model units\n{} -> [{}] {}\nGap vector: ({:.6}, {:.6}, {:.6})",
+                        "Clearance: {:.6} model units  [{position}/{total}]\n{} -> [{}] {}\nGap vector: ({:.6}, {:.6}, {:.6}){skipped}",
                         report.distance,
                         selected_name,
                         report.other_part + 1,
@@ -169,7 +226,7 @@ impl AssemblyClearanceState {
                     )
                 } else {
                     format!(
-                        "Clearance: {:.6} model units\n{} -> [{}] {}",
+                        "Clearance: {:.6} model units  [{position}/{total}]\n{} -> [{}] {}{skipped}",
                         report.distance,
                         selected_name,
                         report.other_part + 1,
@@ -180,26 +237,23 @@ impl AssemblyClearanceState {
             ),
             ClearanceKind::Touching => self.set_message(
                 format!(
-                    "TOUCHING (within tolerance)\n{} -> [{}] {}{}",
+                    "TOUCHING (within tolerance)  [{position}/{total}]\n{} -> [{}] {}{skipped}",
                     selected_name,
                     report.other_part + 1,
-                    other_name,
-                    suffix
+                    other_name
                 ),
                 ClearanceTone::Warning,
             ),
             ClearanceKind::Intersecting => self.set_message(
                 format!(
-                    "INTERFERENCE DETECTED\n{} -> [{}] {}{}",
+                    "INTERFERENCE DETECTED  [{position}/{total}]\n{} -> [{}] {}{skipped}",
                     selected_name,
                     report.other_part + 1,
-                    other_name,
-                    suffix
+                    other_name
                 ),
                 ClearanceTone::Error,
             ),
         }
-        self.report = Some(report);
     }
 
     fn set_message(&mut self, message: impl Into<String>, tone: ClearanceTone) {
@@ -234,6 +288,44 @@ pub(crate) fn spawn_assembly_clearance_ui(parent: &mut ChildSpawnerCommands) {
             },
             TextColor(TEXT_MAIN),
         ));
+
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (label, action) in [
+                ("Previous pair", ClearanceReviewAction::Previous),
+                ("Next pair", ClearanceReviewAction::Next),
+            ] {
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: 1.0,
+                        height: px(27.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    AssemblyClearanceReviewButton { action },
+                    Name::new(format!("AssemblyClearance{label}")),
+                ))
+                .with_child((
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
+            }
+        });
 
     parent.spawn((
         Text::new("Select a part, then check clearance"),
@@ -270,19 +362,11 @@ pub(crate) fn draw_assembly_clearance_preview(
     }
 
     let Some(report) = clearance
-        .report
-        .as_ref()
+        .active_report()
         .filter(|report| report.checked_version == version.value)
     else {
         return;
     };
-    let Some((selected_point, other_point)) = report.closest_points else {
-        return;
-    };
-    if !selected_point.is_finite() || !other_point.is_finite() {
-        return;
-    }
-
     let color = match report.kind {
         ClearanceKind::Separated => Color::srgb(0.20, 0.88, 1.0),
         ClearanceKind::Touching => Color::srgb(1.0, 0.72, 0.18),
@@ -294,10 +378,68 @@ pub(crate) fn draw_assembly_clearance_preview(
         .filter(|radius| radius.is_finite() && *radius > 1.0e-7)
         .unwrap_or(0.01);
 
+    draw_part_bounds(
+        &mut gizmos,
+        &model,
+        report.selected_part,
+        Color::srgb(0.20, 0.72, 1.0),
+    );
+    draw_part_bounds(&mut gizmos, &model, report.other_part, color);
+
+    let Some((selected_point, other_point)) = report.closest_points else {
+        return;
+    };
+    if !selected_point.is_finite() || !other_point.is_finite() {
+        return;
+    }
+
     gizmos.sphere(selected_point, marker_radius, color);
     if selected_point.distance_squared(other_point) > marker_radius * marker_radius * 0.01 {
         gizmos.line(selected_point, other_point, color);
         gizmos.sphere(other_point, marker_radius, color);
+    }
+}
+
+fn draw_part_bounds(
+    gizmos: &mut Gizmos<AssemblyClearanceGizmos>,
+    model: &FemModel,
+    part_index: usize,
+    color: Color,
+) {
+    let Some((min, max)) = model.part_bounds(part_index) else {
+        return;
+    };
+    let size = max - min;
+    if !size.is_finite() || size.max_element() <= 1.0e-9 {
+        return;
+    }
+    gizmos.cube(
+        Transform::from_translation((min + max) * 0.5).with_scale(size * 1.002),
+        color,
+    );
+}
+
+pub(crate) fn assembly_clearance_review_button_system(
+    model: Res<FemModel>,
+    mut clearance: ResMut<AssemblyClearanceState>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyClearanceReviewButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+) {
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            clearance.navigate(button.action, &model);
+        }
+
+        *background = BackgroundColor(match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        });
+        *border = BorderColor::all(PANEL_BORDER);
     }
 }
 
@@ -338,8 +480,7 @@ pub(crate) fn update_assembly_clearance_text(
     };
 
     if clearance
-        .report
-        .as_ref()
+        .active_report()
         .is_some_and(|report| report.checked_version != version.value)
     {
         **text = "Geometry changed - check clearance again".to_string();
@@ -437,16 +578,14 @@ fn evaluate_selected_part(
     colliders: &[Result<PartCollider, String>],
     selected_part: usize,
     version: u64,
-) -> Result<ClearanceReport, String> {
+) -> Result<ClearanceEvaluation, String> {
     let selected = colliders
         .get(selected_part)
         .ok_or_else(|| "selected part collider is missing".to_string())?
         .as_ref()
         .map_err(|error| format!("selected part: {error}"))?;
 
-    let mut intersections = Vec::<ClearanceReport>::new();
-    let mut touching = Vec::<ClearanceReport>::new();
-    let mut nearest: Option<ClearanceReport> = None;
+    let mut reports = Vec::<ClearanceReport>::new();
     let mut skipped = 0usize;
 
     for (other_part, other) in colliders.iter().enumerate() {
@@ -501,25 +640,19 @@ fn evaluate_selected_part(
                     ClearanceKind::Touching
                 },
                 distance: separation,
-                affected_parts: 1,
                 closest_points,
             };
-            if intersects {
-                intersections.push(report);
-            } else {
-                touching.push(report);
-            }
+            reports.push(report);
             continue;
         }
 
         if parts_contain_each_other(selected, other) {
-            intersections.push(ClearanceReport {
+            reports.push(ClearanceReport {
                 checked_version: version,
                 selected_part,
                 other_part,
                 kind: ClearanceKind::Intersecting,
                 distance: 0.0,
-                affected_parts: 1,
                 closest_points: None,
             });
             continue;
@@ -545,37 +678,38 @@ fn evaluate_selected_part(
             other_part,
             kind: ClearanceKind::Separated,
             distance: separation,
-            affected_parts: 1,
             closest_points,
         };
-        if nearest
-            .as_ref()
-            .is_none_or(|current| report.distance < current.distance)
-        {
-            nearest = Some(report);
-        }
+        reports.push(report);
     }
 
-    let intersection_count = intersections.len();
-    if let Some(mut report) = intersections.into_iter().next() {
-        report.affected_parts = intersection_count;
-        return Ok(report);
-    }
-    let touching_count = touching.len();
-    if let Some(mut report) = touching.into_iter().next() {
-        report.affected_parts = touching_count;
-        return Ok(report);
-    }
-    if let Some(report) = nearest {
-        return Ok(report);
+    if reports.is_empty() {
+        return if skipped > 0 {
+            Err(format!(
+                "No comparable boundary surface; {skipped} part(s) were skipped"
+            ))
+        } else {
+            Err("No other part is available for comparison".to_string())
+        };
     }
 
-    if skipped > 0 {
-        Err(format!(
-            "No comparable boundary surface; {skipped} part(s) were skipped"
-        ))
-    } else {
-        Err("No other part is available for comparison".to_string())
+    reports.sort_by(|a, b| {
+        clearance_priority(a.kind)
+            .cmp(&clearance_priority(b.kind))
+            .then_with(|| a.distance.total_cmp(&b.distance))
+            .then_with(|| a.other_part.cmp(&b.other_part))
+    });
+    Ok(ClearanceEvaluation {
+        reports,
+        skipped_parts: skipped,
+    })
+}
+
+fn clearance_priority(kind: ClearanceKind) -> u8 {
+    match kind {
+        ClearanceKind::Intersecting => 0,
+        ClearanceKind::Touching => 1,
+        ClearanceKind::Separated => 2,
     }
 }
 
@@ -615,7 +749,8 @@ mod tests {
             .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
             .collect();
 
-        let report = evaluate_selected_part(&model, &colliders, 0, 7).unwrap();
+        let evaluation = evaluate_selected_part(&model, &colliders, 0, 7).unwrap();
+        let report = &evaluation.reports[0];
 
         assert_eq!(report.kind, ClearanceKind::Separated);
         assert!((report.distance - 1.0).abs() < 1.0e-5);
@@ -632,7 +767,8 @@ mod tests {
             .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
             .collect();
 
-        let report = evaluate_selected_part(&model, &colliders, 0, 1).unwrap();
+        let evaluation = evaluate_selected_part(&model, &colliders, 0, 1).unwrap();
+        let report = &evaluation.reports[0];
 
         assert_eq!(report.kind, ClearanceKind::Intersecting);
         assert_eq!(report.distance, 0.0);
@@ -653,9 +789,54 @@ mod tests {
             .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
             .collect();
 
-        let report = evaluate_selected_part(&model, &colliders, 0, 3).unwrap();
+        let evaluation = evaluate_selected_part(&model, &colliders, 0, 3).unwrap();
+        let report = &evaluation.reports[0];
 
         assert_eq!(report.kind, ClearanceKind::Intersecting);
         assert_eq!(report.distance, 0.0);
+    }
+
+    #[test]
+    fn clearance_reports_are_reviewed_by_risk_then_distance() {
+        let mut model = FemModel::single_mesh("Selected", FemMesh::demo_hex8());
+        model.add_mesh("Far", FemMesh::demo_hex8());
+        model.add_mesh("Intersecting", FemMesh::demo_hex8());
+        model.add_mesh("Near", FemMesh::demo_hex8());
+        assert!(model.translate_part(1, Vec3::X * 6.0));
+        assert!(model.translate_part(2, Vec3::X * 1.2));
+        assert!(model.translate_part(3, Vec3::X * 3.0));
+        let colliders: Vec<_> = model
+            .parts
+            .iter()
+            .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
+            .collect();
+
+        let evaluation = evaluate_selected_part(&model, &colliders, 0, 4).unwrap();
+
+        assert_eq!(evaluation.reports.len(), 3);
+        assert_eq!(evaluation.reports[0].kind, ClearanceKind::Intersecting);
+        assert_eq!(evaluation.reports[0].other_part, 2);
+        assert_eq!(evaluation.reports[1].kind, ClearanceKind::Separated);
+        assert_eq!(evaluation.reports[1].other_part, 3);
+        assert_eq!(evaluation.reports[2].other_part, 1);
+    }
+
+    #[test]
+    fn clearance_review_wraps_in_both_directions() {
+        let mut model = FemModel::single_mesh("Selected", FemMesh::demo_hex8());
+        model.add_mesh("Near", FemMesh::demo_hex8());
+        model.add_mesh("Far", FemMesh::demo_hex8());
+        assert!(model.translate_part(1, Vec3::X * 3.0));
+        assert!(model.translate_part(2, Vec3::X * 5.0));
+        let mut state = AssemblyClearanceState::default();
+
+        state.check(&model, 9, Some(0));
+        assert_eq!(state.active_report().unwrap().other_part, 1);
+        state.navigate(ClearanceReviewAction::Next, &model);
+        assert_eq!(state.active_report().unwrap().other_part, 2);
+        state.navigate(ClearanceReviewAction::Next, &model);
+        assert_eq!(state.active_report().unwrap().other_part, 1);
+        state.navigate(ClearanceReviewAction::Previous, &model);
+        assert_eq!(state.active_report().unwrap().other_part, 2);
     }
 }

@@ -26,7 +26,8 @@ use assembly::{
 };
 use assembly_clearance::{
     AssemblyClearanceGizmos, AssemblyClearanceState, assembly_clearance_button_system,
-    draw_assembly_clearance_preview, update_assembly_clearance_text,
+    assembly_clearance_review_button_system, draw_assembly_clearance_preview,
+    update_assembly_clearance_text,
 };
 use assembly_ui::{
     assembly_gizmo_mode_button_system, assembly_mode_button_system, assembly_part_button_system,
@@ -465,9 +466,12 @@ impl Plugin for UiPlugin {
                 assembly_clearance_button_system
                     .after(assembly_transform_button_system)
                     .in_set(InteractionSystems::UiInput),
+                assembly_clearance_review_button_system
+                    .after(assembly_clearance_button_system)
+                    .in_set(InteractionSystems::UiInput),
                 update_assembly_status_text.after(assembly_transform_button_system),
-                update_assembly_clearance_text.after(assembly_clearance_button_system),
-                draw_assembly_clearance_preview.after(assembly_clearance_button_system),
+                update_assembly_clearance_text.after(assembly_clearance_review_button_system),
+                draw_assembly_clearance_preview.after(assembly_clearance_review_button_system),
             ),
         );
 

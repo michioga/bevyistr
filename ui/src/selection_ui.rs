@@ -21,14 +21,14 @@ const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
 pub(crate) const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 
-pub(crate) const SELECTION_GUIDE_TEXT: &str = "Click / drag       Replace selection\\n\\
-Double click       Connected boundary\\n\\
-Triple click       Connected component\\n\\
-Ctrl + click/drag  Add to selection\\n\\
-Shift + click/drag Toggle selected / unselected\\n\\
-Alt or Ctrl+Shift  Remove from selection\\n\\
-Esc                Clear all\\n\\
-Drag left → right  Fully enclosed only\\n\\
+pub(crate) const SELECTION_GUIDE_TEXT: &str = "Click / drag       Replace selection\n\
+Double click       Connected boundary\n\
+Triple click       Connected component\n\
+Ctrl + click/drag  Add to selection\n\
+Shift + click/drag Toggle selected / unselected\n\
+Alt or Ctrl+Shift  Remove from selection\n\
+Esc                Clear all\n\
+Drag left → right  Fully enclosed only\n\
 Drag right → left  Crossing / touching";
 
 #[derive(Component)]
