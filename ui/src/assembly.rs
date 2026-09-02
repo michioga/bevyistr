@@ -139,16 +139,32 @@ type AssemblyOverlayCameraFilter = (
 );
 
 pub(crate) fn reference_size(model: &FemModel, part_index: usize) -> f32 {
-    let part_size = model
+    if let Some(part_size) = model
         .part_bounds(part_index)
         .map(|(min, max)| min.distance(max))
-        .filter(|size| size.is_finite() && *size > 1.0e-9);
-    let model_size = model
+        .filter(|size| size.is_finite() && *size > 1.0e-9)
+    {
+        return part_size;
+    }
+
+    model
         .bounds()
         .map(|(min, max)| min.distance(max))
-        .filter(|size| size.is_finite() && *size > 1.0e-9);
+        .filter(|size| size.is_finite() && *size > 1.0e-9)
+        .unwrap_or(1.0)
+}
 
-    part_size.or(model_size).unwrap_or(1.0)
+/// Canonical viewport axis colours, shared by the manipulation gizmo and
+/// every corresponding numeric-step control in the sidebar.
+pub(crate) fn axis_color(axis: Vec3) -> Color {
+    let axis = axis.abs();
+    if axis.x >= axis.y && axis.x >= axis.z {
+        Color::srgba(0.92, 0.16, 0.18, 0.86)
+    } else if axis.y >= axis.z {
+        Color::srgba(0.20, 0.82, 0.30, 0.86)
+    } else {
+        Color::srgba(0.18, 0.42, 1.0, 0.86)
+    }
 }
 
 pub(crate) fn spawn_assembly_viewport_visuals(
@@ -244,11 +260,8 @@ pub(crate) fn spawn_assembly_viewport_visuals(
         Name::new("Assembly gizmo origin"),
     ));
 
-    for (axis, color, label) in [
-        (Vec3::X, Color::srgba(0.92, 0.16, 0.18, 0.86), "X"),
-        (Vec3::Y, Color::srgba(0.20, 0.82, 0.30, 0.86), "Y"),
-        (Vec3::Z, Color::srgba(0.18, 0.42, 1.0, 0.86), "Z"),
-    ] {
+    for (axis, label) in [(Vec3::X, "X"), (Vec3::Y, "Y"), (Vec3::Z, "Z")] {
+        let color = axis_color(axis);
         let normal_material = materials.add(StandardMaterial {
             base_color: color,
             alpha_mode: AlphaMode::Blend,
@@ -746,8 +759,9 @@ pub(crate) fn update_assembly_gizmo_visuals(
     {
         center += preview_delta;
     }
-    let move_size = reference_size(&model, part_index) * GIZMO_LENGTH_FACTOR;
-    let rotation_size = reference_size(&model, part_index) * ROTATION_RING_FACTOR;
+    let part_reference_size = reference_size(&model, part_index);
+    let move_size = part_reference_size * GIZMO_LENGTH_FACTOR;
+    let rotation_size = part_reference_size * ROTATION_RING_FACTOR;
     let active_axis = state.drag.map(|drag| drag.axis).or(state.hovered_axis);
 
     for (piece, mut transform, mut visibility, mut material) in &mut pieces {

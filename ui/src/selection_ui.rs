@@ -1,11 +1,14 @@
 //! Shared viewport selection controls, growth modes, previews, and groups.
 
-use crate::layout::{RenderModeButton, SidebarPage};
+use crate::layout::{RenderModeButton, ScrollableList, SidebarPage};
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::prelude::*;
-use fem_core::{FemEntityId, FemEntityRef, FemModel, SelectionFilter, SelectionLevel};
+use bevy::ui::ScrollPosition;
+use fem_core::{
+    FemEntityId, FemEntityRef, FemModel, FemModelVersion, SelectionFilter, SelectionLevel,
+};
 use interaction::HoverResult;
-use selection::{Hovered, Selected, SelectionOperation, SelectionState};
+use selection::{Hovered, Selectable, Selected, SelectionOperation, SelectionState};
 use std::collections::{BTreeMap, BTreeSet};
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -14,6 +17,7 @@ const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 const ACTIVE_BORDER: Color = Color::srgb(0.57, 0.86, 0.92);
+const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
 pub(crate) const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 
@@ -117,6 +121,136 @@ pub(crate) struct SelectionStatsText;
 
 #[derive(Component)]
 pub(crate) struct SelectionInfoText;
+
+/// Which kind of [`fem_core::FemMesh`] set a [`SetButton`] refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetKind {
+    Node,
+    Element,
+    Surface,
+}
+
+/// References one mesh-scoped set so clicking its row can select all members.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct SetButton {
+    mesh_index: usize,
+    kind: SetKind,
+    set_index: usize,
+}
+
+/// Dynamic list rebuilt from the node, element, and surface sets in the model.
+#[derive(Component)]
+pub(crate) struct SetsListContainer;
+
+pub(crate) fn spawn_model_selection_ui(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        Text::new("Filter: Element   Selected: 0   Hover: none"),
+        TextFont {
+            font_size: FontSize::Px(11.5),
+            ..default()
+        },
+        TextColor(TEXT_MAIN),
+        SelectionStatsText,
+    ));
+    parent.spawn((
+        Text::new("Selected: 0  |  Hover: -"),
+        TextFont {
+            font_size: FontSize::Px(11.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.50, 0.78, 0.95, 0.90)),
+        SelectionInfoText,
+    ));
+
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            selection_action_button(
+                row,
+                "Make Node Group",
+                MakeNodeGroupButton,
+                "MakeNodeGroupButton",
+            );
+            selection_action_button(
+                row,
+                "Make Element Group",
+                MakeElementGroupButton,
+                "MakeElementGroupButton",
+            );
+        });
+    selection_hint(
+        parent,
+        "Saves selection as NGRP/EGRP for use in BCs and sections",
+    );
+}
+
+pub(crate) fn spawn_model_sets_ui(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4.0),
+            max_height: px(120.0),
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+        ScrollPosition::default(),
+        ScrollableList,
+        SetsListContainer,
+        Name::new("SetsListContainer"),
+    ));
+    selection_hint(
+        parent,
+        "Click a set to select its members   Scroll to see more",
+    );
+}
+
+fn selection_action_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &'static str,
+    marker: impl Bundle,
+    name: &'static str,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(28.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(5.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            marker,
+            Name::new(name),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(11.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
+}
+
+fn selection_hint(parent: &mut ChildSpawnerCommands, text: &'static str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+    ));
+}
 
 pub(crate) struct SelectionPageContext {
     pub(crate) label: &'static str,
@@ -773,6 +907,188 @@ pub(crate) fn update_selection_stats_text(
         selection.len(),
         hover_text
     );
+}
+
+pub(crate) fn rebuild_sets_list(
+    mut commands: Commands,
+    model: Option<Res<FemModel>>,
+    version: Res<FemModelVersion>,
+    mut last_version: Local<Option<u64>>,
+    container_query: Query<Entity, With<SetsListContainer>>,
+    children_query: Query<&Children>,
+) {
+    let current = version.value;
+    let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
+
+    if *last_version == Some(current) && !model_changed {
+        return;
+    }
+    *last_version = Some(current);
+
+    let Ok(container) = container_query.single() else {
+        return;
+    };
+
+    if let Ok(children) = children_query.get(container) {
+        for &child in children {
+            commands.entity(child).despawn();
+        }
+    }
+
+    let Some(model) = model else {
+        return;
+    };
+
+    commands.entity(container).with_children(|list| {
+        for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+            for (set_index, set) in mesh.node_sets.iter().enumerate() {
+                set_list_button(
+                    list,
+                    SetButton {
+                        mesh_index,
+                        kind: SetKind::Node,
+                        set_index,
+                    },
+                    &format!("[N] {}  ({} nodes)", set.name, set.nodes.len()),
+                );
+            }
+
+            for (set_index, set) in mesh.element_sets.iter().enumerate() {
+                set_list_button(
+                    list,
+                    SetButton {
+                        mesh_index,
+                        kind: SetKind::Element,
+                        set_index,
+                    },
+                    &format!("[E] {}  ({} elems)", set.name, set.elements.len()),
+                );
+            }
+
+            for (set_index, set) in mesh.surface_sets.iter().enumerate() {
+                set_list_button(
+                    list,
+                    SetButton {
+                        mesh_index,
+                        kind: SetKind::Surface,
+                        set_index,
+                    },
+                    &format!("[S] {}  ({} faces)", set.name, set.surfaces.len()),
+                );
+            }
+        }
+    });
+}
+
+fn set_list_button(parent: &mut ChildSpawnerCommands, set_button: SetButton, label: &str) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                width: percent(100.0),
+                padding: UiRect::axes(px(8.0), px(4.0)),
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            set_button,
+            Name::new(format!("SetButton_{label}")),
+        ))
+        .with_child((
+            Text::new(label.to_string()),
+            TextFont {
+                font_size: FontSize::Px(10.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
+}
+
+/// Selects every member of a clicked mesh set using the same modifier
+/// semantics as viewport selection.
+pub(crate) fn set_button_system(
+    mut commands: Commands,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    model: Option<Res<FemModel>>,
+    mut filter: ResMut<SelectionFilter>,
+    mut selection: ResMut<SelectionState>,
+    selectable_query: Query<(Entity, &Selectable)>,
+    selected_query: Query<Entity, With<Selected>>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &SetButton,
+        ),
+        With<SetButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, set_button) in &mut buttons {
+        if *interaction == Interaction::Pressed
+            && interaction.is_changed()
+            && let Some(model) = model.as_deref()
+            && let Some(mesh) = model.meshes.get(set_button.mesh_index)
+        {
+            let targets = match set_button.kind {
+                SetKind::Node => mesh
+                    .node_sets
+                    .get(set_button.set_index)
+                    .map(|set| mesh.node_set_targets(set)),
+                SetKind::Element => mesh
+                    .element_sets
+                    .get(set_button.set_index)
+                    .map(|set| mesh.element_set_targets(set)),
+                SetKind::Surface => mesh
+                    .surface_sets
+                    .get(set_button.set_index)
+                    .map(|set| mesh.surface_set_targets(set)),
+            };
+
+            if let Some(local_targets) = targets {
+                let targets: Vec<FemEntityRef> = local_targets
+                    .into_iter()
+                    .map(|target| FemEntityRef::new(set_button.mesh_index, target))
+                    .collect();
+                let ctrl = keyboard.pressed(KeyCode::ControlLeft)
+                    || keyboard.pressed(KeyCode::ControlRight);
+                let shift =
+                    keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+                let alt = keyboard.pressed(KeyCode::AltLeft) || keyboard.pressed(KeyCode::AltRight);
+                let operation = SelectionOperation::from_modifiers(ctrl, shift, alt);
+
+                filter.level = match set_button.kind {
+                    SetKind::Node => SelectionLevel::Node,
+                    SetKind::Element => SelectionLevel::Element,
+                    SetKind::Surface => SelectionLevel::Face,
+                };
+
+                selection.apply_group(&targets, &targets, operation);
+
+                for entity in &selected_query {
+                    commands.entity(entity).remove::<Selected>();
+                }
+                selection.entities.clear();
+
+                for (entity, selectable) in &selectable_query {
+                    if selection.targets.contains(&selectable.target) {
+                        commands.entity(entity).insert(Selected);
+                        selection.entities.push(entity);
+                    }
+                }
+            }
+        }
+
+        let color = match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        };
+        *background = BackgroundColor(color);
+        *border = BorderColor::all(PANEL_BORDER);
+    }
 }
 
 pub(crate) fn make_node_group_button_system(

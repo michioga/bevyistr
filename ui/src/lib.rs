@@ -1,4 +1,6 @@
 mod assembly;
+mod assembly_clearance;
+mod assembly_ui;
 mod bc_loads_ui;
 mod boundary_editor;
 mod contact_ui;
@@ -21,6 +23,14 @@ use assembly::{
     AssemblyEditorState, assembly_viewport_hover_system, assembly_viewport_input_system,
     spawn_assembly_viewport_visuals, sync_assembly_overlay_camera, update_assembly_gizmo_visuals,
     update_assembly_part_overlays,
+};
+use assembly_clearance::{
+    AssemblyClearanceGizmos, AssemblyClearanceState, assembly_clearance_button_system,
+    draw_assembly_clearance_preview, update_assembly_clearance_text,
+};
+use assembly_ui::{
+    assembly_gizmo_mode_button_system, assembly_mode_button_system, assembly_part_button_system,
+    assembly_transform_button_system, rebuild_assembly_parts, update_assembly_status_text,
 };
 
 use bc_loads_ui::{
@@ -51,13 +61,10 @@ use contact_ui::{
     update_contact_review_settings,
 };
 use layout::{
-    SidebarPage, UndoInProgress, UndoStack, assembly_gizmo_mode_button_system,
-    assembly_mode_button_system, assembly_part_button_system, assembly_transform_button_system,
-    delete_setup_entry_button_system, handle_panel_wheel, handle_scrollable_list_wheel,
-    push_undo_before_setup_change, rebuild_assembly_parts, rebuild_sets_list,
-    render_mode_button_system, set_button_system, sidebar_page_button_system, spawn_ui,
-    undo_redo_system, update_assembly_status_text, update_mesh_stats_text,
-    update_sidebar_page_visibility, update_ui_pointer_state,
+    SidebarPage, UndoInProgress, UndoStack, delete_setup_entry_button_system, handle_panel_wheel,
+    handle_scrollable_list_wheel, push_undo_before_setup_change, render_mode_button_system,
+    sidebar_page_button_system, spawn_ui, undo_redo_system, update_sidebar_page_visibility,
+    update_ui_pointer_state,
 };
 use load_direction::{
     LoadDirectionPickerState, load_direction_picker_button_system,
@@ -83,9 +90,9 @@ use mpc_ui::{
     update_mpc_pair_draft_text, update_rigid_spider_candidate_text,
 };
 use project_io::{
-    CameraFitRequest, apply_pending_cnt_system, camera_refit_on_reload, export_button_system,
-    import_mesh_button_system, mesh_load_system, open_mesh_button_system,
-    open_project_button_system, open_setup_button_system,
+    CameraFitRequest, add_mesh_button_system, apply_pending_cnt_system, camera_refit_on_reload,
+    export_button_system, mesh_load_system, open_mesh_button_system, open_project_button_system,
+    open_setup_button_system, update_mesh_stats_text,
 };
 use results_ui::{
     PlaybackState, apply_slider_to_results, open_result_button_system, playback_advance_system,
@@ -93,10 +100,10 @@ use results_ui::{
 };
 use selection_ui::{
     SelectionGuideState, SurfaceSelectionSettings, make_element_group_button_system,
-    make_node_group_button_system, selection_guide_toggle_system, selection_level_button_system,
-    surface_selection_mode_button_system, update_hover_preview_group, update_selection_context,
-    update_selection_info_text, update_selection_operation_hint, update_selection_stats_text,
-    update_surface_selection_hint,
+    make_node_group_button_system, rebuild_sets_list, selection_guide_toggle_system,
+    selection_level_button_system, set_button_system, surface_selection_mode_button_system,
+    update_hover_preview_group, update_selection_context, update_selection_info_text,
+    update_selection_operation_hint, update_selection_stats_text, update_surface_selection_hint,
 };
 use solve_ui::{
     analysis_type_button_system, solver_method_button_system, update_analysis_setup_stats_text,
@@ -109,6 +116,13 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        app.init_gizmo_group::<AssemblyClearanceGizmos>();
+        {
+            let mut configs = app.world_mut().resource_mut::<GizmoConfigStore>();
+            let (config, _) = configs.config_mut::<AssemblyClearanceGizmos>();
+            config.line.width = 3.0;
+            config.depth_bias = -0.002;
+        }
         app.init_resource::<fem_core::MeshLoadRequest>();
         app.init_resource::<fem_core::MeshLoadStatus>();
         app.init_resource::<fem_core::FemModelVersion>();
@@ -132,6 +146,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<visualization::BoundaryLoadPreview>();
         app.init_resource::<SidebarPage>();
         app.init_resource::<AssemblyEditorState>();
+        app.init_resource::<AssemblyClearanceState>();
         app.init_resource::<BoundaryLoadEditorState>();
         app.init_resource::<QuickLoadControlState>();
         app.init_resource::<MeasurementBoxState>();
@@ -190,7 +205,7 @@ impl Plugin for UiPlugin {
                 update_sidebar_page_visibility.after(sidebar_page_button_system),
                 open_project_button_system,
                 open_mesh_button_system,
-                import_mesh_button_system,
+                add_mesh_button_system,
                 mesh_load_system,
                 camera_refit_on_reload.after(mesh_load_system),
                 rebuild_sets_list.after(mesh_load_system),
@@ -447,7 +462,12 @@ impl Plugin for UiPlugin {
                     .after(assembly_part_button_system)
                     .after(slider::update_sliders)
                     .in_set(InteractionSystems::UiInput),
+                assembly_clearance_button_system
+                    .after(assembly_transform_button_system)
+                    .in_set(InteractionSystems::UiInput),
                 update_assembly_status_text.after(assembly_transform_button_system),
+                update_assembly_clearance_text.after(assembly_clearance_button_system),
+                draw_assembly_clearance_preview.after(assembly_clearance_button_system),
             ),
         );
 

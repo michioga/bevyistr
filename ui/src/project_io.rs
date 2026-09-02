@@ -7,8 +7,12 @@
 use bevy::prelude::*;
 use camera::OrbitCamera;
 use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
+use std::path::Path;
+use visualization::VisualizationSettings;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
+const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
+const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
 const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
@@ -17,7 +21,7 @@ const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 pub(crate) struct OpenMeshButton;
 
 #[derive(Component)]
-pub(crate) struct ImportMeshButton;
+pub(crate) struct AddMeshButton;
 
 /// Opens `hecmw_ctrl.dat`, reads mesh/cnt stems, and loads both files in
 /// one click — the "Open Project" shortcut.
@@ -32,6 +36,120 @@ pub(crate) struct ExportButton;
 
 #[derive(Component)]
 pub(crate) struct ExportStatusText;
+
+#[derive(Component)]
+pub(crate) struct MeshStatsText;
+
+pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: px(8.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            row.spawn((
+                Button,
+                Node {
+                    padding: UiRect::axes(px(14.0), px(5.0)),
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(5.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::all(PANEL_BORDER),
+                OpenMeshButton,
+                Name::new("OpenMeshButton"),
+            ))
+            .with_child((
+                Text::new("Open Mesh"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(TEXT_MAIN),
+            ));
+
+            row.spawn((
+                Button,
+                Node {
+                    padding: UiRect::axes(px(14.0), px(5.0)),
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(5.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::all(PANEL_BORDER),
+                AddMeshButton,
+                Name::new("AddMeshButton"),
+            ))
+            .with_child((
+                Text::new("Add Mesh"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(TEXT_MAIN),
+            ));
+        });
+
+    parent.spawn((
+        Text::new("No mesh loaded"),
+        TextFont {
+            font_size: FontSize::Px(11.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        MeshStatsText,
+    ));
+
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: px(8.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            row.spawn((
+                Button,
+                Node {
+                    flex_grow: 1.0,
+                    padding: UiRect::axes(px(8.0), px(4.0)),
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(5.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.10, 0.30, 0.18)),
+                BorderColor::all(Color::srgb(0.15, 0.46, 0.26)),
+                OpenProjectButton,
+                Name::new("OpenProjectButton"),
+            ))
+            .with_child((
+                Text::new("Open Project (hecmw_ctrl.dat)"),
+                TextFont {
+                    font_size: FontSize::Px(10.5),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.75, 0.97, 0.80)),
+            ));
+        });
+    parent.spawn((
+        Text::new("Open Mesh = replace model   Add Mesh = add a part\nOpen Project = load .msh + .cnt together"),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+    ));
+}
 
 /// Explicit camera-fit request, kept separate from [`FemModelVersion`] so
 /// assembly edits can rebuild geometry without disrupting the current view.
@@ -81,18 +199,18 @@ pub(crate) fn open_mesh_button_system(
 }
 
 /// Adds a mesh as a new part instead of replacing the current model.
-pub(crate) fn import_mesh_button_system(
+pub(crate) fn add_mesh_button_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        With<ImportMeshButton>,
+        With<AddMeshButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Import mesh as new part")
+                .set_title("Add mesh as new part")
                 .add_filter("All supported meshes", &["msh", "geo", "inp"])
                 .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
                 .add_filter("Gmsh geometry (.geo)", &["geo"])
@@ -596,4 +714,92 @@ pub(crate) fn open_setup_button_system(
             Err(err) => bevy::log::warn!("Failed to load .cnt file: {err}"),
         }
     }
+}
+
+pub(crate) fn update_mesh_stats_text(
+    model: Option<Res<FemModel>>,
+    version: Res<FemModelVersion>,
+    status: Res<MeshLoadStatus>,
+    settings: Res<VisualizationSettings>,
+    mut last_version: Local<Option<u64>>,
+    mut query: Query<&mut Text, With<MeshStatsText>>,
+) {
+    let model_changed = model.as_ref().is_some_and(|model| model.is_changed());
+    if *last_version == Some(version.value)
+        && !model_changed
+        && !status.is_changed()
+        && !settings.is_changed()
+    {
+        return;
+    }
+    *last_version = Some(version.value);
+
+    let Ok(mut text) = query.single_mut() else {
+        return;
+    };
+
+    let Some(model) = model else {
+        **text = "Mesh: demo pending".to_string();
+        return;
+    };
+
+    let mesh_count = model.meshes.len();
+    let node_count: usize = model.meshes.iter().map(|mesh| mesh.nodes.len()).sum();
+    let element_count: usize = model.meshes.iter().map(|mesh| mesh.elements.len()).sum();
+    let edge_count: usize = model
+        .meshes
+        .iter()
+        .map(|mesh| mesh.cached_edges().len())
+        .sum();
+    let face_count: usize = model
+        .meshes
+        .iter()
+        .map(|mesh| mesh.cached_boundary_faces().len())
+        .sum();
+    let boundary_edge_count: usize = model
+        .meshes
+        .iter()
+        .map(|mesh| mesh.cached_boundary_edges().len())
+        .sum();
+    let node_set_count: usize = model.meshes.iter().map(|mesh| mesh.node_sets.len()).sum();
+    let element_set_count: usize = model
+        .meshes
+        .iter()
+        .map(|mesh| mesh.element_sets.len())
+        .sum();
+    let surface_set_count: usize = model
+        .meshes
+        .iter()
+        .map(|mesh| mesh.surface_sets.len())
+        .sum();
+    let contact_count = model.contacts.len();
+    let load_status = load_status_line(&status);
+
+    **text = format!(
+        "{load_status}\nMeshes: {mesh_count}  Nodes: {node_count}  Elements: {element_count}\nEdges: {edge_count}  Boundary edges: {boundary_edge_count}\nBoundary faces: {face_count}  Render: {}\nSets: N {node_set_count}  E {element_set_count}  S {surface_set_count}  Contacts: {contact_count}",
+        settings.mode.label()
+    );
+}
+
+fn load_status_line(status: &MeshLoadStatus) -> String {
+    let path = status
+        .last_path
+        .as_deref()
+        .map(compact_path)
+        .unwrap_or_else(|| "No file".to_string());
+
+    if let Some(error) = &status.error {
+        format!("File: {path}  Error: {error}")
+    } else if status.message.is_empty() {
+        format!("File: {path}")
+    } else {
+        format!("File: {path}  {}", status.message)
+    }
+}
+
+fn compact_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
 }

@@ -408,7 +408,7 @@ pub fn spawn_demo_mesh(
 /// can despawn exactly this set before respawning from the new model.
 ///
 /// When the model has more than one mesh (i.e. more than one
-/// [`fem_core::Part`] — an assembly built via `add_mesh`/Import), each
+/// [`fem_core::Part`] — an assembly built via `add_mesh`/"Add Mesh"), each
 /// mesh's *base* colour (normal / flat / transparent) is hue-rotated by
 /// [`part_hue_shift`] so parts are visually distinguishable at a glance.
 /// Hover (yellow) and selected (green) colours are never tinted — those

@@ -1,9 +1,10 @@
 //! Contact definition, automatic candidate detection, and review UI.
 
-use crate::layout::SidebarPage;
+use crate::layout::{ScrollableList, SidebarPage};
 use crate::measurement::{MeasurementBoxState, MeasurementTarget};
-use crate::slider::{SliderId, SliderState, SliderTrack};
+use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::prelude::*;
+use bevy::ui::ScrollPosition;
 use fem_core::{
     ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, ContactType,
     FemEntityId, FemModel, FemModelVersion, FemNodeSet, FemSurfaceSet, RigidSpiderCandidateState,
@@ -18,6 +19,7 @@ use visualization::{
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
+const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
 const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
@@ -168,6 +170,493 @@ pub(crate) struct DefinedContactButton(pub usize);
 
 #[derive(Component)]
 pub(crate) struct ContactReviewControls;
+
+pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        Text::new("Defined contacts: 0"),
+        TextFont {
+            font_size: FontSize::Px(10.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        ContactDefinitionsText,
+    ));
+    parent.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4.0),
+            max_height: px(150.0),
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+        ScrollPosition::default(),
+        ScrollableList,
+        ContactDefinitionsListContainer,
+        Name::new("ContactDefinitionsListContainer"),
+    ));
+    contact_hint(
+        parent,
+        "Click a pair to review: master = blue, slave = orange",
+    );
+    contact_subheading(parent, "NEW CONTACT — TOPOLOGY");
+
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            ..default()
+        },))
+        .with_children(|row| {
+            for (index, kind) in ContactPairKind::ALL.into_iter().enumerate() {
+                let (radius, border) = segment_style(index == 0, index == 1);
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: 1.0,
+                        height: px(26.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border,
+                        border_radius: radius,
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    ContactPairKindButton(kind),
+                    Name::new(format!("ContactPairKind_{}", kind.label())),
+                ))
+                .with_child((
+                    Text::new(kind.label()),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
+            }
+        });
+
+    contact_subheading(parent, "BEHAVIOR");
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(4.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (contact_type, label) in [
+                (ContactType::SmallSliding, "Small"),
+                (ContactType::FiniteSliding, "Finite"),
+                (ContactType::Tied, "Tied"),
+            ] {
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: 1.0,
+                        height: px(25.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    ContactBehaviorButton(contact_type),
+                    Name::new(format!("ContactBehavior_{label}")),
+                ))
+                .with_child((
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                ));
+            }
+        });
+
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(5.0),
+                ..default()
+            },
+            ContactSlidingParameterControls,
+            Name::new("ContactSlidingParameterControls"),
+        ))
+        .with_children(|parameters| {
+            spawn_slider(
+                parameters,
+                SliderConfig {
+                    width: 272.0,
+                    min: 0.0,
+                    max: 1.0,
+                    value: 0.0,
+                    label: "Friction coefficient",
+                    id: SliderId::ContactFriction,
+                },
+            );
+            contact_action_button(
+                parameters,
+                "Edit friction exactly",
+                ContactParameterButton(ContactParameter::Friction),
+                "EditContactFrictionButton",
+            );
+            parameters
+                .spawn((
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        height: px(25.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    ContactPenaltyToggleButton,
+                    Name::new("ContactPenaltyToggleButton"),
+                ))
+                .with_child((
+                    Text::new("Penalty factor: AUTO"),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                    ContactPenaltyToggleLabel,
+                ));
+            parameters
+                .spawn((
+                    Node {
+                        display: Display::None,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(5.0),
+                        ..default()
+                    },
+                    ContactPenaltyControls,
+                    Name::new("ContactPenaltyControls"),
+                ))
+                .with_children(|penalty| {
+                    spawn_slider(
+                        penalty,
+                        SliderConfig {
+                            width: 272.0,
+                            min: 0.0,
+                            max: 1.0e6,
+                            value: 1.0e5,
+                            label: "Penalty factor",
+                            id: SliderId::ContactPenaltyFactor,
+                        },
+                    );
+                    contact_action_button(
+                        penalty,
+                        "Edit penalty exactly",
+                        ContactParameterButton(ContactParameter::PenaltyFactor),
+                        "EditContactPenaltyButton",
+                    );
+                });
+        });
+
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            contact_action_button(
+                row,
+                "1  Capture Slave",
+                CaptureContactSideButton(ContactCaptureSide::Slave),
+                "CaptureContactSlaveButton",
+            );
+            contact_action_button(
+                row,
+                "2  Capture Master",
+                CaptureContactSideButton(ContactCaptureSide::Master),
+                "CaptureContactMasterButton",
+            );
+        });
+    parent.spawn((
+        Text::new("Slave: not set   Master: not set"),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        ContactDraftStatusText,
+    ));
+    contact_action_button(
+        parent,
+        "3  Create Contact Pair",
+        FinalizeContactButton,
+        "FinalizeContactButton",
+    );
+    contact_hint(
+        parent,
+        "Captured geometry is previewed immediately; master = blue, slave = orange",
+    );
+}
+
+pub(crate) fn spawn_contact_detection_ui(parent: &mut ChildSpawnerCommands) {
+    spawn_slider(
+        parent,
+        SliderConfig {
+            width: 272.0,
+            min: 0.0,
+            max: 10.0,
+            value: 0.05,
+            label: "Search gap (model units)",
+            id: SliderId::ContactSearchGap,
+        },
+    );
+    contact_action_button(
+        parent,
+        "Edit search gap exactly",
+        ContactParameterButton(ContactParameter::SearchGap),
+        "EditContactSearchGapButton",
+    );
+    spawn_slider(
+        parent,
+        SliderConfig {
+            width: 272.0,
+            min: 0.0,
+            max: 90.0,
+            value: 20.0,
+            label: "Normal tolerance (deg)",
+            id: SliderId::ContactSearchAngle,
+        },
+    );
+    contact_action_button(
+        parent,
+        "Edit normal tolerance exactly",
+        ContactParameterButton(ContactParameter::SearchAngle),
+        "EditContactSearchAngleButton",
+    );
+    contact_action_button(
+        parent,
+        "Detect Contact Candidates",
+        DetectContactsButton,
+        "DetectContactsButton",
+    );
+    contact_hint(
+        parent,
+        "Surface gap search; coarse side = Master, fine side = Slave",
+    );
+}
+
+pub(crate) fn spawn_contact_review_ui(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        Text::new("No candidates — run Detect Contact Candidates"),
+        TextFont {
+            font_size: FontSize::Px(11.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        ContactCandidateText,
+    ));
+    parent
+        .spawn((
+            Node {
+                display: Display::None,
+                flex_direction: FlexDirection::Column,
+                row_gap: px(7.0),
+                ..default()
+            },
+            ContactReviewControls,
+            Name::new("ContactReviewControls"),
+        ))
+        .with_children(|review| {
+            review
+                .spawn((
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        height: px(28.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_ACTIVE),
+                    BorderColor::all(ACTIVE_BORDER),
+                    ContactGhostToggleButton,
+                    Name::new("ContactGhostToggleButton"),
+                ))
+                .with_child((
+                    Text::new("Ghost others: ON"),
+                    TextFont {
+                        font_size: FontSize::Px(10.5),
+                        ..default()
+                    },
+                    TextColor(TEXT_MAIN),
+                    ContactGhostToggleLabel,
+                ));
+            review
+                .spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(6.0),
+                    ..default()
+                },))
+                .with_children(|row| {
+                    contact_action_button(
+                        row,
+                        "Previous",
+                        ContactCandidateActionButton(ContactCandidateAction::Previous),
+                        "PreviousContactCandidateButton",
+                    );
+                    contact_action_button(
+                        row,
+                        "Next",
+                        ContactCandidateActionButton(ContactCandidateAction::Next),
+                        "NextContactCandidateButton",
+                    );
+                });
+            spawn_slider(
+                review,
+                SliderConfig {
+                    width: 272.0,
+                    min: 0.0,
+                    max: 30.0,
+                    value: 8.0,
+                    label: "Review separation (% model size)",
+                    id: SliderId::ContactReviewSeparation,
+                },
+            );
+            review
+                .spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(6.0),
+                    ..default()
+                },))
+                .with_children(|row| {
+                    contact_action_button(
+                        row,
+                        "Reject",
+                        ContactCandidateActionButton(ContactCandidateAction::Reject),
+                        "RejectContactCandidateButton",
+                    );
+                    row.spawn((
+                        Button,
+                        Node {
+                            flex_grow: 1.0,
+                            height: px(28.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(px(1.0)),
+                            border_radius: BorderRadius::all(px(5.0)),
+                            ..default()
+                        },
+                        BackgroundColor(BUTTON_NORMAL),
+                        BorderColor::all(PANEL_BORDER),
+                        AcceptContactButton,
+                        Name::new("AcceptContactButton"),
+                    ))
+                    .with_child((
+                        Text::new("Accept as Small sliding"),
+                        TextFont {
+                            font_size: FontSize::Px(11.5),
+                            ..default()
+                        },
+                        TextColor(TEXT_MAIN),
+                        AcceptContactLabel,
+                    ));
+                });
+        });
+    contact_hint(
+        parent,
+        "Accept uses BEHAVIOR and friction settings above; review separation is display only",
+    );
+}
+
+fn contact_subheading(parent: &mut ChildSpawnerCommands, text: &'static str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(9.2),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+    ));
+}
+
+fn contact_action_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &'static str,
+    marker: impl Bundle,
+    name: &'static str,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(28.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(5.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            marker,
+            Name::new(name),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(11.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
+}
+
+fn contact_hint(parent: &mut ChildSpawnerCommands, text: &'static str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+    ));
+}
+
+fn segment_style(is_first: bool, is_last: bool) -> (BorderRadius, UiRect) {
+    let radius = 5.0;
+    let border = UiRect {
+        bottom: px(1.0),
+        left: if is_first { px(1.0) } else { px(0.0) },
+        right: px(1.0),
+        top: px(1.0),
+    };
+    let (top_left, bottom_left) = if is_first {
+        (radius, radius)
+    } else {
+        (0.0, 0.0)
+    };
+    let (top_right, bottom_right) = if is_last {
+        (radius, radius)
+    } else {
+        (0.0, 0.0)
+    };
+    (
+        BorderRadius::new(
+            px(top_left),
+            px(top_right),
+            px(bottom_right),
+            px(bottom_left),
+        ),
+        border,
+    )
+}
 
 pub(crate) fn create_surface_button_system(
     mut model: Option<ResMut<FemModel>>,

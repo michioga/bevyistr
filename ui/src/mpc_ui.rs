@@ -1,8 +1,9 @@
 //! MPC equation editing, pair constraints, and rigid-spider review UI.
 
+use crate::contact_ui::{ContactParameter, ContactParameterButton};
 use crate::layout::SidebarPage;
 use crate::measurement::MeasurementBoxState;
-use crate::slider::{SliderId, SliderState, SliderTrack};
+use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::prelude::*;
 use fem_core::{
     ContactCandidateState, FemEntityId, FemModel, RigidSpiderCandidateState, RigidSpiderMode,
@@ -15,6 +16,8 @@ use visualization::{
 };
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
+const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
+const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
 const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
@@ -98,6 +101,311 @@ impl Default for MpcPairDraftState {
             message: "Select one node, then capture the reference (+) side".to_string(),
         }
     }
+}
+
+pub(crate) fn spawn_mpc_ui(parent: &mut ChildSpawnerCommands) {
+    mpc_subheading(parent, "PAIR MPC FROM VIEWPORT");
+    mpc_hint(
+        parent,
+        "Select exactly one Node, then capture each side; reference = magenta (+), coupled = cyan (-)",
+    );
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            mpc_action_button(
+                row,
+                "1  Reference (+)",
+                CaptureMpcPairNodeButton(MpcPairSide::Positive),
+                "CaptureMpcPairPositiveButton",
+            );
+            mpc_action_button(
+                row,
+                "2  Coupled (-)",
+                CaptureMpcPairNodeButton(MpcPairSide::Negative),
+                "CaptureMpcPairNegativeButton",
+            );
+        });
+    parent.spawn((
+        Text::new("Reference: not set   Coupled: not set"),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        MpcPairDraftText,
+    ));
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(4.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            for (dof, label, name) in [
+                (0, "XYZ", "MpcPairDofXyzButton"),
+                (1, "Ux", "MpcPairDofXButton"),
+                (2, "Uy", "MpcPairDofYButton"),
+                (3, "Uz", "MpcPairDofZButton"),
+            ] {
+                mpc_action_button(row, label, MpcPairDofButton(dof), name);
+            }
+        });
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            mpc_action_button(row, "Clear", ClearMpcPairButton, "ClearMpcPairButton");
+            mpc_action_button(
+                row,
+                "3  Create !EQUATION",
+                CreateMpcPairButton,
+                "CreateMpcPairButton",
+            );
+        });
+    mpc_hint(
+        parent,
+        "XYZ creates three grouped equations; exact constants and coefficients remain editable below",
+    );
+    mpc_divider(parent);
+
+    mpc_subheading(parent, "AUTOMATIC RIGID SPIDER");
+    spawn_slider(
+        parent,
+        SliderConfig {
+            width: 272.0,
+            min: 0.0,
+            max: 20.0,
+            value: 1.0,
+            label: "Search radius (model units)",
+            id: SliderId::RigidSpiderRadius,
+        },
+    );
+    mpc_action_button(
+        parent,
+        "Edit radius exactly",
+        ContactParameterButton(ContactParameter::SpiderRadius),
+        "EditRigidSpiderRadiusButton",
+    );
+    mpc_action_button(
+        parent,
+        "Detect MPC Spiders",
+        DetectRigidSpidersButton,
+        "DetectRigidSpidersButton",
+    );
+    parent.spawn((
+        Text::new("No MPC candidates — run Detect MPC Spiders"),
+        TextFont {
+            font_size: FontSize::Px(10.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        RigidSpiderCandidateText,
+    ));
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            mpc_action_button(
+                row,
+                "Previous",
+                RigidSpiderActionButton(RigidSpiderAction::Previous),
+                "PreviousRigidSpiderButton",
+            );
+            mpc_action_button(
+                row,
+                "Next",
+                RigidSpiderActionButton(RigidSpiderAction::Next),
+                "NextRigidSpiderButton",
+            );
+        });
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            mpc_action_button(
+                row,
+                "Reject",
+                RigidSpiderActionButton(RigidSpiderAction::Reject),
+                "RejectRigidSpiderButton",
+            );
+            mpc_action_button(
+                row,
+                "Create !EQUATION",
+                AcceptRigidSpiderButton,
+                "AcceptRigidSpiderButton",
+            );
+        });
+    mpc_hint(
+        parent,
+        "Center = magenta, solid boundary nodes = cyan; isolated centers transfer translations only",
+    );
+    mpc_divider(parent);
+
+    mpc_subheading(parent, "DEFINED MPC REVIEW");
+    parent.spawn((
+        Text::new("No MPC equations defined"),
+        TextFont {
+            font_size: FontSize::Px(10.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        DefinedMpcText,
+    ));
+    mpc_action_button(
+        parent,
+        "Show selected in viewport",
+        DefinedMpcActionButton(DefinedMpcAction::Show),
+        "ShowDefinedMpcButton",
+    );
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            mpc_action_button(
+                row,
+                "Previous equation",
+                DefinedMpcActionButton(DefinedMpcAction::Previous),
+                "PreviousDefinedMpcButton",
+            );
+            mpc_action_button(
+                row,
+                "Next equation",
+                DefinedMpcActionButton(DefinedMpcAction::Next),
+                "NextDefinedMpcButton",
+            );
+        });
+    mpc_action_button(
+        parent,
+        "Edit constant exactly",
+        DefinedMpcActionButton(DefinedMpcAction::EditConstant),
+        "EditDefinedMpcConstantButton",
+    );
+    parent
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            ..default()
+        },))
+        .with_children(|row| {
+            mpc_action_button(
+                row,
+                "Previous term",
+                DefinedMpcActionButton(DefinedMpcAction::PreviousTerm),
+                "PreviousDefinedMpcTermButton",
+            );
+            mpc_action_button(
+                row,
+                "Next term",
+                DefinedMpcActionButton(DefinedMpcAction::NextTerm),
+                "NextDefinedMpcTermButton",
+            );
+        });
+    mpc_action_button(
+        parent,
+        "Edit selected coefficient exactly",
+        DefinedMpcActionButton(DefinedMpcAction::EditCoefficient),
+        "EditDefinedMpcCoefficientButton",
+    );
+    mpc_hint(
+        parent,
+        "Exact edit uses the lower-right value box; Enter applies, Esc cancels",
+    );
+    mpc_action_button(
+        parent,
+        "Remove selected equation / group",
+        DefinedMpcActionButton(DefinedMpcAction::Remove),
+        "RemoveDefinedMpcButton",
+    );
+    mpc_hint(
+        parent,
+        "Expanded spiders are removed as one group; Ctrl+Z restores the change",
+    );
+    mpc_hint(
+        parent,
+        "Selected equation: positive coefficients = magenta, negative = cyan",
+    );
+}
+
+fn mpc_subheading(parent: &mut ChildSpawnerCommands, text: &'static str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(9.5),
+            ..default()
+        },
+        TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
+    ));
+}
+
+fn mpc_action_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &'static str,
+    marker: impl Bundle,
+    name: &'static str,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                flex_grow: 1.0,
+                height: px(28.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(5.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PANEL_BORDER),
+            marker,
+            Name::new(name),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(11.5),
+                ..default()
+            },
+            TextColor(TEXT_MAIN),
+        ));
+}
+
+fn mpc_hint(parent: &mut ChildSpawnerCommands, text: &'static str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
+    ));
+}
+
+fn mpc_divider(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        Node {
+            width: percent(100.0),
+            height: px(1.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.28, 0.34, 0.38, 0.60)),
+    ));
 }
 
 pub(crate) fn sync_rigid_spider_search_params(

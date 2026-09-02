@@ -17,7 +17,7 @@
 //! HECMW's `.msh` format has no native concept of "multiple meshes in one
 //! file" the way an assembly might — everything is one flat
 //! node/element/group space. So when a [`FemModel`] has more than one part
-//! (built via "+ Import"), [`write_msh_file`] flattens them into a single
+//! (built via "Add Mesh"), [`write_msh_file`] flattens them into a single
 //! mesh by re-numbering every part's node and element IDs into disjoint
 //! ranges (offsetting by the running totals of all earlier parts) and
 //! prefixing every group name with the part name (`PART2_EGRP1`) so that
@@ -94,7 +94,7 @@ fn write_msh_file_impl(
 
 /// Writes **every** mesh in `model` to `path` as one flattened HECMW
 /// `.msh`, renumbering node/element IDs into disjoint ranges and prefixing
-/// group names by part so multi-part assemblies (built via "+ Import")
+/// group names by part so multi-part assemblies (built via "Add Mesh")
 /// export correctly instead of silently dropping every part after the
 /// first.
 ///
