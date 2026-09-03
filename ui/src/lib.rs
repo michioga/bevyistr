@@ -31,8 +31,8 @@ use assembly_clearance::{
     update_assembly_clearance_text,
 };
 use assembly_ui::{
-    assembly_gizmo_mode_button_system, assembly_mode_button_system, assembly_part_button_system,
-    assembly_transform_button_system, rebuild_assembly_parts, update_assembly_status_text,
+    assembly_part_button_system, assembly_tool_button_system, assembly_transform_button_system,
+    rebuild_assembly_parts, update_assembly_nudge_visibility, update_assembly_status_text,
 };
 
 use bc_loads_ui::{
@@ -453,15 +453,19 @@ impl Plugin for UiPlugin {
             Update,
             (
                 rebuild_assembly_parts.after(mesh_load_system),
-                assembly_mode_button_system.in_set(InteractionSystems::UiInput),
-                assembly_gizmo_mode_button_system
-                    .after(assembly_mode_button_system)
+                assembly_tool_button_system
+                    .after(sidebar_page_button_system)
+                    .in_set(InteractionSystems::UiInput),
+                update_assembly_nudge_visibility
+                    .after(assembly_tool_button_system)
                     .in_set(InteractionSystems::UiInput),
                 assembly_part_button_system
                     .after(rebuild_assembly_parts)
                     .in_set(InteractionSystems::UiInput),
                 assembly_transform_button_system
+                    .after(assembly_tool_button_system)
                     .after(assembly_part_button_system)
+                    .after(sidebar_page_button_system)
                     .after(slider::update_sliders)
                     .in_set(InteractionSystems::UiInput),
                 assembly_clearance_button_system

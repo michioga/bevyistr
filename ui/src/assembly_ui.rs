@@ -1,15 +1,19 @@
 use crate::assembly::{
     AssemblyEditorState, AssemblyGizmoMode, axis_color, reference_size as assembly_reference_size,
 };
-use crate::assembly_clearance::spawn_assembly_clearance_ui;
-use crate::layout::ScrollableList;
+use crate::layout::SidebarPage;
 use crate::measurement::MeasurementBoxState;
-use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
+use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::prelude::*;
-use bevy::ui::ScrollPosition;
-use fem_core::{ContactCandidateState, FemModel, FemModelVersion, ViewportTool};
+use fem_core::{
+    ContactCandidateState, FemModel, FemModelVersion, HoverPreviewTargets, ViewportTool,
+};
 use interaction::HoverResult;
-use selection::{Selected, SelectionState};
+use selection::{Hovered, Selected, SelectionState};
+
+#[path = "assembly_ui_layout.rs"]
+mod layout;
+pub(crate) use layout::spawn_assembly_ui;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -18,6 +22,7 @@ const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
+const BUTTON_DISABLED: Color = Color::srgba(0.06, 0.07, 0.08, 0.94);
 const ACTIVE_BORDER: Color = Color::srgb(0.57, 0.86, 0.92);
 
 #[derive(Component)]
@@ -33,7 +38,7 @@ pub(crate) struct AssemblyTransformButton {
     action: AssemblyTransformAction,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum AssemblyTransformAction {
     Translate(Vec3),
     Rotate(Vec3),
@@ -41,6 +46,21 @@ enum AssemblyTransformAction {
 }
 
 impl AssemblyTransformAction {
+    fn for_axis(mode: AssemblyGizmoMode, axis: Vec3) -> Self {
+        match mode {
+            AssemblyGizmoMode::Move => Self::Translate(axis),
+            AssemblyGizmoMode::Rotate => Self::Rotate(axis),
+        }
+    }
+
+    fn mode(self) -> Option<AssemblyGizmoMode> {
+        match self {
+            Self::Translate(_) => Some(AssemblyGizmoMode::Move),
+            Self::Rotate(_) => Some(AssemblyGizmoMode::Rotate),
+            Self::Reset => None,
+        }
+    }
+
     fn axis(self) -> Option<Vec3> {
         match self {
             Self::Translate(axis) | Self::Rotate(axis) => Some(axis),
@@ -52,240 +72,87 @@ impl AssemblyTransformAction {
 #[derive(Component)]
 pub(crate) struct AssemblyStatusText;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssemblyToolChoice {
+    Select,
+    Move,
+    Rotate,
+}
+
+impl AssemblyToolChoice {
+    const ALL: [Self; 3] = [Self::Select, Self::Move, Self::Rotate];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Select => "Select",
+            Self::Move => "Move",
+            Self::Rotate => "Rotate",
+        }
+    }
+
+    fn gizmo_mode(self) -> Option<AssemblyGizmoMode> {
+        match self {
+            Self::Select => None,
+            Self::Move => Some(AssemblyGizmoMode::Move),
+            Self::Rotate => Some(AssemblyGizmoMode::Rotate),
+        }
+    }
+
+    fn from_state(tool: ViewportTool, mode: AssemblyGizmoMode) -> Self {
+        match (tool, mode) {
+            (ViewportTool::Assembly, AssemblyGizmoMode::Move) => Self::Move,
+            (ViewportTool::Assembly, AssemblyGizmoMode::Rotate) => Self::Rotate,
+            _ => Self::Select,
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Select => "Select nodes/faces. Choose Move or Rotate to position a part.",
+            Self::Move => "Drag an X/Y/Z arrow or use -/+ below. Shift=fine, Ctrl=snap",
+            Self::Rotate => "Drag an RX/RY/RZ ring or use -/+ below. Shift=fine, Ctrl=snap",
+        }
+    }
+}
+
 #[derive(Component)]
-pub(crate) struct AssemblyModeButton;
+pub(crate) struct AssemblyToolButton {
+    choice: AssemblyToolChoice,
+}
 
 #[derive(Component)]
-pub(crate) struct AssemblyModeButtonLabel;
+pub(crate) struct AssemblyToolHint;
 
-#[derive(Component, Debug, Clone, Copy)]
-pub(crate) struct AssemblyGizmoModeButton {
-    mode: AssemblyGizmoMode,
+#[derive(Component)]
+pub(crate) struct AssemblyStepStatusText(AssemblyGizmoMode);
+
+/// None denotes pose actions shared by Move and Rotate, but hidden in Select.
+#[derive(Component)]
+pub(crate) struct AssemblyNudgeControls(Option<AssemblyGizmoMode>);
+
+fn nudge_controls_display(
+    mode: Option<AssemblyGizmoMode>,
+    active: AssemblyGizmoMode,
+    tool: ViewportTool,
+) -> Display {
+    if tool == ViewportTool::Assembly && mode.is_none_or(|mode| mode == active) {
+        Display::Flex
+    } else {
+        Display::None
+    }
 }
 
-pub(crate) fn spawn_assembly_ui(parent: &mut ChildSpawnerCommands) {
-    parent
-        .spawn((
-            Button,
-            Node {
-                width: percent(100.0),
-                height: px(30.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(5.0)),
-                ..default()
-            },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::all(PANEL_BORDER),
-            AssemblyModeButton,
-            Name::new("AssemblyModeButton"),
-        ))
-        .with_child((
-            Text::new("Edit in viewport: OFF"),
-            TextFont {
-                font_size: FontSize::Px(11.5),
-                ..default()
-            },
-            TextColor(TEXT_MAIN),
-            AssemblyModeButtonLabel,
-        ));
-
-    parent
-        .spawn((Node {
-            flex_direction: FlexDirection::Row,
-            ..default()
-        },))
-        .with_children(|row| {
-            for (index, mode) in AssemblyGizmoMode::ALL.into_iter().enumerate() {
-                let (radius, border) = segment_style(index == 0, index == 1);
-                row.spawn((
-                    Button,
-                    Node {
-                        flex_grow: 1.0,
-                        height: px(27.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border,
-                        border_radius: radius,
-                        ..default()
-                    },
-                    BackgroundColor(BUTTON_NORMAL),
-                    BorderColor::all(PANEL_BORDER),
-                    AssemblyGizmoModeButton { mode },
-                    Name::new(format!("AssemblyGizmoMode_{}", mode.label())),
-                ))
-                .with_child((
-                    Text::new(mode.label()),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                    TextColor(TEXT_MAIN),
-                ));
-            }
-        });
-    hint_text(
-        parent,
-        "Move: drag X/Y/Z arrow   Rotate: drag RX/RY/RZ ring",
-    );
-    hint_text(parent, "Turn Edit OFF to return to node/face selection");
-
-    parent.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: px(4.0),
-            max_height: px(110.0),
-            overflow: Overflow::scroll_y(),
-            ..default()
-        },
-        ScrollPosition::default(),
-        ScrollableList,
-        AssemblyPartsContainer,
-        Name::new("AssemblyPartsContainer"),
-    ));
-    parent.spawn((
-        Text::new("No part selected"),
-        TextFont {
-            font_size: FontSize::Px(10.5),
-            ..default()
-        },
-        TextColor(TEXT_MUTED),
-        AssemblyStatusText,
-    ));
-
-    spawn_assembly_clearance_ui(parent);
-
-    spawn_slider(
-        parent,
-        SliderConfig {
-            width: 272.0,
-            min: 0.1,
-            max: 10.0,
-            value: 1.0,
-            label: "Move step (% of part size)",
-            id: SliderId::AssemblyMovePercent,
-        },
-    );
-    assembly_action_row(
-        parent,
-        [
-            ("-X", AssemblyTransformAction::Translate(-Vec3::X)),
-            ("-Y", AssemblyTransformAction::Translate(-Vec3::Y)),
-            ("-Z", AssemblyTransformAction::Translate(-Vec3::Z)),
-        ],
-    );
-    assembly_action_row(
-        parent,
-        [
-            ("+X", AssemblyTransformAction::Translate(Vec3::X)),
-            ("+Y", AssemblyTransformAction::Translate(Vec3::Y)),
-            ("+Z", AssemblyTransformAction::Translate(Vec3::Z)),
-        ],
-    );
-
-    spawn_slider(
-        parent,
-        SliderConfig {
-            width: 272.0,
-            min: 1.0,
-            max: 45.0,
-            value: 5.0,
-            label: "Rotate step (deg)",
-            id: SliderId::AssemblyRotationDegrees,
-        },
-    );
-    assembly_action_row(
-        parent,
-        [
-            ("-RX", AssemblyTransformAction::Rotate(-Vec3::X)),
-            ("-RY", AssemblyTransformAction::Rotate(-Vec3::Y)),
-            ("-RZ", AssemblyTransformAction::Rotate(-Vec3::Z)),
-        ],
-    );
-    assembly_action_row(
-        parent,
-        [
-            ("+RX", AssemblyTransformAction::Rotate(Vec3::X)),
-            ("+RY", AssemblyTransformAction::Rotate(Vec3::Y)),
-            ("+RZ", AssemblyTransformAction::Rotate(Vec3::Z)),
-        ],
-    );
-
-    action_button(
-        parent,
-        "Reset selected part pose",
-        AssemblyTransformButton {
-            action: AssemblyTransformAction::Reset,
-        },
-        "AssemblyResetPoseButton",
-        BUTTON_NORMAL,
-        PANEL_BORDER,
-    );
-    hint_text(
-        parent,
-        "Real mesh coordinates are updated. Contact candidates are cleared after movement; run Detect again",
-    );
-}
-
-fn assembly_action_row(
-    parent: &mut ChildSpawnerCommands,
-    actions: [(&'static str, AssemblyTransformAction); 3],
+pub(crate) fn update_assembly_nudge_visibility(
+    state: Res<AssemblyEditorState>,
+    tool: Res<ViewportTool>,
+    mut controls: Query<(&AssemblyNudgeControls, &mut Node)>,
 ) {
-    parent
-        .spawn((Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: px(5.0),
-            ..default()
-        },))
-        .with_children(|row| {
-            for (label, action) in actions {
-                let (background, border) = transform_button_colors(action, Interaction::None);
-                action_button(
-                    row,
-                    label,
-                    AssemblyTransformButton { action },
-                    "AssemblyTransformButton",
-                    background,
-                    border,
-                );
-            }
-        });
-}
-
-fn action_button<M: Component>(
-    parent: &mut ChildSpawnerCommands,
-    label: &'static str,
-    marker: M,
-    name: &'static str,
-    background: Color,
-    border: Color,
-) {
-    parent
-        .spawn((
-            Button,
-            Node {
-                flex_grow: 1.0,
-                height: px(28.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(5.0)),
-                ..default()
-            },
-            BackgroundColor(background),
-            BorderColor::all(border),
-            marker,
-            Name::new(name),
-        ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(11.5),
-                ..default()
-            },
-            TextColor(TEXT_MAIN),
-        ));
+    for (controls, mut node) in &mut controls {
+        let display = nudge_controls_display(controls.0, state.gizmo_mode, *tool);
+        if node.display != display {
+            node.display = display;
+        }
+    }
 }
 
 fn transform_button_colors(
@@ -318,45 +185,6 @@ fn transform_button_colors(
     )
 }
 
-fn hint_text(parent: &mut ChildSpawnerCommands, text: &'static str) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(10.0),
-            ..default()
-        },
-        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
-    ));
-}
-
-fn segment_style(is_first: bool, is_last: bool) -> (BorderRadius, UiRect) {
-    let radius = 5.0;
-    let border = UiRect {
-        top: px(1.0),
-        bottom: px(1.0),
-        left: if is_first { px(1.0) } else { px(0.0) },
-        right: px(1.0),
-    };
-    let (top_left, bottom_left) = if is_first {
-        (radius, radius)
-    } else {
-        (0.0, 0.0)
-    };
-    let (top_right, bottom_right) = if is_last {
-        (radius, radius)
-    } else {
-        (0.0, 0.0)
-    };
-    (
-        BorderRadius::new(
-            px(top_left),
-            px(top_right),
-            px(bottom_right),
-            px(bottom_left),
-        ),
-        border,
-    )
-}
 pub(crate) fn rebuild_assembly_parts(
     mut commands: Commands,
     model: Option<Res<FemModel>>,
@@ -447,35 +275,6 @@ pub(crate) fn rebuild_assembly_parts(
     });
 }
 
-pub(crate) fn assembly_gizmo_mode_button_system(
-    mut state: ResMut<AssemblyEditorState>,
-    mut measurement: ResMut<MeasurementBoxState>,
-    mut buttons: Query<(
-        Ref<Interaction>,
-        &AssemblyGizmoModeButton,
-        &mut BackgroundColor,
-        &mut BorderColor,
-    )>,
-) {
-    for (interaction, button, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            state.gizmo_mode = button.mode;
-            state.hovered_axis = None;
-            state.hovered_part = None;
-            measurement.clear();
-        }
-
-        let active = state.gizmo_mode == button.mode;
-        *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
-        });
-        *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
-    }
-}
-
 pub(crate) fn assembly_part_button_system(
     mut state: ResMut<AssemblyEditorState>,
     mut measurement: ResMut<MeasurementBoxState>,
@@ -503,59 +302,72 @@ pub(crate) fn assembly_part_button_system(
     }
 }
 
-pub(crate) fn assembly_mode_button_system(
+pub(crate) fn assembly_tool_button_system(
     mut commands: Commands,
+    page: Res<SidebarPage>,
     mut tool: ResMut<ViewportTool>,
     mut state: ResMut<AssemblyEditorState>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut hover: ResMut<HoverResult>,
+    mut preview: ResMut<HoverPreviewTargets>,
     mut selection: ResMut<SelectionState>,
-    selected_query: Query<Entity, With<Selected>>,
-    mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        With<AssemblyModeButton>,
-    >,
-    mut labels: Query<&mut Text, With<AssemblyModeButtonLabel>>,
+    marked_query: Query<Entity, Or<(With<Selected>, With<Hovered>)>>,
+    mut buttons: Query<(
+        Ref<Interaction>,
+        &AssemblyToolButton,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+    mut hints: Query<&mut Text, With<AssemblyToolHint>>,
 ) {
-    let Ok((interaction, mut background, mut border)) = buttons.single_mut() else {
-        return;
-    };
-
-    if *interaction == Interaction::Pressed && interaction.is_changed() {
-        *tool = if *tool == ViewportTool::Assembly {
-            ViewportTool::Selection
-        } else {
+    let requested = buttons.iter().find_map(|(interaction, button, _, _)| {
+        (*interaction == Interaction::Pressed && interaction.is_changed()).then_some(button.choice)
+    });
+    if matches!(*page, SidebarPage::Model | SidebarPage::Contact)
+        && let Some(choice) = requested
+        && choice != AssemblyToolChoice::from_state(*tool, state.gizmo_mode)
+    {
+        *tool = if let Some(mode) = choice.gizmo_mode() {
+            state.gizmo_mode = mode;
             ViewportTool::Assembly
+        } else {
+            ViewportTool::Selection
         };
         state.hovered_part = None;
         state.hovered_axis = None;
         measurement.clear();
-
+        hover.clear();
+        preview.targets.clear();
+        preview.highlight_targets.clear();
         if *tool == ViewportTool::Assembly {
-            hover.clear();
             selection.clear();
-            for entity in &selected_query {
+        }
+        for entity in &marked_query {
+            commands.entity(entity).remove::<Hovered>();
+            if *tool == ViewportTool::Assembly {
                 commands.entity(entity).remove::<Selected>();
             }
         }
     }
 
-    let active = *tool == ViewportTool::Assembly;
-    *background = BackgroundColor(match (*interaction, active) {
-        (Interaction::Pressed, _) => BUTTON_PRESSED,
-        (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-        (Interaction::Hovered, false) => BUTTON_HOVERED,
-        (Interaction::None, false) => BUTTON_NORMAL,
-    });
-    *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
-
-    if let Ok(mut label) = labels.single_mut() {
-        **label = if active {
-            "Edit in viewport: ON"
+    // Paint after applying the choice so exactly one button is active this frame.
+    let active_choice = AssemblyToolChoice::from_state(*tool, state.gizmo_mode);
+    for (interaction, button, mut background, mut border) in &mut buttons {
+        let active = active_choice == button.choice;
+        background.set_if_neq(BackgroundColor(match (*interaction, active) {
+            (Interaction::Pressed, _) => BUTTON_PRESSED,
+            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
+            (Interaction::Hovered, false) => BUTTON_HOVERED,
+            (Interaction::None, false) => BUTTON_NORMAL,
+        }));
+        border.set_if_neq(BorderColor::all(if active {
+            ACTIVE_BORDER
         } else {
-            "Edit in viewport: OFF"
-        }
-        .to_string();
+            PANEL_BORDER
+        }));
+    }
+    for mut hint in &mut hints {
+        hint.set_if_neq(Text::new(active_choice.hint()));
     }
 }
 
@@ -574,6 +386,8 @@ fn assembly_slider_value(
 pub(crate) fn assembly_transform_button_system(
     mut model: ResMut<FemModel>,
     state: Res<AssemblyEditorState>,
+    page: Res<SidebarPage>,
+    tool: Res<ViewportTool>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut version: ResMut<FemModelVersion>,
     mut contact_candidates: ResMut<ContactCandidateState>,
@@ -585,9 +399,20 @@ pub(crate) fn assembly_transform_button_system(
         &mut BorderColor,
     )>,
 ) {
+    let can_edit = *tool == ViewportTool::Assembly
+        && matches!(*page, SidebarPage::Model | SidebarPage::Contact)
+        && !state.is_dragging()
+        && state
+            .selected_part
+            .is_some_and(|index| index < model.parts.len());
     for (interaction, button, mut background, mut border) in &mut buttons {
+        let enabled = can_edit
+            && button
+                .action
+                .mode()
+                .is_none_or(|mode| mode == state.gizmo_mode);
         let mut changed = false;
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
             measurement.clear();
             if let Some(part_index) = state.selected_part {
                 changed = match button.action {
@@ -618,8 +443,12 @@ pub(crate) fn assembly_transform_button_system(
 
         let (button_background, button_border) =
             transform_button_colors(button.action, *interaction);
-        *background = BackgroundColor(button_background);
-        *border = BorderColor::all(button_border);
+        background.set_if_neq(BackgroundColor(if enabled {
+            button_background
+        } else {
+            BUTTON_DISABLED
+        }));
+        border.set_if_neq(BorderColor::all(button_border));
     }
 }
 
@@ -627,50 +456,50 @@ pub(crate) fn update_assembly_status_text(
     model: Res<FemModel>,
     version: Res<FemModelVersion>,
     state: Res<AssemblyEditorState>,
-    tool: Res<ViewportTool>,
     sliders: Query<&SliderState, With<SliderTrack>>,
-    mut last_signature: Local<Option<(u64, Option<usize>, ViewportTool, AssemblyGizmoMode, u32)>>,
-    mut query: Query<&mut Text, With<AssemblyStatusText>>,
+    mut last_signature: Local<Option<(u64, Option<usize>, u32, u32)>>,
+    mut query: Query<
+        (Option<&AssemblyStepStatusText>, &mut Text),
+        Or<(With<AssemblyStatusText>, With<AssemblyStepStatusText>)>,
+    >,
 ) {
     let percent = assembly_slider_value(&sliders, SliderId::AssemblyMovePercent, 1.0);
+    let degrees = assembly_slider_value(&sliders, SliderId::AssemblyRotationDegrees, 5.0);
     let signature = (
         version.value,
         state.selected_part,
-        *tool,
-        state.gizmo_mode,
         percent.to_bits(),
+        degrees.to_bits(),
     );
     if *last_signature == Some(signature) {
         return;
     }
     *last_signature = Some(signature);
 
-    let Ok(mut text) = query.single_mut() else {
-        return;
-    };
-    let Some(part_index) = state.selected_part else {
-        **text = "No part selected".to_string();
-        return;
-    };
-    let Some(part) = model.parts.get(part_index) else {
-        **text = "No part selected".to_string();
-        return;
-    };
-
-    let center = model.part_centroid(part_index).unwrap_or(Vec3::ZERO);
-    let step = assembly_reference_size(&model, part_index) * percent / 100.0;
-    let viewport_hint = if *tool == ViewportTool::Assembly {
-        match state.gizmo_mode {
-            AssemblyGizmoMode::Move => "Viewport Move: drag X/Y/Z arrow   Shift=fine Ctrl=snap",
-            AssemblyGizmoMode::Rotate => {
-                "Viewport Rotate: drag RX/RY/RZ ring   Shift=fine Ctrl=snap"
-            }
+    let selected = state
+        .selected_part
+        .and_then(|index| model.parts.get(index).map(|part| (index, part)));
+    let Some((part_index, part)) = selected else {
+        for (_, mut text) in &mut query {
+            text.set_if_neq(Text::new("No part selected"));
         }
-    } else {
-        "Viewport edit is OFF; panel nudges remain available"
+        return;
     };
-    **text = format!(
-        "Selected: {}\nCenter: ({:.4}, {:.4}, {:.4})   Move: {:.4}\n{}",
-        part.name, center.x, center.y, center.z, step, viewport_hint,
-    );
+    let center = model.part_centroid(part_index).unwrap_or(Vec3::ZERO);
+    let move_step = assembly_reference_size(&model, part_index) * percent / 100.0;
+    for (step, mut text) in &mut query {
+        let content = match step.map(|step| step.0) {
+            None => format!(
+                "Selected: {}\nCenter: ({:.4}, {:.4}, {:.4})",
+                part.name, center.x, center.y, center.z,
+            ),
+            Some(AssemblyGizmoMode::Move) => format!("Move step: {move_step:.6} model units"),
+            Some(AssemblyGizmoMode::Rotate) => format!("Rotate step: {degrees:.4} deg"),
+        };
+        text.set_if_neq(Text::new(content));
+    }
 }
+
+#[cfg(test)]
+#[path = "assembly_ui_tests.rs"]
+mod tests;

@@ -248,7 +248,12 @@ pub(crate) fn update_sliders(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     mut track_query: Query<
-        (Entity, &mut SliderState, &ComputedNode, &UiGlobalTransform),
+        (
+            Entity,
+            &mut SliderState,
+            Ref<ComputedNode>,
+            &UiGlobalTransform,
+        ),
         With<SliderTrack>,
     >,
     mut thumb_query: Query<(&SliderThumb, &mut Node), Without<SliderTrack>>,
@@ -265,6 +270,9 @@ pub(crate) fn update_sliders(
 
             if buttons.just_pressed(MouseButton::Left) {
                 for (_, mut state, track_node, track_gt) in &mut track_query {
+                    if track_node.is_empty() {
+                        continue;
+                    }
                     let scale = track_node.inverse_scale_factor;
                     let size = track_node.size() * scale;
                     let center = track_gt.transform_point2(Vec2::ZERO) * scale;
@@ -284,6 +292,10 @@ pub(crate) fn update_sliders(
                 if !state.dragging {
                     continue;
                 }
+                if track_node.is_empty() {
+                    state.dragging = false;
+                    continue;
+                }
 
                 let scale = track_node.inverse_scale_factor;
                 let track_w = (track_node.size().x * scale).max(1.0);
@@ -296,16 +308,17 @@ pub(crate) fn update_sliders(
         }
     }
 
-    // Visual sync: runs for any SliderState change, from a drag above or
+    // Visual sync: runs for any SliderState or computed layout change, from a drag above or
     // from another system (e.g. keyboard step navigation) writing
-    // `state.value` directly.
+    // `state.value` directly. Revealing a hidden panel must also restore the
+    // thumb/fill using the newly computed width, even if its value is unchanged.
     //
     // Must iterate `&mut track_query` (not `&track_query`): only `Mut<T>`
     // implements `DetectChanges`/`is_changed()`. Borrowing the query
     // immutably here would yield a plain `&SliderState` with no change
     // metadata, even though the field type itself is `&mut SliderState`.
     for (track_entity, state, track_node, _track_gt) in &mut track_query {
-        if !state.is_changed() {
+        if track_node.is_empty() || (!state.is_changed() && !track_node.is_changed()) {
             continue;
         }
 
@@ -336,3 +349,7 @@ pub(crate) fn update_sliders(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "slider_tests.rs"]
+mod tests;

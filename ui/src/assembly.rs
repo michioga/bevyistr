@@ -97,6 +97,14 @@ enum AssemblyDragKind {
 }
 
 impl AssemblyDrag {
+    fn matches_editor(self, state: &AssemblyEditorState) -> bool {
+        let mode = match self.kind {
+            AssemblyDragKind::Translation { .. } => AssemblyGizmoMode::Move,
+            AssemblyDragKind::Rotation { .. } => AssemblyGizmoMode::Rotate,
+        };
+        state.selected_part == Some(self.part_index) && state.gizmo_mode == mode
+    }
+
     fn preview_transform(self) -> Transform {
         match self.kind {
             AssemblyDragKind::Translation { preview_delta, .. } => {
@@ -457,7 +465,17 @@ pub(crate) fn assembly_viewport_input_system(
     mut part_visuals: Query<(&FemPartVisual, &mut Transform)>,
 ) {
     if *tool != ViewportTool::Assembly {
+        if state.is_dragging() {
+            measurement.clear();
+        }
         cancel_drag(&mut state, &mut part_visuals, &mut mode);
+        return;
+    }
+
+    // Switching operation or target must not commit an old drag on release.
+    if state.drag.is_some_and(|drag| !drag.matches_editor(&state)) {
+        cancel_drag(&mut state, &mut part_visuals, &mut mode);
+        measurement.clear();
         return;
     }
 
@@ -947,6 +965,104 @@ fn cancel_drag(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_tool_or_target_cancels_the_drag_without_committing_geometry() {
+        for initial in AssemblyGizmoMode::ALL {
+            for reason in 0..3 {
+                let model = FemModel::demo_hex8();
+                let original: Vec<_> = model.meshes[0]
+                    .nodes
+                    .iter()
+                    .map(|node| node.position)
+                    .collect();
+                let kind = match initial {
+                    AssemblyGizmoMode::Move => AssemblyDragKind::Translation {
+                        last_cursor: Vec2::ZERO,
+                        screen_axis: Vec2::X,
+                        world_per_pixel: 1.0,
+                        accumulated_scalar: 2.0,
+                        preview_delta: Vec3::X * 2.0,
+                    },
+                    AssemblyGizmoMode::Rotate => AssemblyDragKind::Rotation {
+                        center: Vec3::ZERO,
+                        last_direction: Vec3::Y,
+                        accumulated_radians: 0.5,
+                        preview_radians: 0.5,
+                    },
+                };
+                let drag = AssemblyDrag {
+                    part_index: 0,
+                    mesh_index: 0,
+                    axis: Vec3::X,
+                    kind,
+                };
+                let mut editor = AssemblyEditorState {
+                    gizmo_mode: initial,
+                    drag: Some(drag),
+                    ..default()
+                };
+                assert!(drag.matches_editor(&editor));
+                let mut tool = ViewportTool::Assembly;
+                match reason {
+                    0 => tool = ViewportTool::Selection,
+                    1 => editor.selected_part = Some(1),
+                    _ => {
+                        editor.gizmo_mode = match initial {
+                            AssemblyGizmoMode::Move => AssemblyGizmoMode::Rotate,
+                            AssemblyGizmoMode::Rotate => AssemblyGizmoMode::Move,
+                        }
+                    }
+                }
+                let mut measurement = MeasurementBoxState::default();
+                measurement.begin_assembly_translation(0, Vec3::X);
+                let mut buttons = ButtonInput::<MouseButton>::default();
+                buttons.press(MouseButton::Left);
+                buttons.release(MouseButton::Left);
+                let mut app = App::new();
+                app.insert_resource(model)
+                    .insert_resource(tool)
+                    .insert_resource(editor)
+                    .insert_resource(measurement)
+                    .insert_resource(buttons)
+                    .insert_resource(InteractionMode::AssemblyDrag)
+                    .init_resource::<ButtonInput<KeyCode>>()
+                    .init_resource::<UiKeyboardState>()
+                    .init_resource::<UiPointerState>()
+                    .init_resource::<FemModelVersion>()
+                    .init_resource::<ContactCandidateState>()
+                    .add_systems(Update, assembly_viewport_input_system);
+                let visual = app
+                    .world_mut()
+                    .spawn((FemPartVisual { mesh_index: 0 }, drag.preview_transform()))
+                    .id();
+                app.update();
+
+                assert!(!app.world().resource::<AssemblyEditorState>().is_dragging());
+                assert_eq!(
+                    *app.world().resource::<InteractionMode>(),
+                    InteractionMode::Idle
+                );
+                assert!(
+                    app.world()
+                        .resource::<MeasurementBoxState>()
+                        .target
+                        .is_none()
+                );
+                assert_eq!(
+                    *app.world().get::<Transform>(visual).unwrap(),
+                    Transform::default()
+                );
+                assert_eq!(app.world().resource::<FemModelVersion>().value, 0);
+                let after: Vec<_> = app.world().resource::<FemModel>().meshes[0]
+                    .nodes
+                    .iter()
+                    .map(|node| node.position)
+                    .collect();
+                assert_eq!(original, after);
+            }
+        }
+    }
 
     #[test]
     fn screen_distance_hits_the_middle_of_an_axis_handle() {
