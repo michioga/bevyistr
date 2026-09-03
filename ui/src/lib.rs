@@ -7,6 +7,9 @@ mod contact_ui;
 mod layout;
 mod load_direction;
 mod material_editor;
+mod material_catalog;
+mod material_assignment;
+mod material_library;
 mod materials_ui;
 mod measurement;
 mod mpc_ui;
@@ -75,10 +78,13 @@ use load_direction::{
     spawn_load_direction_gizmo, update_load_direction_gizmo_visuals,
 };
 use material_editor::{MaterialEditorState, material_numeric_input_system};
+use material_library::{MaterialLibraryState, material_library_system};
+use material_assignment::{MaterialViewportHover, material_assignment_tool, material_assignment_hover, material_assignment_click, draw_material_target};
 use materials_ui::{
     SelectedEgrp, SelectedMaterialForSection, SelectedSectionType, add_section_button_system,
-    egrp_select_button_system, material_preset_button_system, material_select_button_system,
+    egrp_select_button_system, material_color_button_system, material_select_button_system,
     rebuild_materials_sections_list, rebuild_section_def_panel, section_type_button_system,
+    update_material_workflow,
 };
 use measurement::{
     MeasurementBoxState, measurement_box_input_system, spawn_measurement_box,
@@ -163,6 +169,9 @@ impl Plugin for UiPlugin {
         app.init_resource::<SelectedEgrp>();
         app.init_resource::<SelectedMaterialForSection>();
         app.init_resource::<MaterialEditorState>();
+        app.init_resource::<MaterialLibraryState>();
+        app.init_resource::<MaterialViewportHover>();
+        app.init_resource::<visualization::MaterialColorMode>();
         app.init_resource::<SurfaceSelectionSettings>();
         app.init_resource::<ContactDefinitionSettings>();
         app.init_resource::<MpcEquationEditorState>();
@@ -205,7 +214,7 @@ impl Plugin for UiPlugin {
             material_numeric_input_system
                 .after(update_ui_keyboard_state)
                 .after(sidebar_page_button_system)
-                .after(material_preset_button_system)
+                .after(material_library_system)
                 .after(material_select_button_system)
                 .after(delete_setup_entry_button_system)
                 .after(apply_pending_cnt_system)
@@ -399,13 +408,13 @@ impl Plugin for UiPlugin {
                     .after(dload_kind_button_system)
                     .after(sync_quick_load_controls)
                     .after(slider::update_sliders),
-                material_preset_button_system,
-                material_select_button_system.after(material_preset_button_system),
+                material_library_system.after(sidebar_page_button_system).after(egrp_select_button_system),
+                material_select_button_system.after(material_library_system),
                 delete_setup_entry_button_system,
                 clear_all_bc_loads_button_system,
                 section_type_button_system,
                 egrp_select_button_system,
-                add_section_button_system,
+                add_section_button_system.after(egrp_select_button_system),
                 analysis_type_button_system,
                 solver_method_button_system,
             ),
@@ -415,7 +424,10 @@ impl Plugin for UiPlugin {
         app.add_systems(
             Update,
             (
-                rebuild_section_def_panel.after(material_numeric_input_system),
+                rebuild_section_def_panel
+                    .after(material_numeric_input_system)
+                    .before(add_section_button_system),
+                update_material_workflow.after(rebuild_section_def_panel).after(egrp_select_button_system),
                 rebuild_boundary_loads_list,
                 rebuild_materials_sections_list.after(material_numeric_input_system),
                 toggle_constraints_button_system,
@@ -441,6 +453,7 @@ impl Plugin for UiPlugin {
                     .after(create_mpc_pair_button_system)
                     .after(solver_numeric_input_system)
                     .after(material_numeric_input_system)
+                    .after(add_section_button_system)
                     .after(measurement_box_input_system),
                 undo_redo_system
                     .after(push_undo_before_setup_change)
@@ -465,6 +478,16 @@ impl Plugin for UiPlugin {
                 update_analysis_setup_stats_text,
             ),
         );
+
+        app.add_systems(
+            Update,
+            material_color_button_system.in_set(InteractionSystems::UiInput),
+        );
+        app.add_systems(Update, material_assignment_tool.after(sidebar_page_button_system)
+            .after(assembly_tool_button_system).in_set(InteractionSystems::UiInput));
+        app.add_systems(Update, material_assignment_hover.in_set(InteractionSystems::Picking));
+        app.add_systems(Update, material_assignment_click.in_set(InteractionSystems::Selection));
+        app.add_systems(Update, draw_material_target.after(InteractionSystems::Selection));
 
         // Group 6: assembly part selection and pose editing.
         app.add_systems(

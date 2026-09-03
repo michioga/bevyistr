@@ -1,5 +1,8 @@
 use crate::layout::{DeleteSetupEntry, ScrollableList, SidebarPage, SidebarPageContent};
 use crate::material_editor::spawn_material_exact_editor;
+use crate::material_library::{
+    MaterialLibraryState, resolved_material_name, spawn_material_library, use_material,
+};
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -12,6 +15,10 @@ const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
 
+#[cfg(test)]
+#[path = "material_assignment_tests.rs"]
+mod tests;
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SelectedSectionType {
     #[default]
@@ -21,7 +28,125 @@ pub(crate) enum SelectedSectionType {
 }
 
 #[derive(Resource, Debug, Clone, Default)]
-pub(crate) struct SelectedEgrp(pub Option<String>);
+pub(crate) struct SelectedEgrp(pub Option<AssignmentTarget>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AssignmentTarget {
+    pub mesh_index: usize,
+    pub group: Option<String>,
+}
+
+pub(crate) fn choose_assignment_target(
+    selected: &mut SelectedEgrp,
+    target: Option<AssignmentTarget>,
+    material: &mut SelectedMaterialForSection,
+    library: &mut MaterialLibraryState,
+) {
+    if selected.0 != target {
+        selected.0 = target;
+        material.0 = None;
+        library.selected = None;
+    }
+}
+
+fn valid_target<'a>(
+    target: &'a SelectedEgrp,
+    model: Option<&FemModel>,
+) -> Option<&'a AssignmentTarget> {
+    target.0.as_ref().filter(|target| {
+        model
+            .and_then(|m| m.meshes.get(target.mesh_index))
+            .is_some_and(|mesh| {
+                target
+                    .group
+                    .as_ref()
+                    .is_none_or(|name| mesh.element_sets.iter().any(|g| &g.name == name))
+            })
+    })
+}
+
+fn needs_new_section(setup: &fem_core::AnalysisSetup, target: &AssignmentTarget) -> bool {
+    !setup
+        .sections
+        .iter()
+        .any(|s| s.mesh_index == target.mesh_index && s.element_set_name == target.group)
+}
+
+fn target_label(target: &AssignmentTarget, model: &FemModel) -> String {
+    let name = model
+        .parts
+        .iter()
+        .find(|p| p.mesh_index == target.mesh_index)
+        .map(|p| p.name.as_str())
+        .unwrap_or("Mesh");
+    format!(
+        "[{}] {} / {}",
+        target.mesh_index + 1,
+        name,
+        target.group.as_deref().unwrap_or("whole part")
+    )
+}
+
+pub(crate) fn update_material_workflow(
+    target: Res<SelectedEgrp>,
+    model: Option<Res<FemModel>>,
+    setup: Res<fem_core::AnalysisSetup>,
+    kind: Res<SelectedSectionType>,
+    mut steps: Query<
+        &mut Node,
+        (
+            With<MaterialAfterTarget>,
+            Without<NewSectionControls>,
+            Without<SectionSizeControls>,
+        ),
+    >,
+    mut defaults: Query<
+        &mut Node,
+        (
+            With<NewSectionControls>,
+            Without<MaterialAfterTarget>,
+            Without<SectionSizeControls>,
+        ),
+    >,
+    mut sizes: Query<
+        &mut Node,
+        (
+            With<SectionSizeControls>,
+            Without<MaterialAfterTarget>,
+            Without<NewSectionControls>,
+        ),
+    >,
+    mut labels: Query<&mut Text, With<MaterialTargetStatus>>,
+) {
+    let target = valid_target(&target, model.as_deref());
+    for mut node in &mut steps {
+        node.display = if target.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for mut node in &mut defaults {
+        node.display = if target.is_some_and(|t| needs_new_section(&setup, t)) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for mut node in &mut sizes {
+        node.display = if *kind == SelectedSectionType::Solid {
+            Display::None
+        } else {
+            Display::Flex
+        };
+    }
+    let text = target
+        .map(|t| format!("Selected: {}", target_label(t, model.as_deref().unwrap())))
+        .unwrap_or_else(|| "Click a part in the viewport, or choose a part/group below".into());
+    for mut label in &mut labels {
+        label.set_if_neq(Text::new(&text));
+    }
+}
 
 #[derive(Resource, Debug, Clone, Default)]
 pub(crate) struct SelectedMaterialForSection(pub Option<String>);
@@ -30,13 +155,15 @@ pub(crate) struct SelectedMaterialForSection(pub Option<String>);
 pub(crate) struct SectionTypeButton(pub SelectedSectionType);
 
 #[derive(Component, Debug, Clone)]
-pub(crate) struct EgrpSelectButton(pub Option<String>);
+pub(crate) struct EgrpSelectButton(pub AssignmentTarget);
 
 #[derive(Component, Debug, Clone)]
 pub(crate) struct MaterialSelectButton(pub String);
 
 #[derive(Component)]
 pub(crate) struct AddSectionButton;
+#[derive(Component)]
+pub(crate) struct AddSectionLabel;
 
 #[derive(Component)]
 pub(crate) struct SectionDefEgrpRow;
@@ -44,13 +171,36 @@ pub(crate) struct SectionDefEgrpRow;
 #[derive(Component)]
 pub(crate) struct MaterialSelectorRow;
 
-#[derive(Component, Debug, Clone, Copy)]
-pub(crate) struct MaterialPresetButton {
-    pub preset_index: usize,
-}
-
 #[derive(Component)]
 pub(crate) struct MaterialsSectionsListContainer;
+
+#[derive(Component)]
+pub(crate) struct MaterialAfterTarget;
+#[derive(Component)]
+pub(crate) struct MaterialTargetStatus;
+#[derive(Component)]
+pub(crate) struct NewSectionControls;
+#[derive(Component)]
+pub(crate) struct SectionSizeControls;
+
+fn material_heading(parent: &mut ChildSpawnerCommands, text: &str) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        TextColor(TEXT_MAIN),
+    ));
+}
+fn material_step_node() -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: px(5.0),
+        margin: UiRect::top(px(6.0)),
+        ..default()
+    }
+}
 
 pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
     parent
@@ -59,135 +209,45 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(5.0),
                 padding: UiRect::all(px(6.0)),
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(5.0)),
                 ..default()
             },
-            BorderColor::all(Color::srgba(0.30, 0.50, 0.36, 0.50)),
             SidebarPageContent::page(SidebarPage::Materials),
             Name::new("MaterialsEditorPanel"),
         ))
         .with_children(|panel| {
+            material_heading(panel, "1 | SELECT OBJECT");
             panel.spawn((
-                Text::new("MATERIAL | select to edit and assign"),
+                Text::new("Click a part in the viewport, or choose a part/group below"),
                 TextFont {
-                    font_size: FontSize::Px(9.5),
+                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(TEXT_MAIN),
-            ));
-            panel
-                .spawn((Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(4.0),
-                    margin: UiRect::top(px(4.0)),
-                    ..default()
-                },))
-                .with_children(|row| {
-                    for (index, preset) in material_presets().iter().enumerate() {
-                        material_preset_button(row, index, preset.label);
-                    }
-                });
-
-            panel.spawn((
-                Text::new(
-                    "Presets: Pa, kg/m^3 (m-kg-s). No unit conversion; check your model units.",
-                ),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.72, 0.68, 0.48)),
+                MaterialTargetStatus,
             ));
             panel.spawn((
                 Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(4.0),
-                    flex_wrap: FlexWrap::Wrap,
+                    flex_direction: FlexDirection::Column,
                     row_gap: px(4.0),
+                    max_height: px(125.0),
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
-                MaterialSelectorRow,
-                Name::new("MaterialSelectorRow"),
+                ScrollPosition::default(),
+                ScrollableList,
+                SectionDefEgrpRow,
+                Name::new("SectionDefEgrpRow"),
             ));
-            spawn_material_exact_editor(panel);
-
             panel
                 .spawn((
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(4.0),
-                        margin: UiRect::top(px(6.0)),
-                        padding: UiRect::all(px(6.0)),
-                        border: UiRect::all(px(1.0)),
-                        border_radius: BorderRadius::all(px(5.0)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgba(0.30, 0.50, 0.36, 0.50)),
-                    Name::new("SectionDefPanel"),
+                    material_step_node(),
+                    MaterialAfterTarget,
+                    Name::new("MaterialChoiceStep"),
                 ))
-                .with_children(|section| {
-                    section.spawn((
-                        Text::new("Add Section"),
-                        TextFont {
-                            font_size: FontSize::Px(9.5),
-                            ..default()
-                        },
-                        TextColor(Color::srgba(0.44, 0.70, 0.54, 0.90)),
-                    ));
-
-                    section
-                        .spawn((Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: px(4.0),
-                            ..default()
-                        },))
-                        .with_children(|row| {
-                            for (kind, label) in [
-                                (SelectedSectionType::Solid, "Solid"),
-                                (SelectedSectionType::Shell, "Shell"),
-                                (SelectedSectionType::Beam, "Beam"),
-                            ] {
-                                row.spawn((
-                                    Button,
-                                    Node {
-                                        flex_grow: 1.0,
-                                        height: px(22.0),
-                                        justify_content: JustifyContent::Center,
-                                        align_items: AlignItems::Center,
-                                        border: UiRect::all(px(1.0)),
-                                        border_radius: BorderRadius::all(px(4.0)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(BUTTON_NORMAL),
-                                    BorderColor::all(PANEL_BORDER),
-                                    SectionTypeButton(kind),
-                                    Name::new(format!("SectionType_{label}")),
-                                ))
-                                .with_child((
-                                    Text::new(label),
-                                    TextFont {
-                                        font_size: FontSize::Px(9.5),
-                                        ..default()
-                                    },
-                                    TextColor(TEXT_MAIN),
-                                ));
-                            }
-                        });
-
-                    spawn_slider(
-                        section,
-                        SliderConfig {
-                            width: 268.0,
-                            min: 0.0,
-                            max: 50.0,
-                            value: 2.0,
-                            label: "Thickness / Area",
-                            id: SliderId::SectionThickness,
-                        },
-                    );
-
-                    section.spawn((
+                .with_children(|choice| {
+                    material_heading(choice, "2 | SELECT MATERIAL");
+                    material_heading(choice, "Materials already in this model");
+                    choice.spawn((
                         Node {
                             flex_direction: FlexDirection::Row,
                             column_gap: px(4.0),
@@ -195,15 +255,88 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                             row_gap: px(4.0),
                             ..default()
                         },
-                        SectionDefEgrpRow,
-                        Name::new("SectionDefEgrpRow"),
+                        MaterialSelectorRow,
+                        Name::new("MaterialSelectorRow"),
                     ));
+                    spawn_material_library(choice);
+                    spawn_material_exact_editor(choice);
+                });
+            panel
+                .spawn((
+                    material_step_node(),
+                    MaterialAfterTarget,
+                    Name::new("SectionDefPanel"),
+                ))
+                .with_children(|section| {
+                    material_heading(section, "3 | CONFIRM ASSIGNMENT");
+                    section
+                        .spawn((material_step_node(), NewSectionControls))
+                        .with_children(|defaults| {
+                            material_heading(
+                                defaults,
+                                "New section type (existing thickness/area is kept)",
+                            );
+                            defaults
+                                .spawn(Node {
+                                    flex_direction: FlexDirection::Row,
+                                    column_gap: px(4.0),
+                                    ..default()
+                                })
+                                .with_children(|row| {
+                                    for (kind, label) in [
+                                        (SelectedSectionType::Solid, "Solid"),
+                                        (SelectedSectionType::Shell, "Shell"),
+                                        (SelectedSectionType::Beam, "Beam"),
+                                    ] {
+                                        row.spawn((
+                                            Button,
+                                            Node {
+                                                flex_grow: 1.0,
+                                                height: px(22.0),
+                                                justify_content: JustifyContent::Center,
+                                                align_items: AlignItems::Center,
+                                                border: UiRect::all(px(1.0)),
+                                                border_radius: BorderRadius::all(px(4.0)),
+                                                ..default()
+                                            },
+                                            BackgroundColor(BUTTON_NORMAL),
+                                            BorderColor::all(PANEL_BORDER),
+                                            SectionTypeButton(kind),
+                                            Name::new(format!("SectionType_{label}")),
+                                        ))
+                                        .with_child((
+                                            Text::new(label),
+                                            TextFont {
+                                                font_size: FontSize::Px(9.5),
+                                                ..default()
+                                            },
+                                            TextColor(TEXT_MAIN),
+                                        ));
+                                    }
+                                });
+                            defaults
+                                .spawn((material_step_node(), SectionSizeControls))
+                                .with_children(|size| {
+                                    spawn_slider(
+                                        size,
+                                        SliderConfig {
+                                            width: 268.0,
+                                            min: 0.0,
+                                            max: 50.0,
+                                            value: 2.0,
+                                            label: "Thickness / Area",
+                                            id: SliderId::SectionThickness,
+                                        },
+                                    );
+                                });
+                        });
                     section
                         .spawn((
                             Button,
                             Node {
-                                width: Val::Percent(100.0),
-                                height: px(24.0),
+                                width: percent(100.0),
+                                min_height: px(30.0),
+                                padding: UiRect::all(px(4.0)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 border: UiRect::all(px(1.0)),
@@ -216,27 +349,27 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                             Name::new("AddSectionButton"),
                         ))
                         .with_child((
-                            Text::new("Add Section"),
+                            Text::new("Choose a material"),
                             TextFont {
                                 font_size: FontSize::Px(10.5),
                                 ..default()
                             },
                             TextColor(TEXT_MAIN),
+                            AddSectionLabel,
                         ));
+                    material_heading(
+                        section,
+                        "Only confirmation changes the assignment. Ctrl+Z undoes it.",
+                    );
                 });
         });
-
     parent.spawn((
         Text::new("Materials & sections:"),
         TextFont {
             font_size: FontSize::Px(9.5),
             ..default()
         },
-        TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
-        Node {
-            margin: UiRect::top(px(4.0)),
-            ..default()
-        },
+        TextColor(TEXT_MAIN),
         SidebarPageContent::page(SidebarPage::Materials),
     ));
     parent.spawn((
@@ -245,7 +378,6 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
             row_gap: px(3.0),
             max_height: px(90.0),
             overflow: Overflow::scroll_y(),
-            margin: UiRect::top(px(4.0)),
             ..default()
         },
         ScrollPosition::default(),
@@ -254,125 +386,6 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
         SidebarPageContent::page(SidebarPage::Materials),
         Name::new("MaterialsSectionsListContainer"),
     ));
-}
-
-struct MaterialPreset {
-    label: &'static str,
-    name: &'static str,
-    young_modulus: f32,
-    poisson_ratio: f32,
-    density: f32,
-}
-
-fn material_presets() -> &'static [MaterialPreset] {
-    const PRESETS: &[MaterialPreset] = &[
-        MaterialPreset {
-            label: "+ Steel",
-            name: "STEEL",
-            young_modulus: 2.05e11,
-            poisson_ratio: 0.30,
-            density: 7850.0,
-        },
-        MaterialPreset {
-            label: "+ Aluminum",
-            name: "ALUMINUM",
-            young_modulus: 6.90e10,
-            poisson_ratio: 0.33,
-            density: 2700.0,
-        },
-        MaterialPreset {
-            label: "+ Concrete",
-            name: "CONCRETE",
-            young_modulus: 3.00e10,
-            poisson_ratio: 0.20,
-            density: 2400.0,
-        },
-        MaterialPreset {
-            label: "+ Titanium",
-            name: "TITANIUM",
-            young_modulus: 1.14e11,
-            poisson_ratio: 0.34,
-            density: 4500.0,
-        },
-    ];
-
-    PRESETS
-}
-
-fn material_preset_button(
-    parent: &mut ChildSpawnerCommands,
-    preset_index: usize,
-    label: &'static str,
-) {
-    parent
-        .spawn((
-            Button,
-            Node {
-                flex_grow: 1.0,
-                height: px(22.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(4.0)),
-                ..default()
-            },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::all(PANEL_BORDER),
-            MaterialPresetButton { preset_index },
-            Name::new(format!("MaterialPreset_{label}")),
-        ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(9.5),
-                ..default()
-            },
-            TextColor(TEXT_MAIN),
-        ));
-}
-pub(crate) fn material_preset_button_system(
-    mut setup: ResMut<fem_core::AnalysisSetup>,
-    mut selected: ResMut<SelectedMaterialForSection>,
-    page: Res<SidebarPage>,
-    mut buttons: Query<
-        (
-            Ref<Interaction>,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &MaterialPresetButton,
-        ),
-        With<MaterialPresetButton>,
-    >,
-) {
-    for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *page == SidebarPage::Materials
-            && *interaction == Interaction::Pressed
-            && interaction.is_changed()
-        {
-            if let Some(preset) = material_presets().get(btn.preset_index) {
-                if setup.material_by_name(preset.name).is_none() {
-                    setup.add_material(
-                        preset.name,
-                        Some(preset.young_modulus),
-                        Some(preset.poisson_ratio),
-                        Some(preset.density),
-                    );
-                }
-                // An existing material may have imported/custom values. Select
-                // it without replacing those values with the SI preset.
-                selected.0 = Some(preset.name.to_string());
-            }
-        }
-
-        let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
-
-        *bg = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
-    }
 }
 
 /// Handles clicks on the ✕ delete buttons in the BC/load and
@@ -555,6 +568,9 @@ pub(crate) fn section_type_button_system(
 /// Selects an EGRP for the section definition panel.
 pub(crate) fn egrp_select_button_system(
     mut selected: ResMut<SelectedEgrp>,
+    mut material: ResMut<SelectedMaterialForSection>,
+    mut library: ResMut<MaterialLibraryState>,
+    page: Res<SidebarPage>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -566,11 +582,19 @@ pub(crate) fn egrp_select_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            selected.0 = btn.0.clone();
+        if *page == SidebarPage::Materials
+            && *interaction == Interaction::Pressed
+            && interaction.is_changed()
+        {
+            choose_assignment_target(
+                &mut selected,
+                Some(btn.0.clone()),
+                &mut material,
+                &mut library,
+            );
         }
 
-        let active = selected.0 == btn.0;
+        let active = selected.0.as_ref() == Some(&btn.0);
         let color = match (*interaction, active) {
             (Interaction::Pressed, _) => BUTTON_PRESSED,
             (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
@@ -585,6 +609,8 @@ pub(crate) fn egrp_select_button_system(
 /// Selects a material for the section definition panel.
 pub(crate) fn material_select_button_system(
     mut selected: ResMut<SelectedMaterialForSection>,
+    target: Res<SelectedEgrp>,
+    mut library: ResMut<MaterialLibraryState>,
     page: Res<SidebarPage>,
     mut buttons: Query<
         (
@@ -598,10 +624,12 @@ pub(crate) fn material_select_button_system(
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
         if *page == SidebarPage::Materials
+            && target.0.is_some()
             && *interaction == Interaction::Pressed
             && interaction.is_changed()
         {
             selected.0 = Some(btn.0.clone());
+            library.selected = None;
         }
 
         let active = selected.0.as_deref() == Some(&btn.0);
@@ -616,47 +644,168 @@ pub(crate) fn material_select_button_system(
     }
 }
 
-/// Applies the configured section to [`fem_core::AnalysisSetup`].
+/// Assignment changes material identity, preserving existing section geometry.
+fn assign_material(
+    setup: &mut fem_core::AnalysisSetup,
+    target: &AssignmentTarget,
+    name: &str,
+    kind: fem_core::SectionKind,
+) -> bool {
+    let matching: Vec<_> = setup
+        .sections
+        .iter()
+        .enumerate()
+        .filter(|(_, section)| {
+            section.mesh_index == target.mesh_index
+                && (target.group.is_none() || section.element_set_name == target.group)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if matching.is_empty() {
+        setup.add_section(
+            target.mesh_index,
+            name.to_string(),
+            target.group.clone(),
+            kind,
+        );
+        return true;
+    }
+    let mut changed = false;
+    for index in matching {
+        if setup.sections[index].material_name != name {
+            setup.sections[index].material_name = name.to_string();
+            changed = true;
+        }
+    }
+    // A whole-part assignment must also cover elements outside named groups.
+    if target.group.is_none()
+        && !setup.sections.iter().any(|section| {
+            section.mesh_index == target.mesh_index && section.element_set_name.is_none()
+        })
+    {
+        setup.add_section(target.mesh_index, name, None, kind);
+        changed = true;
+    }
+    changed
+}
+
 pub(crate) fn add_section_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
+    model: Option<Res<FemModel>>,
+    page: Res<SidebarPage>,
     section_type: Res<SelectedSectionType>,
     egrp: Res<SelectedEgrp>,
-    material_sel: Res<SelectedMaterialForSection>,
+    mut material_sel: ResMut<SelectedMaterialForSection>,
+    mut library: ResMut<MaterialLibraryState>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<AddSectionButton>,
     >,
+    mut labels: Query<&mut Text, With<AddSectionLabel>>,
 ) {
+    let thickness = slider_query
+        .iter()
+        .find(|s| s.id == SliderId::SectionThickness)
+        .map(|s| s.value)
+        .unwrap_or(2.0);
+    let kind = match *section_type {
+        SelectedSectionType::Solid => fem_core::SectionKind::Solid,
+        SelectedSectionType::Shell => fem_core::SectionKind::Shell { thickness },
+        SelectedSectionType::Beam => fem_core::SectionKind::Beam { area: thickness },
+    };
+    let target = valid_target(&egrp, model.as_deref());
+    let draft = library.draft();
+    let name = if library.selected.is_some() {
+        draft.as_ref().map(|m| resolved_material_name(&setup, m))
+    } else {
+        material_sel
+            .0
+            .as_ref()
+            .filter(|name| setup.materials.iter().filter(|m| &m.name == *name).count() == 1)
+            .cloned()
+    };
+    let valid_size = target.is_none_or(|t| !needs_new_section(&setup, t))
+        || *section_type == SelectedSectionType::Solid
+        || (thickness.is_finite() && thickness > 0.0);
+    let enabled =
+        *page == SidebarPage::Materials && target.is_some() && name.is_some() && valid_size;
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            let Some(mat_name) = &material_sel.0 else {
-                continue;
+        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+            let before = setup.materials.len();
+            let final_name = if let Some(draft) = draft.clone() {
+                use_material(setup.bypass_change_detection(), draft)
+            } else {
+                name.clone().unwrap()
             };
-
-            let thickness = slider_query
-                .iter()
-                .find(|s| s.id == SliderId::SectionThickness)
-                .map(|s| s.value)
-                .unwrap_or(2.0);
-
-            let kind = match *section_type {
-                SelectedSectionType::Solid => fem_core::SectionKind::Solid,
-                SelectedSectionType::Shell => fem_core::SectionKind::Shell { thickness },
-                SelectedSectionType::Beam => fem_core::SectionKind::Beam { area: thickness },
-            };
-
-            setup.add_section(0, mat_name.clone(), egrp.0.clone(), kind);
+            let assigned = assign_material(
+                setup.bypass_change_detection(),
+                target.unwrap(),
+                &final_name,
+                kind,
+            );
+            if assigned || setup.materials.len() != before {
+                setup.set_changed();
+            }
+            material_sel.0 = Some(final_name);
+            library.selected = None;
         }
-
-        let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
-        *bg = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
+        bg.set_if_neq(BackgroundColor(if !enabled {
+            Color::srgb(0.06, 0.07, 0.08)
+        } else {
+            match *interaction {
+                Interaction::Pressed => BUTTON_PRESSED,
+                Interaction::Hovered => BUTTON_HOVERED,
+                _ => BUTTON_NORMAL,
+            }
+        }));
+        border.set_if_neq(BorderColor::all(PANEL_BORDER));
     }
+    let text = if target.is_none() {
+        "Select an object first".into()
+    } else if !valid_size {
+        "Thickness / area must be positive".into()
+    } else if let Some(name) = &name {
+        format!(
+            "Confirm: {name} -> {}",
+            target_label(target.unwrap(), model.as_deref().unwrap())
+        )
+    } else if library.selected.is_some() {
+        "Choose model units before confirming".into()
+    } else {
+        "Choose a material above".into()
+    };
+    for mut label in &mut labels {
+        label.set_if_neq(Text::new(&text));
+    }
+}
+
+fn assignment_button(row: &mut ChildSpawnerCommands, target: AssignmentTarget, label: String) {
+    let key = match &target.group {
+        None => format!("Assignment_{}_WHOLE", target.mesh_index),
+        Some(group) => format!("Assignment_{}_GROUP_{group}", target.mesh_index),
+    };
+    row.spawn((
+        Button,
+        Node {
+            padding: UiRect::axes(px(6.0), px(3.0)),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(4.0)),
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        BorderColor::all(PANEL_BORDER),
+        EgrpSelectButton(target),
+        Name::new(key),
+    ))
+    .with_child((
+        Text::new(label),
+        TextFont {
+            font_size: FontSize::Px(9.5),
+            ..default()
+        },
+        TextColor(TEXT_MAIN),
+    ));
 }
 
 /// Rebuilds the dynamic EGRP and material selector rows in the section
@@ -667,11 +816,17 @@ pub(crate) fn rebuild_section_def_panel(
     setup: Res<fem_core::AnalysisSetup>,
     version: Res<FemModelVersion>,
     mut last_ver: Local<Option<u64>>,
+    mut target: ResMut<SelectedEgrp>,
+    mut selected_material: ResMut<SelectedMaterialForSection>,
+    mut library: ResMut<MaterialLibraryState>,
     egrp_row_q: Query<Entity, With<SectionDefEgrpRow>>,
     mat_row_q: Query<Entity, With<MaterialSelectorRow>>,
     children_q: Query<&Children>,
 ) {
     let ver_changed = *last_ver != Some(version.value);
+    if ver_changed && last_ver.is_some() {
+        choose_assignment_target(&mut target, None, &mut selected_material, &mut library);
+    }
     *last_ver = Some(version.value);
 
     if !ver_changed && !setup.is_changed() {
@@ -687,54 +842,31 @@ pub(crate) fn rebuild_section_def_panel(
         }
 
         commands.entity(egrp_row).with_children(|row| {
-            // "ALL" option
-            row.spawn((
-                Button,
-                Node {
-                    padding: UiRect::axes(px(8.0), px(3.0)),
-                    border: UiRect::all(px(1.0)),
-                    border_radius: BorderRadius::all(px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(BUTTON_NORMAL),
-                BorderColor::all(PANEL_BORDER),
-                EgrpSelectButton(None),
-                Name::new("Egrp_ALL"),
-            ))
-            .with_child((
-                Text::new("ALL"),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
-                TextColor(TEXT_MAIN),
-            ));
-
             if let Some(model) = model.as_deref() {
-                for mesh in &model.meshes {
-                    for eset in &mesh.element_sets {
-                        let name = eset.name.clone();
-                        row.spawn((
-                            Button,
-                            Node {
-                                padding: UiRect::axes(px(8.0), px(3.0)),
-                                border: UiRect::all(px(1.0)),
-                                border_radius: BorderRadius::all(px(4.0)),
-                                ..default()
+                for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+                    let part_name = model
+                        .parts
+                        .iter()
+                        .find(|part| part.mesh_index == mesh_index)
+                        .map(|part| part.name.as_str())
+                        .unwrap_or("Mesh");
+                    assignment_button(
+                        row,
+                        AssignmentTarget {
+                            mesh_index,
+                            group: None,
+                        },
+                        format!("[{}] {part_name} / whole part", mesh_index + 1),
+                    );
+                    for group in &mesh.element_sets {
+                        assignment_button(
+                            row,
+                            AssignmentTarget {
+                                mesh_index,
+                                group: Some(group.name.clone()),
                             },
-                            BackgroundColor(BUTTON_NORMAL),
-                            BorderColor::all(PANEL_BORDER),
-                            EgrpSelectButton(Some(name.clone())),
-                            Name::new(format!("Egrp_{name}")),
-                        ))
-                        .with_child((
-                            Text::new(name),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
-                            TextColor(TEXT_MAIN),
-                        ));
+                            format!("[{}] {}", mesh_index + 1, group.name),
+                        );
                     }
                 }
             }
@@ -765,15 +897,92 @@ pub(crate) fn rebuild_section_def_panel(
                     MaterialSelectButton(name.clone()),
                     Name::new(format!("MatSel_{name}")),
                 ))
+                .with_children(|button| {
+                    button.spawn((
+                        Node {
+                            width: px(10.0),
+                            height: px(10.0),
+                            margin: UiRect::right(px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(visualization::material_identity_color(&name)),
+                    ));
+                    button.spawn((
+                        Text::new(name),
+                        TextFont {
+                            font_size: FontSize::Px(9.0),
+                            ..default()
+                        },
+                        TextColor(TEXT_MAIN),
+                    ));
+                });
+            }
+        });
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct MaterialColorButton(visualization::MaterialColorMode);
+
+pub(crate) fn spawn_material_color_controls(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(4.0),
+            ..default()
+        })
+        .with_children(|row| {
+            for (mode, label) in [
+                (visualization::MaterialColorMode::Part, "Color: Part"),
+                (
+                    visualization::MaterialColorMode::Material,
+                    "Color: Material",
+                ),
+            ] {
+                row.spawn((
+                    Button,
+                    Node {
+                        flex_grow: 1.0,
+                        height: px(23.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                    MaterialColorButton(mode),
+                    Name::new(label),
+                ))
                 .with_child((
-                    Text::new(name),
+                    Text::new(label),
                     TextFont {
-                        font_size: FontSize::Px(9.0),
+                        font_size: FontSize::Px(10.0),
                         ..default()
                     },
                     TextColor(TEXT_MAIN),
                 ));
             }
+        });
+}
+
+pub(crate) fn material_color_button_system(
+    mut mode: ResMut<visualization::MaterialColorMode>,
+    mut buttons: Query<(Ref<Interaction>, &MaterialColorButton, &mut BackgroundColor)>,
+) {
+    for (interaction, button, _) in &buttons {
+        if *interaction == Interaction::Pressed && interaction.is_changed() {
+            mode.set_if_neq(button.0);
+        }
+    }
+    for (interaction, button, mut background) in &mut buttons {
+        *background = BackgroundColor(if *mode == button.0 {
+            BUTTON_ACTIVE
+        } else if *interaction != Interaction::None {
+            BUTTON_HOVERED
+        } else {
+            BUTTON_NORMAL
         });
     }
 }

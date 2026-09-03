@@ -3,7 +3,7 @@ use crate::bc_loads_ui::{BoundaryLoadsListContainer, spawn_boundary_load_editor}
 use crate::contact_ui::{
     spawn_contact_definition_ui, spawn_contact_detection_ui, spawn_contact_review_ui,
 };
-use crate::materials_ui::spawn_materials_ui;
+use crate::materials_ui::{spawn_material_color_controls, spawn_materials_ui};
 use crate::measurement::MeasurementBoxState;
 use crate::mpc_ui::spawn_mpc_ui;
 use crate::project_io::spawn_model_file_ui;
@@ -635,6 +635,7 @@ fn spawn_view_toolbar(parent: &mut ChildSpawnerCommands) {
                         ));
                     }
                 });
+            spawn_material_color_controls(toolbar);
         });
 }
 
@@ -1050,6 +1051,7 @@ fn page_supports_tool(page: SidebarPage, tool: ViewportTool) -> bool {
         ViewportTool::Selection => true,
         ViewportTool::Assembly => page_supports_part_position(page),
         ViewportTool::LoadDirection => page == SidebarPage::Loads,
+        ViewportTool::MaterialAssignment => page == SidebarPage::Materials,
     }
 }
 

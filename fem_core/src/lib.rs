@@ -50,6 +50,9 @@ pub enum ViewportTool {
     /// Pick a global load direction from the viewport compass without
     /// changing the current FEM selection.
     LoadDirection,
+
+    /// Pick a whole object for material assignment; not FEM face/element selection.
+    MaterialAssignment,
 }
 
 /// Identifies the camera that owns the engineering model viewport.

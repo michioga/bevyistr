@@ -455,7 +455,8 @@ pub(crate) fn update_measurement_box_visuals(
     let visible = state.target.is_some_and(|target| match target {
         MeasurementTarget::AssemblyTranslation { .. }
         | MeasurementTarget::AssemblyRotation { .. } => *tool == ViewportTool::Assembly,
-        MeasurementTarget::SliderValue { .. } => *tool == ViewportTool::Selection,
+        MeasurementTarget::SliderValue { slider_id, .. } => *tool == ViewportTool::Selection
+            || (*tool == ViewportTool::MaterialAssignment && slider_id == SliderId::SectionThickness),
         MeasurementTarget::MpcConstant { .. } | MeasurementTarget::MpcCoefficient { .. } => {
             *tool == ViewportTool::Selection
         }

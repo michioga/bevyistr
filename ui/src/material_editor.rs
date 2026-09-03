@@ -262,12 +262,8 @@ pub(crate) fn material_numeric_input_system(
         .as_ref()
         .is_some_and(|name| setup.material_by_name(name).is_some())
     {
-        let next = setup
-            .materials
-            .first()
-            .map(|material| material.name.clone());
-        if selected.0 != next {
-            selected.0 = next;
+        if selected.0.is_some() {
+            selected.0 = None;
         }
     }
     let index = selected.0.as_ref().and_then(|name| {
@@ -370,7 +366,7 @@ pub(crate) fn material_numeric_input_system(
     } else if index.is_none() && selected.0.is_some() {
         "Duplicate material names; resolve before editing".to_string()
     } else if index.is_none() {
-        "Add a preset above, then check its values and units".to_string()
+        "Choose a project material to edit, or select a library material and confirm the assignment".to_string()
     } else {
         "Enter applies; Esc restores. Blank rho = unspecified. Editing affects all sections using this material.".to_string()
     };

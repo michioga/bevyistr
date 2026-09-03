@@ -276,7 +276,6 @@ const LOAD_SELECTION_LEVELS: &[SelectionLevel] = &[
     SelectionLevel::Face,
     SelectionLevel::Element,
 ];
-const MATERIAL_SELECTION_LEVELS: &[SelectionLevel] = &[SelectionLevel::Element];
 const NO_SELECTION_LEVELS: &[SelectionLevel] = &[];
 
 pub(crate) fn selection_context_for_page(page: SidebarPage) -> SelectionPageContext {
@@ -297,8 +296,8 @@ pub(crate) fn selection_context_for_page(page: SidebarPage) -> SelectionPageCont
             preferred: SelectionLevel::Node,
         },
         SidebarPage::Materials => SelectionPageContext {
-            label: "SELECT SECTION ELEMENTS",
-            levels: MATERIAL_SELECTION_LEVELS,
+            label: "",
+            levels: NO_SELECTION_LEVELS,
             preferred: SelectionLevel::Element,
         },
         SidebarPage::Solve | SidebarPage::Results => SelectionPageContext {

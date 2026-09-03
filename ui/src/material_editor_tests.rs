@@ -1,8 +1,8 @@
 use super::*;
 use crate::layout::{UndoInProgress, UndoStack, push_undo_before_setup_change, undo_redo_system};
+use crate::material_library::{MaterialLibraryState, material_library_system};
 use crate::materials_ui::{
-    material_preset_button_system, material_select_button_system, rebuild_section_def_panel,
-    spawn_materials_ui,
+    material_select_button_system, rebuild_section_def_panel, spawn_materials_ui,
 };
 
 fn editor_app() -> App {
@@ -18,8 +18,17 @@ fn editor_app() -> App {
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<InputFocus>()
         .init_resource::<UiKeyboardState>()
-        .init_resource::<SelectedMaterialForSection>()
+        .insert_resource(SelectedMaterialForSection(Some("STEEL".into())))
+        .insert_resource(crate::materials_ui::SelectedEgrp(Some(
+            crate::materials_ui::AssignmentTarget {
+                mesh_index: 0,
+                group: None,
+            },
+        )))
         .init_resource::<MaterialEditorState>()
+        .insert_resource(MaterialLibraryState::from_path(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/materials.toml"),
+        ))
         .init_resource::<UndoStack>()
         .init_resource::<UndoInProgress>()
         .add_systems(Startup, |mut commands: Commands| {
@@ -30,7 +39,7 @@ fn editor_app() -> App {
         .add_systems(
             Update,
             (
-                material_preset_button_system,
+                material_library_system,
                 material_select_button_system,
                 material_numeric_input_system,
                 rebuild_section_def_panel,
@@ -341,32 +350,48 @@ fn an_imported_nonfinite_value_can_be_repaired() {
 }
 
 #[test]
-fn presets_select_existing_values_without_overwriting_them() {
+fn library_choice_is_only_a_draft_and_project_choice_cancels_it() {
     let mut app = editor_app();
-    click(&mut app, "MatSel_AL");
-    click(&mut app, "MaterialPreset_+ Steel");
+    click(&mut app, "Library_TI6AL4V");
+    assert!(
+        app.world()
+            .resource::<MaterialLibraryState>()
+            .draft()
+            .is_none()
+    );
+    click(&mut app, "LibraryUnits_Millimetres");
     assert_eq!(
         app.world()
-            .resource::<SelectedMaterialForSection>()
-            .0
-            .as_deref(),
-        Some("STEEL")
-    );
-    assert_eq!(
-        app.world().resource::<AnalysisSetup>().materials[0].young_modulus,
-        Some(210_000.0)
+            .resource::<MaterialLibraryState>()
+            .draft()
+            .unwrap()
+            .density,
+        Some(4.42e-9)
     );
     assert_eq!(app.world().resource::<AnalysisSetup>().materials.len(), 2);
-    click(&mut app, "MaterialPreset_+ Titanium");
-    assert_eq!(
+    assert!(
         app.world()
             .resource::<SelectedMaterialForSection>()
             .0
-            .as_deref(),
-        Some("TITANIUM")
+            .is_none()
     );
-    assert_eq!(app.world().resource::<AnalysisSetup>().materials.len(), 3);
-    assert_eq!(text(&mut app, MaterialField::Density), "4500");
+    assert!(app.world().resource::<UndoStack>().undo.is_empty());
+    click(&mut app, "MatSel_AL");
+    assert!(
+        app.world()
+            .resource::<MaterialLibraryState>()
+            .draft()
+            .is_none()
+    );
+    assert_eq!(text(&mut app, MaterialField::Young), "69000");
+    *app.world_mut().resource_mut::<SidebarPage>() = SidebarPage::Model;
+    click(&mut app, "Library_STEEL");
+    assert!(
+        app.world()
+            .resource::<MaterialLibraryState>()
+            .selected
+            .is_none()
+    );
 }
 
 #[test]
@@ -392,17 +417,20 @@ fn undo_redo_restores_material_constants_and_enter_on_unchanged_value_is_a_noop(
 }
 
 #[test]
-fn selector_and_exact_values_precede_section_assignment_in_one_panel() {
+fn object_material_and_confirmation_follow_reading_order() {
     let mut app = editor_app();
     let selector = named_entity(&mut app, "MaterialSelectorRow");
     let editor = named_entity(&mut app, "MaterialExactEditor");
     let sections = named_entity(&mut app, "SectionDefPanel");
     let parent = app.world().get::<ChildOf>(selector).unwrap().parent();
-    for entity in [editor, sections] {
+    for entity in [editor] {
         assert_eq!(app.world().get::<ChildOf>(entity).unwrap().parent(), parent);
     }
-    let children = app.world().get::<Children>(parent).unwrap();
-    let positions = [selector, editor, sections]
+    let root = app.world().get::<ChildOf>(parent).unwrap().parent();
+    assert_eq!(app.world().get::<ChildOf>(sections).unwrap().parent(), root);
+    let target = named_entity(&mut app, "SectionDefEgrpRow");
+    let children = app.world().get::<Children>(root).unwrap();
+    let positions = [target, parent, sections]
         .map(|entity| children.iter().position(|child| child == entity).unwrap());
     assert!(positions[0] < positions[1] && positions[1] < positions[2]);
 }
@@ -410,7 +438,11 @@ fn selector_and_exact_values_precede_section_assignment_in_one_panel() {
 #[test]
 fn material_editor_integrates_with_the_full_ui_schedule() {
     let mut app = App::new();
-    app.add_plugins((interaction::InteractionPlugin, crate::UiPlugin));
+    app.add_plugins((
+        interaction::InteractionPlugin,
+        visualization::VisualizationPlugin,
+        crate::UiPlugin,
+    ));
     app.world_mut().schedule_scope(Update, |world, schedule| {
         schedule
             .initialize(world)

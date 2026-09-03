@@ -1,0 +1,47 @@
+# Regression fixture, independent from the editable root materials.toml.
+# bevyistr external material library (UTF-8). Edit, then press Reload in Materials.
+# Copy this file next to bevyistr.exe when distributing the application.
+# Storage units are always Pa and kg/m^3; model units are chosen in the UI.
+# name is a unique HECMW identifier. label/source/source_url/note are optional.
+# density_kg_m3 may be omitted. These are reference elastic values, not allowables.
+schema_version = 1
+
+[[materials]]
+name = "STEEL"
+label = "Steel (generic elastic)"
+young_pa = 210000000000
+poisson = 0.3
+density_kg_m3 = 7850
+source = "DIANA tunnel example, steel pipes"
+source_url = "https://manuals.dianafea.com/d102/FXpDia/node135.html"
+note = "Illustrative elastic constants, not a certified steel grade. Verify against the actual product."
+
+[[materials]]
+name = "AL6082"
+label = "Aluminum EN AW-6082"
+young_pa = 69000000000
+poisson = 0.33
+density_kg_m3 = 2700
+source = "Anodall Group, Alloy 6082 datasheet"
+source_url = "https://www.anodallgroup.com/images/estrusione/PDF-leghe/ALLOY_6082_ING.pdf"
+note = "Typical physical constants for extruded alloy 6082. Strength and temper are not modeled."
+
+[[materials]]
+name = "SS301L"
+label = "Stainless steel 301L"
+young_pa = 200000000000
+poisson = 0.3
+density_kg_m3 = 7900
+source = "ThyssenKrupp AST, 301L datasheet, physical properties"
+source_url = "https://ucpcdn.thyssenkrupp.com/_legacy/UCPthyssenkruppBAMXtkStainless/assets.files/downloads/301l_1.pdf"
+note = "Typical room-temperature values. Not interchangeable with another stainless steel grade."
+
+[[materials]]
+name = "TI6AL4V"
+label = "Titanium Ti-6Al-4V (reference)"
+young_pa = 114500000000
+poisson = 0.31
+density_kg_m3 = 4420
+source = "TIMET, TIMETAL 6-4 datasheet, Table 2"
+source_url = "https://www.timet.com/documents/datasheets/alpha-and-beta-alloys/timetal-6-4.pdf"
+note = "E=114.5 GPa is the midpoint of the reported 107-122 GPa range, not a guaranteed value. Check texture and heat treatment."

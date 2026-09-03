@@ -13,5 +13,6 @@ hecmw = { path = "../hecmw" }
 interaction = { path = "../interaction" }
 picking = { path = "../picking" }
 rfd = "0.15"
+toml_edit = { version = "=0.25.11", default-features = false, features = ["parse"] }
 selection = { path = "../selection" }
 visualization = { path = "../visualization" }

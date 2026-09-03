@@ -219,7 +219,9 @@ fn selection_targets_follow_the_active_workflow() {
     assert!(!loads.levels.contains(&SelectionLevel::Edge));
 
     let materials = selection_context_for_page(SidebarPage::Materials);
-    assert_eq!(materials.levels, &[SelectionLevel::Element]);
+    assert!(materials.levels.is_empty()); // object-first workflow has its own picker
+    assert!(page_supports_tool(SidebarPage::Materials, ViewportTool::MaterialAssignment));
+    assert!(!page_supports_tool(SidebarPage::Contact, ViewportTool::MaterialAssignment));
 
     assert!(
         selection_context_for_page(SidebarPage::Solve)

@@ -1,3 +1,4 @@
+use crate::material_colors::{MaterialColorMode, MaterialIdentity, resolve_materials};
 use bevy::asset::RenderAssetUsages;
 use bevy::math::primitives::{Cuboid, Cylinder};
 use bevy::mesh::{Mesh3d, PrimitiveTopology};
@@ -6,7 +7,7 @@ use bevy::prelude::*;
 use fem_core::{
     ContactCandidate, ContactCandidateState, ContactPair, ContactSlaveRef, ElementFaceRef, FaceId,
     FemEdge, FemElement, FemEntityId, FemEntityRef, FemFace, FemMesh, FemModel, FemNode,
-    FemResultSet, MpcEquation, NodeId, RigidSpiderCandidateState, SurfaceSetRef, rainbow_color,
+    MpcEquation, NodeId, RigidSpiderCandidateState, SurfaceSetRef, rainbow_color,
 };
 use interaction::HoverResult;
 use std::collections::BTreeSet;
@@ -22,6 +23,10 @@ const FACE_THICKNESS: f32 = 0.012;
 const MIN_VISUAL_SIZE: f32 = 0.01;
 const ENTITY_RENDER_LIMIT: usize = 30_000;
 const MAX_DEFINED_CONTACT_NODE_MARKERS: usize = 20_000;
+
+#[cfg(test)]
+#[path = "material_render_tests.rs"]
+mod material_render_tests;
 
 #[derive(Resource, Debug, Clone)]
 pub struct VisualizationSettings {
@@ -183,7 +188,7 @@ impl Default for ContactReviewPose {
 
 /// Which result field to display as a rainbow contour, and optional
 /// deformation scaling.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContourSettings {
     /// Mesh index within `FemModel::meshes`.
     pub mesh_index: usize,
@@ -256,7 +261,7 @@ pub(crate) enum VisualLayer {
 }
 
 impl VisualLayer {
-    const fn visible_in(self, mode: VisualizationMode) -> bool {
+    pub(crate) const fn visible_in(self, mode: VisualizationMode) -> bool {
         match (self, mode) {
             // Shaded surface visible in all modes that show a solid mesh.
             (
@@ -381,6 +386,7 @@ pub fn spawn_demo_mesh(
     mut commands: Commands,
     model: Option<Res<FemModel>>,
     analysis_setup: Option<Res<fem_core::AnalysisSetup>>,
+    colors: Res<MaterialColorMode>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -399,6 +405,7 @@ pub fn spawn_demo_mesh(
         &mut materials,
         &fem_model,
         analysis_setup.as_deref(),
+        *colors,
     );
 }
 
@@ -420,6 +427,7 @@ pub(crate) fn spawn_model_visuals(
     materials: &mut Assets<StandardMaterial>,
     fem_model: &FemModel,
     analysis_setup: Option<&fem_core::AnalysisSetup>,
+    color_mode: MaterialColorMode,
 ) {
     // Selected colour: bright opaque lime-green — same hue as the
     // topology-highlight overlay so per-entity and aggregate models look
@@ -439,6 +447,13 @@ pub(crate) fn spawn_model_visuals(
     let model_scale = model_visual_scale(fem_model);
 
     for (mesh_index, fem_mesh) in fem_model.meshes.iter().enumerate() {
+        let assignments = (color_mode == MaterialColorMode::Material).then(|| {
+            resolve_materials(
+                analysis_setup.unwrap_or(&fem_core::AnalysisSetup::default()),
+                mesh_index,
+                fem_mesh,
+            )
+        });
         let hue_shift = if multi_part {
             part_hue_shift(mesh_index)
         } else {
@@ -510,7 +525,13 @@ pub(crate) fn spawn_model_visuals(
 
         if use_aggregate_rendering(fem_mesh) {
             spawn_aggregate_surface_visual(
-                commands, meshes, materials, mesh_index, fem_mesh, hue_shift,
+                commands,
+                meshes,
+                materials,
+                mesh_index,
+                fem_mesh,
+                hue_shift,
+                assignments.as_ref(),
             );
 
             continue;
@@ -520,13 +541,40 @@ pub(crate) fn spawn_model_visuals(
             .map(|setup| setup.build_element_section_map(mesh_index, fem_mesh))
             .unwrap_or_default();
 
+        let material_palette: std::collections::BTreeMap<_, _> = assignments
+            .as_ref()
+            .into_iter()
+            .flat_map(|map| map.values())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|identity| {
+                let color = identity.color();
+                (
+                    identity,
+                    material_set(
+                        materials,
+                        color,
+                        hover_element,
+                        selected_element,
+                        color,
+                        false,
+                    ),
+                )
+            })
+            .collect();
+
         for element in &fem_mesh.elements {
             let section = section_map.get(&element.id).copied();
             let materials_for_element =
                 if matches!(element.element_type, fem_core::ElementType::Unsupported(_)) {
                     &warning_materials
                 } else {
-                    &element_materials
+                    assignments
+                        .as_ref()
+                        .and_then(|map| map.get(&element.id))
+                        .and_then(|identity| material_palette.get(identity))
+                        .unwrap_or(&element_materials)
                 };
 
             spawn_element_visual(
@@ -548,7 +596,10 @@ pub(crate) fn spawn_model_visuals(
                 mesh_index,
                 fem_mesh,
                 face,
-                &face_materials,
+                face.element
+                    .and_then(|id| assignments.as_ref().and_then(|map| map.get(&id)))
+                    .and_then(|identity| material_palette.get(identity))
+                    .unwrap_or(&face_materials),
             );
         }
 
@@ -613,10 +664,15 @@ fn spawn_aggregate_surface_visual(
     mesh_index: usize,
     fem_mesh: &FemMesh,
     hue_shift: f32,
+    assignments: Option<&std::collections::BTreeMap<fem_core::ElementId, MaterialIdentity>>,
 ) {
-    if let Some(mesh) = build_part_surface_mesh(fem_mesh) {
+    if let Some(mesh) = build_material_surface_mesh(fem_mesh, assignments) {
         let normal_mat = materials.add(StandardMaterial {
-            base_color: tint_hue(Color::srgb(0.35, 0.52, 0.68), hue_shift),
+            base_color: if assignments.is_some() {
+                Color::WHITE
+            } else {
+                tint_hue(Color::srgb(0.35, 0.52, 0.68), hue_shift)
+            },
             perceptual_roughness: 0.82,
             cull_mode: None,
             ..default()
@@ -625,7 +681,11 @@ fn spawn_aggregate_surface_visual(
         // Flat / clay-model material: unlit, same hue but slightly lighter
         // so the mesh is still recognisably the same object.
         let flat_mat = materials.add(StandardMaterial {
-            base_color: tint_hue(Color::srgb(0.48, 0.64, 0.76), hue_shift),
+            base_color: if assignments.is_some() {
+                Color::WHITE
+            } else {
+                tint_hue(Color::srgb(0.48, 0.64, 0.76), hue_shift)
+            },
             unlit: true,
             cull_mode: None,
             ..default()
@@ -634,15 +694,20 @@ fn spawn_aggregate_surface_visual(
         // Transparent / "X-ray" material: low, fixed alpha so internal
         // elements, contact interfaces, and overlapping parts show through.
         let transparent_mat = materials.add(StandardMaterial {
-            base_color: tint_hue(Color::srgba(0.35, 0.52, 0.68, 0.18), hue_shift),
+            base_color: if assignments.is_some() {
+                Color::WHITE.with_alpha(0.18)
+            } else {
+                tint_hue(Color::srgba(0.35, 0.52, 0.68, 0.18), hue_shift)
+            },
             alpha_mode: AlphaMode::Blend,
             cull_mode: None,
             double_sided: true,
             ..default()
         });
 
+        let mesh = meshes.add(mesh);
         commands.spawn((
-            Mesh3d(meshes.add(mesh)),
+            Mesh3d(mesh),
             MeshMaterial3d(normal_mat.clone()),
             Transform::default(),
             VisualLayer::Shaded,
@@ -879,6 +944,34 @@ pub fn update_hover_materials(
     }
 }
 
+/// A material-color rebuild replaces render entities but not FEM selection
+/// identities. Rebind only directly highlighted targets: grown Element picks
+/// must retain their face patch, not turn into whole-element highlights.
+pub(crate) fn restore_selection_on_new_visuals(
+    mut commands: Commands,
+    selection: Option<ResMut<SelectionState>>,
+    new_visuals: Query<(Entity, &Selectable), (With<FemMeshVisual>, Added<Selectable>)>,
+    live_visuals: Query<(), With<Selectable>>,
+) {
+    if new_visuals.is_empty() {
+        return;
+    }
+    let Some(mut selection) = selection else {
+        return;
+    };
+    selection.entities.retain(|entity| live_visuals.contains(*entity));
+    let targets: BTreeSet<_> = selection.targets.iter().copied().collect();
+    let highlights: BTreeSet<_> = selection.highlight_targets.iter().copied().collect();
+    for (entity, selectable) in &new_visuals {
+        if targets.contains(&selectable.target) && highlights.contains(&selectable.target) {
+            commands.entity(entity).insert(Selected);
+            if !selection.entities.contains(&entity) {
+                selection.entities.push(entity);
+            }
+        }
+    }
+}
+
 /// Rebuilds the hover and selected highlight overlays whenever either
 /// group of targets changes.
 ///
@@ -974,13 +1067,12 @@ pub(crate) fn update_topology_highlights(
 
 pub(crate) fn update_visual_layer_visibility(
     settings: Res<VisualizationSettings>,
-    mut query: Query<(&VisualLayer, &mut Visibility), Without<TopologyHighlight>>,
+    mut query: Query<(Ref<VisualLayer>, &mut Visibility), Without<TopologyHighlight>>,
 ) {
-    if !settings.is_changed() {
-        return;
-    }
-
     for (layer, mut visibility) in &mut query {
+        if !settings.is_changed() && !layer.is_added() {
+            continue;
+        }
         *visibility = if layer.visible_in(settings.mode) {
             Visibility::Visible
         } else {
@@ -1008,18 +1100,17 @@ pub(crate) fn apply_visualization_mode(
             Entity,
             &VisualLayer,
             &mut MeshMaterial3d<StandardMaterial>,
-            &NormalMaterial,
+            Ref<NormalMaterial>,
             &FlatMaterial,
             &TransparentMaterial,
         ),
         With<FemMeshVisual>,
     >,
 ) {
-    if !settings.is_changed() {
-        return;
-    }
-
     for (entity, layer, mut mat, normal, flat, transparent) in &mut query {
+        if !settings.is_changed() && !normal.is_added() {
+            continue;
+        }
         if *layer != VisualLayer::Shaded {
             continue;
         }
@@ -1231,6 +1322,7 @@ pub(crate) fn respawn_visuals_on_reload(
     mut selection: ResMut<SelectionState>,
     mut contact_candidates: ResMut<ContactCandidateState>,
     analysis_setup: Res<fem_core::AnalysisSetup>,
+    colors: Res<MaterialColorMode>,
 ) {
     let current = version.value;
 
@@ -1273,6 +1365,7 @@ pub(crate) fn respawn_visuals_on_reload(
         &mut materials,
         &model,
         Some(&analysis_setup),
+        *colors,
     );
 }
 
@@ -1290,6 +1383,8 @@ pub(crate) fn respawn_elements_on_setup_change(
     version: Res<fem_core::FemModelVersion>,
     mut last_version: Local<Option<u64>>,
     mut last_sections: Local<Option<Vec<fem_core::Section>>>,
+    colors: Res<MaterialColorMode>,
+    mut last_materials: Local<Vec<(String, usize)>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     visual_query: Query<Entity, With<FemMeshVisual>>,
@@ -1297,7 +1392,7 @@ pub(crate) fn respawn_elements_on_setup_change(
     let version_changed = *last_version != Some(version.value);
     *last_version = Some(version.value);
 
-    if !setup.is_changed() {
+    if !setup.is_changed() && !colors.is_changed() {
         return;
     }
 
@@ -1305,8 +1400,25 @@ pub(crate) fn respawn_elements_on_setup_change(
         .as_deref()
         .is_some_and(|previous| previous != setup.sections.as_slice());
     *last_sections = Some(setup.sections.clone());
+    // Only existence/ambiguity of referenced names affects colors. Adding an
+    // unused library entry or editing E/nu/rho must not rebuild the mesh.
+    let referenced: BTreeSet<_> = setup.sections.iter().map(|s| &s.material_name).collect();
+    let material_names: Vec<_> = referenced
+        .iter()
+        .map(|name| {
+            (
+                (*name).clone(),
+                setup.materials.iter().filter(|m| &m.name == *name).count(),
+            )
+        })
+        .collect();
+    let materials_changed = *last_materials != material_names;
+    *last_materials = material_names;
 
-    if setup.is_added() || version_changed || !sections_changed {
+    if setup.is_added()
+        || version_changed
+        || !(sections_changed || materials_changed || colors.is_changed())
+    {
         return;
     }
 
@@ -1324,64 +1436,10 @@ pub(crate) fn respawn_elements_on_setup_change(
         &mut materials,
         &model,
         Some(&setup),
+        *colors,
     );
 }
 
-/// Rebuilds the aggregate surface mesh with rainbow vertex colours whenever
-/// [`FemResultSet`] or [`VisualizationSettings::contour`] changes.
-///
-/// When `settings.contour` is `None` the surface reverts to the plain
-/// shaded material built by [`spawn_aggregate_surface_visual`].
-pub(crate) fn update_contour_surface(
-    model: Option<Res<FemModel>>,
-    results: Res<FemResultSet>,
-    settings: Res<VisualizationSettings>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut surface_query: Query<
-        (&mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>),
-        (With<FemMeshVisual>, With<VisualLayer>),
-    >,
-) {
-    if !results.is_changed() && !settings.is_changed() {
-        return;
-    }
-
-    let Some(contour) = &settings.contour else {
-        return;
-    };
-
-    let Some(model) = model.as_deref() else {
-        return;
-    };
-
-    let Some(fem_mesh) = model.meshes.get(contour.mesh_index) else {
-        return;
-    };
-
-    let Some(step) = results
-        .by_mesh
-        .get(contour.mesh_index)
-        .and_then(|steps| steps.get(contour.step_index))
-    else {
-        return;
-    };
-
-    let Some(new_mesh) = build_contour_surface_mesh(fem_mesh, step, contour) else {
-        return;
-    };
-
-    let unlit_material = materials.add(StandardMaterial {
-        unlit: true,
-        cull_mode: None,
-        ..default()
-    });
-
-    for (mut mesh, mut material) in &mut surface_query {
-        mesh.0 = meshes.add(new_mesh.clone());
-        material.0 = unlit_material.clone();
-    }
-}
 
 fn hide_topology_highlights(
     query: &mut Query<
@@ -2490,8 +2548,16 @@ fn spawn_node_visual(
 /// Builds one merged triangle mesh for a part's exterior surface. Assembly
 /// tools reuse this geometry for whole-part hover and selected overlays.
 pub fn build_part_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
+    build_material_surface_mesh(fem_mesh, None)
+}
+
+fn build_material_surface_mesh(
+    fem_mesh: &FemMesh,
+    assignments: Option<&std::collections::BTreeMap<fem_core::ElementId, MaterialIdentity>>,
+) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut colors = Vec::new();
 
     for face in fem_mesh.cached_boundary_faces() {
         let Some(points) = fem_mesh.node_positions(&face.nodes) else {
@@ -2499,20 +2565,32 @@ pub fn build_part_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
         };
 
         append_face_triangles(&mut positions, &mut normals, &points);
+        if let Some(assignments) = assignments {
+            let color = face
+                .element
+                .and_then(|id| assignments.get(&id))
+                .unwrap_or(&MaterialIdentity::Unassigned)
+                .color()
+                .to_linear()
+                .to_f32_array();
+            colors.resize(positions.len(), color);
+        }
     }
 
     if positions.is_empty() {
         return None;
     }
 
-    Some(
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    if assignments.is_some() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
+    Some(mesh)
 }
 
 /// Like [`build_part_surface_mesh`] but colours each vertex according to
