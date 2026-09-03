@@ -1,4 +1,5 @@
 use crate::layout::{DeleteSetupEntry, ScrollableList, SidebarPage, SidebarPageContent};
+use crate::material_editor::spawn_material_exact_editor;
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -41,7 +42,7 @@ pub(crate) struct AddSectionButton;
 pub(crate) struct SectionDefEgrpRow;
 
 #[derive(Component)]
-pub(crate) struct SectionDefMatRow;
+pub(crate) struct MaterialSelectorRow;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct MaterialPresetButton {
@@ -67,6 +68,14 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
             Name::new("MaterialsEditorPanel"),
         ))
         .with_children(|panel| {
+            panel.spawn((
+                Text::new("MATERIAL | select to edit and assign"),
+                TextFont {
+                    font_size: FontSize::Px(9.5),
+                    ..default()
+                },
+                TextColor(TEXT_MAIN),
+            ));
             panel
                 .spawn((Node {
                     flex_direction: FlexDirection::Row,
@@ -79,6 +88,29 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                         material_preset_button(row, index, preset.label);
                     }
                 });
+
+            panel.spawn((
+                Text::new(
+                    "Presets: Pa, kg/m^3 (m-kg-s). No unit conversion; check your model units.",
+                ),
+                TextFont {
+                    font_size: FontSize::Px(9.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.72, 0.68, 0.48)),
+            ));
+            panel.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(4.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    row_gap: px(4.0),
+                    ..default()
+                },
+                MaterialSelectorRow,
+                Name::new("MaterialSelectorRow"),
+            ));
+            spawn_material_exact_editor(panel);
 
             panel
                 .spawn((
@@ -165,17 +197,6 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                         },
                         SectionDefEgrpRow,
                         Name::new("SectionDefEgrpRow"),
-                    ));
-                    section.spawn((
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: px(4.0),
-                            flex_wrap: FlexWrap::Wrap,
-                            row_gap: px(4.0),
-                            ..default()
-                        },
-                        SectionDefMatRow,
-                        Name::new("SectionDefMatRow"),
                     ));
                     section
                         .spawn((
@@ -311,6 +332,8 @@ fn material_preset_button(
 }
 pub(crate) fn material_preset_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
+    mut selected: ResMut<SelectedMaterialForSection>,
+    page: Res<SidebarPage>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -322,7 +345,10 @@ pub(crate) fn material_preset_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *page == SidebarPage::Materials
+            && *interaction == Interaction::Pressed
+            && interaction.is_changed()
+        {
             if let Some(preset) = material_presets().get(btn.preset_index) {
                 if setup.material_by_name(preset.name).is_none() {
                     setup.add_material(
@@ -332,6 +358,9 @@ pub(crate) fn material_preset_button_system(
                         Some(preset.density),
                     );
                 }
+                // An existing material may have imported/custom values. Select
+                // it without replacing those values with the SI preset.
+                selected.0 = Some(preset.name.to_string());
             }
         }
 
@@ -556,6 +585,7 @@ pub(crate) fn egrp_select_button_system(
 /// Selects a material for the section definition panel.
 pub(crate) fn material_select_button_system(
     mut selected: ResMut<SelectedMaterialForSection>,
+    page: Res<SidebarPage>,
     mut buttons: Query<
         (
             Ref<Interaction>,
@@ -567,7 +597,10 @@ pub(crate) fn material_select_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *page == SidebarPage::Materials
+            && *interaction == Interaction::Pressed
+            && interaction.is_changed()
+        {
             selected.0 = Some(btn.0.clone());
         }
 
@@ -635,7 +668,7 @@ pub(crate) fn rebuild_section_def_panel(
     version: Res<FemModelVersion>,
     mut last_ver: Local<Option<u64>>,
     egrp_row_q: Query<Entity, With<SectionDefEgrpRow>>,
-    mat_row_q: Query<Entity, With<SectionDefMatRow>>,
+    mat_row_q: Query<Entity, With<MaterialSelectorRow>>,
     children_q: Query<&Children>,
 ) {
     let ver_changed = *last_ver != Some(version.value);

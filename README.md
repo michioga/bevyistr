@@ -18,6 +18,16 @@ values remain visible and numerically editable. Viewport tools use lightweight
 previews, explicit commit/cancel behavior, and a shared lower-right measurement
 box for exact values in model units.
 
+On **Materials**, select a material above the section controls to edit its
+isotropic Young's modulus, Poisson ratio, and density directly. **Enter** commits
+the focused value; **Esc** or changing the material/page discards uncommitted
+text. An empty density means unspecified. Changes apply to every section using
+that material and support the setup's **Ctrl+Z / Ctrl+Y** undo/redo.
+
+Material presets use **Pa and kg/m³ (m-kg-s)**. Imported values are retained as
+given; no unit conversion is inferred. Check the unit consistency of geometry,
+loads, and material constants before export.
+
 ## Build & run
 
 ```

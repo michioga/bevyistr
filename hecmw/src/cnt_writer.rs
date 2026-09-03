@@ -225,6 +225,8 @@ fn write_contact(out: &mut String, contact: &ContactPair, group_id: usize) {
 }
 
 fn write_material(o: &mut String, mat: &FemMaterial) {
+    // Nine significant decimal digits round-trip every finite f32. In
+    // particular, fixed-point six-decimal nu formatting can turn 5e-8 into 0.
     writeln!(o, "!MATERIAL, NAME={}", mat.name).unwrap();
     if mat.young_modulus.is_some() || mat.poisson_ratio.is_some() {
         writeln!(o, "!ELASTIC").unwrap();
@@ -232,17 +234,17 @@ fn write_material(o: &mut String, mat: &FemMaterial) {
             o,
             " {}, {}, 0.0",
             mat.young_modulus
-                .map(|v| format!("{v:.6e}"))
+                .map(|v| format!("{v:.8e}"))
                 .unwrap_or_default(),
             mat.poisson_ratio
-                .map(|v| format!("{v:.6}"))
+                .map(|v| format!("{v:.8e}"))
                 .unwrap_or_default(),
         )
         .unwrap();
     }
     if let Some(rho) = mat.density {
         writeln!(o, "!DENSITY").unwrap();
-        writeln!(o, " {rho:.6e}, 0.0").unwrap();
+        writeln!(o, " {rho:.8e}, 0.0").unwrap();
     }
     writeln!(o).unwrap();
 }
@@ -329,6 +331,25 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn material_constants_round_trip_at_stored_precision() {
+        let mut setup = AnalysisSetup::default();
+        setup.add_material("EXACT", Some(215_123.45), Some(5.0e-8), Some(1.2345679e-28));
+        setup.add_material("NO_DENSITY", Some(69_123.45), Some(-0.2345679), None);
+        let path = std::env::temp_dir().join(format!(
+            "bevyistr-material-{}-{}.cnt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_cnt_file(&path, &setup).unwrap();
+        let loaded = crate::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(loaded.unwrap().materials, setup.materials);
+    }
 
     #[test]
     fn preserves_mumps_as_the_frontistr_solver_method() {
