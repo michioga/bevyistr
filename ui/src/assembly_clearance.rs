@@ -14,6 +14,7 @@ use avian3d::prelude::{Collider, TrimeshFlags};
 use bevy::prelude::*;
 use fem_core::{FemMesh, FemModel, FemModelVersion, NodeId};
 use std::collections::BTreeMap;
+use visualization::ContactReviewSettings;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -24,6 +25,9 @@ const TEXT_ERROR: Color = Color::srgb(1.0, 0.38, 0.34);
 const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
+const BUTTON_DISABLED: Color = Color::srgba(0.06, 0.07, 0.08, 0.94);
+const GEOMETRY_CHANGED: &str = "Geometry changed - check clearance again";
+const PART_CHANGED: &str = "Selected part changed - check clearance again";
 
 #[derive(Component)]
 pub(crate) struct AssemblyClearanceButton;
@@ -62,6 +66,8 @@ struct ClearanceReport {
     kind: ClearanceKind,
     distance: f32,
     closest_points: Option<(Vec3, Vec3)>,
+    /// Bounds at the time of the query, in the same coordinates as its witness points.
+    part_bounds: [(Vec3, Vec3); 2],
 }
 
 struct ClearanceEvaluation {
@@ -73,6 +79,7 @@ struct ClearanceEvaluation {
 struct PartCollider {
     shape: Collider,
     interior_sample: Option<Vec3>,
+    bounds: (Vec3, Vec3),
 }
 
 #[derive(Resource)]
@@ -115,6 +122,45 @@ impl AssemblyClearanceState {
             .and_then(|index| self.reports.get(index))
     }
 
+    fn clear_reports(&mut self) {
+        self.reports.clear();
+        self.selected_report = None;
+        self.skipped_parts = 0;
+    }
+
+    /// Called before review actions and again after all model/selection edits.
+    /// Never index a new model using indices from a previous query.
+    fn invalidate_if_stale(
+        &mut self,
+        model: &FemModel,
+        version: u64,
+        selected_part: Option<usize>,
+    ) -> bool {
+        let Some(report) = self.active_report() else {
+            return false;
+        };
+        if report.checked_version != version
+            || self.colliders.len() != model.parts.len()
+            || self.reports.iter().any(|report| {
+                model.parts.get(report.selected_part).is_none()
+                    || model.parts.get(report.other_part).is_none()
+            })
+        {
+            self.clear_reports();
+            self.colliders.clear();
+            self.collider_version = None;
+            self.set_message(GEOMETRY_CHANGED, ClearanceTone::Warning);
+            true
+        } else if Some(report.selected_part) != selected_part {
+            self.clear_reports();
+            // Only the query target changed; keep the expensive collider cache.
+            self.set_message(PART_CHANGED, ClearanceTone::Warning);
+            true
+        } else {
+            false
+        }
+    }
+
     fn rebuild_colliders(&mut self, model: &FemModel, version: u64) {
         if self.collider_version == Some(version) && self.colliders.len() == model.parts.len() {
             return;
@@ -135,9 +181,7 @@ impl AssemblyClearanceState {
     }
 
     fn check(&mut self, model: &FemModel, version: u64, selected_part: Option<usize>) {
-        self.reports.clear();
-        self.selected_report = None;
-        self.skipped_parts = 0;
+        self.clear_reports();
 
         let Some(selected_part) = selected_part else {
             self.set_message(
@@ -162,14 +206,13 @@ impl AssemblyClearanceState {
         }
 
         self.rebuild_colliders(model, version);
-        let evaluation =
-            match evaluate_selected_part(model, &self.colliders, selected_part, version) {
-                Ok(evaluation) => evaluation,
-                Err(error) => {
-                    self.set_message(error, ClearanceTone::Error);
-                    return;
-                }
-            };
+        let evaluation = match evaluate_selected_part(&self.colliders, selected_part, version) {
+            Ok(evaluation) => evaluation,
+            Err(error) => {
+                self.set_message(error, ClearanceTone::Error);
+                return;
+            }
+        };
 
         self.reports = evaluation.reports;
         self.selected_report = Some(0);
@@ -177,8 +220,15 @@ impl AssemblyClearanceState {
         self.refresh_message(model);
     }
 
-    fn navigate(&mut self, action: ClearanceReviewAction, model: &FemModel) {
-        if self.reports.is_empty() {
+    fn navigate(
+        &mut self,
+        action: ClearanceReviewAction,
+        model: &FemModel,
+        version: u64,
+        selected_part: Option<usize>,
+    ) {
+        self.invalidate_if_stale(model, version, selected_part);
+        if self.reports.len() < 2 {
             return;
         }
         let current = self
@@ -199,8 +249,16 @@ impl AssemblyClearanceState {
             return;
         };
 
-        let selected_name = &model.parts[report.selected_part].name;
-        let other_name = &model.parts[report.other_part].name;
+        let (Some(selected), Some(other)) = (
+            model.parts.get(report.selected_part),
+            model.parts.get(report.other_part),
+        ) else {
+            self.clear_reports();
+            self.set_message(GEOMETRY_CHANGED, ClearanceTone::Warning);
+            return;
+        };
+        let selected_name = &selected.name;
+        let other_name = &other.name;
         let position = self.selected_report.unwrap_or(0) + 1;
         let total = self.reports.len();
         let skipped = if self.skipped_parts > 0 {
@@ -351,20 +409,20 @@ pub(crate) fn spawn_assembly_clearance_ui(parent: &mut ChildSpawnerCommands) {
 /// intentionally immediate-mode: changing any mesh version makes the report
 /// stale and removes the preview until the user checks again.
 pub(crate) fn draw_assembly_clearance_preview(
-    model: Res<FemModel>,
-    version: Res<FemModelVersion>,
     page: Res<SidebarPage>,
+    editor: Res<AssemblyEditorState>,
+    contact_review: Res<ContactReviewSettings>,
     clearance: Res<AssemblyClearanceState>,
     mut gizmos: Gizmos<AssemblyClearanceGizmos>,
 ) {
-    if !matches!(*page, SidebarPage::Model | SidebarPage::Contact) {
+    if !matches!(*page, SidebarPage::Model | SidebarPage::Contact)
+        || review_pause_reason(editor.is_dragging(), &contact_review).is_some()
+    {
         return;
     }
 
-    let Some(report) = clearance
-        .active_report()
-        .filter(|report| report.checked_version == version.value)
-    else {
+    // Reconciliation runs after mesh loading, pose commits, and part selection.
+    let Some(report) = clearance.active_report() else {
         return;
     };
     let color = match report.kind {
@@ -372,19 +430,14 @@ pub(crate) fn draw_assembly_clearance_preview(
         ClearanceKind::Touching => Color::srgb(1.0, 0.72, 0.18),
         ClearanceKind::Intersecting => Color::srgb(1.0, 0.22, 0.18),
     };
-    let marker_radius = model
-        .bounds()
-        .map(|(min, max)| min.distance(max) * 0.004)
-        .filter(|radius| radius.is_finite() && *radius > 1.0e-7)
-        .unwrap_or(0.01);
+    let marker_radius = (pair_diagonal(report.part_bounds) * 0.004).max(1.0e-7);
 
     draw_part_bounds(
         &mut gizmos,
-        &model,
-        report.selected_part,
+        report.part_bounds[0],
         Color::srgb(0.20, 0.72, 1.0),
     );
-    draw_part_bounds(&mut gizmos, &model, report.other_part, color);
+    draw_part_bounds(&mut gizmos, report.part_bounds[1], color);
 
     let Some((selected_point, other_point)) = report.closest_points else {
         return;
@@ -402,13 +455,9 @@ pub(crate) fn draw_assembly_clearance_preview(
 
 fn draw_part_bounds(
     gizmos: &mut Gizmos<AssemblyClearanceGizmos>,
-    model: &FemModel,
-    part_index: usize,
+    (min, max): (Vec3, Vec3),
     color: Color,
 ) {
-    let Some((min, max)) = model.part_bounds(part_index) else {
-        return;
-    };
     let size = max - min;
     if !size.is_finite() || size.max_element() <= 1.0e-9 {
         return;
@@ -421,25 +470,22 @@ fn draw_part_bounds(
 
 pub(crate) fn assembly_clearance_review_button_system(
     model: Res<FemModel>,
+    version: Res<FemModelVersion>,
+    editor: Res<AssemblyEditorState>,
+    page: Res<SidebarPage>,
+    contact_review: Res<ContactReviewSettings>,
     mut clearance: ResMut<AssemblyClearanceState>,
-    mut buttons: Query<(
-        Ref<Interaction>,
-        &AssemblyClearanceReviewButton,
-        &mut BackgroundColor,
-        &mut BorderColor,
-    )>,
+    buttons: Query<(Ref<Interaction>, &AssemblyClearanceReviewButton)>,
 ) {
-    for (interaction, button, mut background, mut border) in &mut buttons {
+    if !matches!(*page, SidebarPage::Model | SidebarPage::Contact)
+        || review_pause_reason(editor.is_dragging(), &contact_review).is_some()
+    {
+        return;
+    }
+    for (interaction, button) in &buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
-            clearance.navigate(button.action, &model);
+            clearance.navigate(button.action, &model, version.value, editor.selected_part);
         }
-
-        *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        });
-        *border = BorderColor::all(PANEL_BORDER);
     }
 }
 
@@ -447,57 +493,158 @@ pub(crate) fn assembly_clearance_button_system(
     model: Res<FemModel>,
     version: Res<FemModelVersion>,
     editor: Res<AssemblyEditorState>,
+    page: Res<SidebarPage>,
+    contact_review: Res<ContactReviewSettings>,
     mut clearance: ResMut<AssemblyClearanceState>,
-    mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        With<AssemblyClearanceButton>,
-    >,
+    buttons: Query<Ref<Interaction>, With<AssemblyClearanceButton>>,
 ) {
-    for (interaction, mut background, mut border) in &mut buttons {
+    if !can_check(&model, editor.selected_part)
+        || !matches!(*page, SidebarPage::Model | SidebarPage::Contact)
+        || review_pause_reason(editor.is_dragging(), &contact_review).is_some()
+    {
+        return;
+    }
+    for interaction in &buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             clearance.check(&model, version.value, editor.selected_part);
         }
+    }
+}
 
-        *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        });
-        *border = BorderColor::all(PANEL_BORDER);
+fn can_check(model: &FemModel, selected_part: Option<usize>) -> bool {
+    model.parts.len() >= 2 && selected_part.is_some_and(|part| part < model.parts.len())
+}
+
+fn review_pause_reason(
+    dragging: bool,
+    contact_review: &ContactReviewSettings,
+) -> Option<&'static str> {
+    if dragging {
+        Some("Moving part - clearance review paused until release")
+    } else if contact_review.active && contact_review.separation_percent > 0.0 {
+        Some("Exploded contact review - set Review separation to 0 to check clearance")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn sync_assembly_clearance_review(
+    model: Res<FemModel>,
+    version: Res<FemModelVersion>,
+    editor: Res<AssemblyEditorState>,
+    mut clearance: ResMut<AssemblyClearanceState>,
+) {
+    if model.is_changed() || version.is_changed() || editor.is_changed() {
+        // Do not mark the resource changed merely because the mouse moved.
+        let invalidated = clearance.bypass_change_detection().invalidate_if_stale(
+            &model,
+            version.value,
+            editor.selected_part,
+        );
+        if invalidated {
+            clearance.set_changed();
+        }
+    }
+}
+
+pub(crate) fn update_assembly_clearance_controls(
+    model: Res<FemModel>,
+    editor: Res<AssemblyEditorState>,
+    page: Res<SidebarPage>,
+    contact_review: Res<ContactReviewSettings>,
+    clearance: Res<AssemblyClearanceState>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            Has<AssemblyClearanceButton>,
+            &Children,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
+        Or<(
+            With<AssemblyClearanceButton>,
+            With<AssemblyClearanceReviewButton>,
+        )>,
+    >,
+    mut labels: Query<&mut TextColor>,
+) {
+    let available = matches!(*page, SidebarPage::Model | SidebarPage::Contact)
+        && review_pause_reason(editor.is_dragging(), &contact_review).is_none();
+    for (interaction, check_button, children, mut background, mut border) in &mut buttons {
+        let enabled = available
+            && if check_button {
+                can_check(&model, editor.selected_part)
+            } else {
+                clearance.active_report().is_some() && clearance.reports.len() > 1
+            };
+        let next_background = if !enabled {
+            BUTTON_DISABLED
+        } else {
+            match *interaction {
+                Interaction::Pressed => BUTTON_PRESSED,
+                Interaction::Hovered => BUTTON_HOVERED,
+                Interaction::None => BUTTON_NORMAL,
+            }
+        };
+        background.set_if_neq(BackgroundColor(next_background));
+        border.set_if_neq(BorderColor::all(PANEL_BORDER));
+        for child in children {
+            if let Ok(mut color) = labels.get_mut(*child) {
+                color.set_if_neq(TextColor(if enabled { TEXT_MAIN } else { TEXT_MUTED }));
+            }
+        }
     }
 }
 
 pub(crate) fn update_assembly_clearance_text(
-    version: Res<FemModelVersion>,
+    model: Res<FemModel>,
+    editor: Res<AssemblyEditorState>,
+    contact_review: Res<ContactReviewSettings>,
     clearance: Res<AssemblyClearanceState>,
     mut texts: Query<(&mut Text, &mut TextColor), With<AssemblyClearanceText>>,
 ) {
-    if !version.is_changed() && !clearance.is_changed() {
+    if !model.is_changed()
+        && !editor.is_changed()
+        && !contact_review.is_changed()
+        && !clearance.is_changed()
+    {
         return;
     }
     let Ok((mut text, mut color)) = texts.single_mut() else {
         return;
     };
 
-    if clearance
-        .active_report()
-        .is_some_and(|report| report.checked_version != version.value)
-    {
-        **text = "Geometry changed - check clearance again".to_string();
-        *color = TextColor(TEXT_WARNING);
+    if let Some(reason) = review_pause_reason(editor.is_dragging(), &contact_review) {
+        text.set_if_neq(Text::new(reason));
+        color.set_if_neq(TextColor(TEXT_WARNING));
         return;
     }
-
-    **text = clearance.message.clone();
-    *color = TextColor(match clearance.tone {
+    let message = if model.parts.len() < 2 {
+        "Use Add Mesh to compare at least two parts"
+    } else if !can_check(&model, editor.selected_part) {
+        "Select a part, then check clearance"
+    } else {
+        &clearance.message
+    };
+    text.set_if_neq(Text::new(message));
+    let tone = if can_check(&model, editor.selected_part) {
+        clearance.tone
+    } else {
+        ClearanceTone::Muted
+    };
+    color.set_if_neq(TextColor(match tone {
         ClearanceTone::Muted => TEXT_MUTED,
         ClearanceTone::Ok => TEXT_OK,
         ClearanceTone::Warning => TEXT_WARNING,
         ClearanceTone::Error => TEXT_ERROR,
-    });
+    }));
 }
 
 fn build_boundary_collider(mesh: &FemMesh) -> Result<PartCollider, String> {
+    let bounds = mesh
+        .bounds()
+        .filter(|(min, max)| min.is_finite() && max.is_finite())
+        .ok_or_else(|| "part has no finite bounds".to_string())?;
     let mut vertex_by_node = BTreeMap::<NodeId, u32>::new();
     let mut vertices = Vec::<Vec3>::new();
     let mut triangles = Vec::<[u32; 3]>::new();
@@ -570,11 +717,11 @@ fn build_boundary_collider(mesh: &FemMesh) -> Result<PartCollider, String> {
     Ok(PartCollider {
         shape,
         interior_sample,
+        bounds,
     })
 }
 
 fn evaluate_selected_part(
-    model: &FemModel,
     colliders: &[Result<PartCollider, String>],
     selected_part: usize,
     version: u64,
@@ -606,7 +753,8 @@ fn evaluate_selected_part(
             Quat::IDENTITY,
         )
         .map_err(|error| format!("Avian distance query failed: {error:?}"))?;
-        let tolerance = pair_tolerance(model, selected_part, other_part);
+        let part_bounds = [selected.bounds, other.bounds];
+        let tolerance = (pair_diagonal(part_bounds) * 1.0e-6).max(1.0e-7);
 
         if separation <= tolerance {
             let intersects = intersection_test(
@@ -641,6 +789,7 @@ fn evaluate_selected_part(
                 },
                 distance: separation,
                 closest_points,
+                part_bounds,
             };
             reports.push(report);
             continue;
@@ -654,6 +803,7 @@ fn evaluate_selected_part(
                 kind: ClearanceKind::Intersecting,
                 distance: 0.0,
                 closest_points: None,
+                part_bounds,
             });
             continue;
         }
@@ -679,6 +829,7 @@ fn evaluate_selected_part(
             kind: ClearanceKind::Separated,
             distance: separation,
             closest_points,
+            part_bounds,
         };
         reports.push(report);
     }
@@ -720,123 +871,13 @@ fn parts_contain_each_other(a: &PartCollider, b: &PartCollider) -> bool {
             .is_some_and(|point| a.shape.contains_point(Vec3::ZERO, Quat::IDENTITY, point))
 }
 
-fn pair_tolerance(model: &FemModel, part_a: usize, part_b: usize) -> f32 {
-    let diagonal = [part_a, part_b]
+fn pair_diagonal(bounds: [(Vec3, Vec3); 2]) -> f32 {
+    bounds
         .into_iter()
-        .filter_map(|part| model.part_bounds(part))
         .map(|(min, max)| min.distance(max))
-        .fold(0.0_f32, f32::max);
-    (diagonal * 1.0e-6).max(1.0e-7)
+        .fold(0.0_f32, f32::max)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn two_demo_parts(offset: Vec3) -> FemModel {
-        let mut model = FemModel::single_mesh("A", FemMesh::demo_hex8());
-        model.add_mesh("B", FemMesh::demo_hex8());
-        assert!(model.translate_part(1, offset));
-        model
-    }
-
-    #[test]
-    fn boundary_collider_reports_cube_clearance() {
-        let model = two_demo_parts(Vec3::X * 3.0);
-        let colliders: Vec<_> = model
-            .parts
-            .iter()
-            .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
-            .collect();
-
-        let evaluation = evaluate_selected_part(&model, &colliders, 0, 7).unwrap();
-        let report = &evaluation.reports[0];
-
-        assert_eq!(report.kind, ClearanceKind::Separated);
-        assert!((report.distance - 1.0).abs() < 1.0e-5);
-        assert_eq!(report.other_part, 1);
-        assert_eq!(report.checked_version, 7);
-    }
-
-    #[test]
-    fn boundary_collider_detects_crossing_surfaces() {
-        let model = two_demo_parts(Vec3::new(1.2, 0.1, 0.1));
-        let colliders: Vec<_> = model
-            .parts
-            .iter()
-            .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
-            .collect();
-
-        let evaluation = evaluate_selected_part(&model, &colliders, 0, 1).unwrap();
-        let report = &evaluation.reports[0];
-
-        assert_eq!(report.kind, ClearanceKind::Intersecting);
-        assert_eq!(report.distance, 0.0);
-    }
-
-    #[test]
-    fn boundary_collider_detects_full_containment() {
-        let mut inner = FemMesh::demo_hex8();
-        for node in &mut inner.nodes {
-            node.position *= 0.4;
-        }
-        inner.rebuild_topology_cache();
-        let mut model = FemModel::single_mesh("Outer", FemMesh::demo_hex8());
-        model.add_mesh("Inner", inner);
-        let colliders: Vec<_> = model
-            .parts
-            .iter()
-            .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
-            .collect();
-
-        let evaluation = evaluate_selected_part(&model, &colliders, 0, 3).unwrap();
-        let report = &evaluation.reports[0];
-
-        assert_eq!(report.kind, ClearanceKind::Intersecting);
-        assert_eq!(report.distance, 0.0);
-    }
-
-    #[test]
-    fn clearance_reports_are_reviewed_by_risk_then_distance() {
-        let mut model = FemModel::single_mesh("Selected", FemMesh::demo_hex8());
-        model.add_mesh("Far", FemMesh::demo_hex8());
-        model.add_mesh("Intersecting", FemMesh::demo_hex8());
-        model.add_mesh("Near", FemMesh::demo_hex8());
-        assert!(model.translate_part(1, Vec3::X * 6.0));
-        assert!(model.translate_part(2, Vec3::X * 1.2));
-        assert!(model.translate_part(3, Vec3::X * 3.0));
-        let colliders: Vec<_> = model
-            .parts
-            .iter()
-            .map(|part| build_boundary_collider(&model.meshes[part.mesh_index]))
-            .collect();
-
-        let evaluation = evaluate_selected_part(&model, &colliders, 0, 4).unwrap();
-
-        assert_eq!(evaluation.reports.len(), 3);
-        assert_eq!(evaluation.reports[0].kind, ClearanceKind::Intersecting);
-        assert_eq!(evaluation.reports[0].other_part, 2);
-        assert_eq!(evaluation.reports[1].kind, ClearanceKind::Separated);
-        assert_eq!(evaluation.reports[1].other_part, 3);
-        assert_eq!(evaluation.reports[2].other_part, 1);
-    }
-
-    #[test]
-    fn clearance_review_wraps_in_both_directions() {
-        let mut model = FemModel::single_mesh("Selected", FemMesh::demo_hex8());
-        model.add_mesh("Near", FemMesh::demo_hex8());
-        model.add_mesh("Far", FemMesh::demo_hex8());
-        assert!(model.translate_part(1, Vec3::X * 3.0));
-        assert!(model.translate_part(2, Vec3::X * 5.0));
-        let mut state = AssemblyClearanceState::default();
-
-        state.check(&model, 9, Some(0));
-        assert_eq!(state.active_report().unwrap().other_part, 1);
-        state.navigate(ClearanceReviewAction::Next, &model);
-        assert_eq!(state.active_report().unwrap().other_part, 2);
-        state.navigate(ClearanceReviewAction::Next, &model);
-        assert_eq!(state.active_report().unwrap().other_part, 1);
-        state.navigate(ClearanceReviewAction::Previous, &model);
-        assert_eq!(state.active_report().unwrap().other_part, 2);
-    }
-}
+#[path = "assembly_clearance_tests.rs"]
+mod tests;

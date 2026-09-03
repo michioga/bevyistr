@@ -27,6 +27,7 @@ use assembly::{
 use assembly_clearance::{
     AssemblyClearanceGizmos, AssemblyClearanceState, assembly_clearance_button_system,
     assembly_clearance_review_button_system, draw_assembly_clearance_preview,
+    sync_assembly_clearance_review, update_assembly_clearance_controls,
     update_assembly_clearance_text,
 };
 use assembly_ui::{
@@ -465,14 +466,32 @@ impl Plugin for UiPlugin {
                     .in_set(InteractionSystems::UiInput),
                 assembly_clearance_button_system
                     .after(assembly_transform_button_system)
+                    .after(update_contact_review_settings)
                     .in_set(InteractionSystems::UiInput),
                 assembly_clearance_review_button_system
                     .after(assembly_clearance_button_system)
                     .in_set(InteractionSystems::UiInput),
                 update_assembly_status_text.after(assembly_transform_button_system),
-                update_assembly_clearance_text.after(assembly_clearance_review_button_system),
-                draw_assembly_clearance_preview.after(assembly_clearance_review_button_system),
             ),
+        );
+
+        // Invalidate after every geometry/part edit, including drag release and
+        // exact input, before presenting any clearance measurements this frame.
+        app.add_systems(
+            Update,
+            sync_assembly_clearance_review
+                .after(InteractionSystems::Selection)
+                .after(mesh_load_system)
+                .after(update_contact_review_settings),
+        );
+        app.add_systems(
+            Update,
+            (
+                update_assembly_clearance_text,
+                update_assembly_clearance_controls,
+                draw_assembly_clearance_preview,
+            )
+                .after(sync_assembly_clearance_review),
         );
 
         app.add_systems(

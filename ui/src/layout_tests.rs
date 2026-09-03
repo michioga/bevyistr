@@ -489,6 +489,8 @@ fn surface_growth_controls_only_apply_to_face_and_element() {
 #[test]
 fn selection_guide_starts_open_and_names_every_modifier_operation() {
     assert!(SelectionGuideState::default().expanded);
+    assert_eq!(SELECTION_GUIDE_TEXT.lines().count(), 9);
+    assert!(!SELECTION_GUIDE_TEXT.contains('\\'));
     assert!(SELECTION_GUIDE_TEXT.contains("Double click"));
     assert!(SELECTION_GUIDE_TEXT.contains("Triple click"));
     assert!(

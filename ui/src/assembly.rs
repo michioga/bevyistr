@@ -64,6 +64,13 @@ impl Default for AssemblyEditorState {
     }
 }
 
+impl AssemblyEditorState {
+    /// Drag previews change render transforms before FEM coordinates are committed.
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AssemblyDrag {
     part_index: usize,
