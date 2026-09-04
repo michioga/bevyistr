@@ -50,12 +50,12 @@ The app reads **materials.toml** from its working directory; if absent, it
 looks next to **bevyistr.exe**. The Materials panel displays the exact path.
 For Cargo runs from the repository root, edit [materials.toml](materials.toml).
 For a standalone distribution, ship this file alongside the executable.
-**Open TOML...** selects another file for the current session; **Reload** reads
-the current file again. No recompilation or restart is needed. The file picker
-and reload run off the UI thread. There is no embedded fallback: missing files,
-invalid values, duplicate names, and TOML syntax errors are reported in the
-panel without modifying existing model data. Re-select a library material after
-reloading; stale drafts cannot be confirmed.
+The standard file is loaded automatically at startup. Edit the displayed file,
+then press **Reload materials.toml** to apply library changes without recompiling
+or restarting; reload runs off the UI thread. There is no embedded fallback:
+missing files, invalid values, duplicate names, and TOML syntax errors are
+reported in the panel without modifying existing model data. Re-select a library
+material after reloading; stale drafts cannot be confirmed.
 
 Files are UTF-8 (a BOM is accepted), up to 1 MiB. Add entries as follows:
 

@@ -87,17 +87,18 @@ fn file_edits_reload_without_compilation_and_invalid_reload_clears_draft() {
     state.units = Some(LibraryUnits::Metres);
     assert_eq!(state.draft().unwrap().young_modulus, Some(70e9));
     std::fs::write(&path, CUSTOM.replace("70e9", "71e9")).unwrap();
-    state.install(path.clone(), Catalog::read(&path));
+    state.install(Catalog::read(&path));
+    assert_eq!(state.path, path);
     assert!(state.draft().is_none()); // must explicitly choose after reloading
     state.selected = Some("MY_ALLOY".into());
     assert_eq!(state.draft().unwrap().young_modulus, Some(71e9));
     std::fs::write(&path, "[broken").unwrap();
-    state.install(path.clone(), Catalog::read(&path));
+    state.install(Catalog::read(&path));
     assert!(state.catalog.is_none());
     assert!(state.draft().is_none());
     assert!(state.status.contains("Cannot load"));
     std::fs::remove_file(&path).unwrap();
-    state.install(path.clone(), Catalog::read(&path));
+    state.install(Catalog::read(&path));
     assert!(state.catalog.is_none());
     std::fs::remove_dir(&dir).unwrap();
 }

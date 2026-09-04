@@ -395,6 +395,31 @@ fn library_choice_is_only_a_draft_and_project_choice_cancels_it() {
 }
 
 #[test]
+fn material_library_uses_the_fixed_standard_file_and_reload_only() {
+    let mut app = editor_app();
+    let mut names = app.world_mut().query::<&Name>();
+    let names = names
+        .iter(app.world())
+        .map(|name| name.as_str().to_owned())
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "ReloadMaterialLibrary"));
+    assert!(!names.iter().any(|name| name == "OpenMaterialLibrary"));
+
+    let expected =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/materials.toml");
+    assert_eq!(
+        app.world().resource::<MaterialLibraryState>().path,
+        expected
+    );
+    let mut paths = app
+        .world_mut()
+        .query_filtered::<&Text, With<crate::material_library::LibraryPath>>();
+    let path = paths.single(app.world()).unwrap();
+    assert!(path.0.starts_with("Standard file: "));
+    assert!(path.0.ends_with("materials.toml"));
+}
+
+#[test]
 fn undo_redo_restores_material_constants_and_enter_on_unchanged_value_is_a_noop() {
     let mut app = editor_app();
     type_value(&mut app, MaterialField::Young, "210000");

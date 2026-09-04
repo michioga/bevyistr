@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-type LoadReply = Option<(PathBuf, Result<Catalog, String>)>;
+type LoadReply = Result<Catalog, String>;
 
 #[derive(Resource)]
 pub(crate) struct MaterialLibraryState {
@@ -41,11 +41,10 @@ impl MaterialLibraryState {
             status: String::new(),
             pending: None,
         };
-        state.install(path, result);
+        state.install(result);
         state
     }
-    pub(crate) fn install(&mut self, path: PathBuf, result: Result<Catalog, String>) {
-        self.path = path;
+    pub(crate) fn install(&mut self, result: Result<Catalog, String>) {
         self.selected = None;
         self.revision += 1;
         match result {
@@ -71,7 +70,7 @@ impl MaterialLibraryState {
             .find(|m| Some(&m.name) == self.selected.as_ref())?;
         Some(self.units?.material(entry))
     }
-    fn start_load(&mut self, open_dialog: bool) {
+    fn start_reload(&mut self) {
         if self.pending.is_some() {
             return;
         }
@@ -79,25 +78,9 @@ impl MaterialLibraryState {
         let path = self.path.clone();
         self.pending = Some(Mutex::new(rx));
         self.selected = None;
-        self.status = if open_dialog {
-            "Choose a TOML file..."
-        } else {
-            "Reloading..."
-        }
-        .into();
+        self.status = "Reloading materials.toml...".into();
         std::thread::spawn(move || {
-            let path = if open_dialog {
-                rfd::FileDialog::new()
-                    .set_title("Open material library")
-                    .add_filter("Material library (TOML)", &["toml"])
-                    .pick_file()
-            } else {
-                Some(path)
-            };
-            let _ = tx.send(path.map(|path| {
-                let result = Catalog::read(&path);
-                (path, result)
-            }));
+            let _ = tx.send(Catalog::read(&path));
         });
     }
 }
@@ -134,7 +117,6 @@ pub(crate) fn resolved_material_name(setup: &AnalysisSetup, material: &FemMateri
 }
 
 enum LibraryAction {
-    Open,
     Reload,
     Select(String),
     Units(LibraryUnits),
@@ -150,33 +132,19 @@ pub(crate) struct LibraryPath;
 
 pub(crate) fn spawn_material_library(parent: &mut ChildSpawnerCommands) {
     parent.spawn((
-        Text::new("Or choose from a TOML library"),
+        Text::new("Or choose from standard materials.toml"),
         TextFont {
             font_size: FontSize::Px(10.0),
             ..default()
         },
         TextColor(Color::srgb(0.7, 0.8, 0.84)),
     ));
-    parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: px(4.0),
-            ..default()
-        })
-        .with_children(|row| {
-            library_button(
-                row,
-                "Open TOML...",
-                LibraryAction::Open,
-                "OpenMaterialLibrary",
-            );
-            library_button(
-                row,
-                "Reload",
-                LibraryAction::Reload,
-                "ReloadMaterialLibrary",
-            );
-        });
+    library_button(
+        parent,
+        "Reload materials.toml",
+        LibraryAction::Reload,
+        "ReloadMaterialLibrary",
+    );
     parent.spawn((
         Text::new(""),
         TextFont {
@@ -278,11 +246,7 @@ pub(crate) fn material_library_system(
     match reply {
         Some(Ok(reply)) => {
             state.pending = None;
-            if let Some((path, result)) = reply {
-                state.install(path, result);
-            } else {
-                state.status = "File selection cancelled".into();
-            }
+            state.install(reply);
         }
         Some(Err(TryRecvError::Disconnected)) => {
             state.pending = None;
@@ -300,8 +264,7 @@ pub(crate) fn material_library_system(
             continue;
         }
         match &button.0 {
-            LibraryAction::Open => state.start_load(true),
-            LibraryAction::Reload => state.start_load(false),
+            LibraryAction::Reload => state.start_reload(),
             LibraryAction::Select(name) => {
                 if state
                     .catalog
@@ -355,7 +318,10 @@ pub(crate) fn material_library_system(
         }));
     }
     for mut path in &mut paths {
-        path.set_if_neq(Text::new(format!("File: {}", state.path.display())));
+        path.set_if_neq(Text::new(format!(
+            "Standard file: {}",
+            state.path.display()
+        )));
     }
     let text = if !state.status.is_empty() {
         state.status.clone()
@@ -390,7 +356,7 @@ pub(crate) fn material_library_system(
             entry.note
         )
     } else {
-        "Choose model units and a library material. No project values change until confirmation."
+        "Loaded automatically at startup. Choose model units and a library material. Edit the standard file and press Reload to refresh it."
             .into()
     };
     for mut details in &mut details {
