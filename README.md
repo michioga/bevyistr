@@ -1,22 +1,90 @@
 # bevyistr
 
-A Rust/Bevy pre- and post-processor for FrontISTR.
+A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR-Commons/FrontISTR), built with Rust, Bevy 0.19, and `bevy_ui`.
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
-- Rust edition 2024
-- Bevy 0.19
-- bevy_ui based UI
-- FrontISTR oriented (HECMW `.msh` / `.cnt` / `hecmw_ctrl.dat` / `.res` / `.frd` / `.vtu` / `.pvtu`)
-- Gmsh MSH v4.1 integration oriented
+The project combines direct 3-D interaction with the numerical precision required by finite-element analysis:
 
-## Interaction design
+> **Operate intuitively in the viewport; confirm engineering data exactly.**
 
-The guiding principle is **intuitive operation, rigorous confirmation**.
-Geometry is manipulated directly in the 3-D viewport, while engineering
-values remain visible and numerically editable. Viewport tools use lightweight
-previews, explicit commit/cancel behavior, and a shared lower-right measurement
-box for exact values in model units.
+bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, and inspect common result formats. It does **not** yet expose every FrontISTR keyword or launch the FrontISTR solver itself.
+
+## Current capabilities
+
+### Model import and assembly
+
+- Open a mesh as a new model or add several meshes as assembly parts.
+- Open `hecmw_ctrl.dat` together with its referenced HEC-MW mesh and FrontISTR `.cnt` setup.
+- Read HEC-MW `.msh`, Gmsh ASCII MSH 4.1 or newer, Gmsh `.geo`, and basic Abaqus/CalculiX `.inp` meshes.
+- Preserve HEC-MW groups and Gmsh physical groups.
+- Move or rotate parts with the viewport gizmo, grouped axis controls, or an exact value entered in the lower-right measurement box.
+- Reset part poses and inspect clearance, touching, or interference against every other part. Avian is used only for these explicit geometric queries; it is not the FEM or picking engine.
+- Navigate with an orbit camera and an axis-aligned view cube.
+
+### SketchUp-inspired selection
+
+- Select Node, Edge, Face, or Element topology directly in the viewport.
+- Click or drag to replace, `Ctrl` to add, `Shift` to toggle, and `Alt` or `Ctrl+Shift` to remove.
+- Double-click connected boundaries and triple-click connected components.
+- Drag left-to-right for fully enclosed box selection or right-to-left for crossing/touching selection.
+- Use Single, Coplanar, and Smooth growth modes where they apply.
+- Follow continuous feature lines in Edge mode and preview growth results on hover.
+- Save selected topology as HEC-MW node or element groups.
+
+The in-application Selection guide shows the active controls and can be collapsed after they become familiar.
+
+### Contact and MPC
+
+- Define `NODE-SURF` and `SURF-SURF` pairs from viewport selections.
+- Configure Small sliding, Finite sliding, or Tied behaviour, including exact friction and optional penalty values.
+- Detect contact candidates using a model-unit gap and normal-angle tolerance.
+- Review candidates with unrelated parts ghosted and an optional exploded-view separation, then accept or reject each pair.
+- Create two-node MPC equations for `Ux`, `Uy`, `Uz`, or grouped `XYZ` coupling.
+- Detect and review rigid-spider candidates and export accepted constraints as HEC-MW `!EQUATION` entries.
+- Review defined equations in the viewport and edit constants or coefficients exactly.
+
+### Boundary conditions and loads
+
+- Author prescribed translations and rotations across all six structural DOFs.
+- Author nodal force and moment components.
+- Apply pressure to selected faces and gravity with explicit acceleration and direction.
+- Interpret rotational values as direct DOFs or about a selected centre node.
+- Pick principal load directions in the viewport while keeping exact numeric fields authoritative.
+- Preview glyphs before committing with **Apply**.
+- Undo or redo analysis-setup changes with `Ctrl+Z`, `Ctrl+Y`, or `Ctrl+Shift+Z`.
+
+### Materials and sections
+
+- Assign project or library materials with an explicit object → material → confirm sequence.
+- Edit isotropic Young's modulus, Poisson ratio, and optional density exactly.
+- Assign solid, shell, and beam sections, including thickness or area where required.
+- Color the viewport by part or material; identical material names use identical colors.
+- Undo an assignment, including creation of a new project material, as one operation.
+
+### Solve setup and export
+
+- Load a standalone FrontISTR `.cnt` file into the current mesh.
+- Select Static, Nonlinear static, Dynamic, or Eigenvalue analysis.
+- Select MUMPS, CG, GMRES, or Direct as the linear solver method; MUMPS is presented first in the UI.
+- Enter substeps, maximum iterations, and convergence tolerance exactly.
+- Validate references before exporting `hecmw_ctrl.dat`, `<name>.msh`, and `<name>.cnt`.
+- Flatten multi-part assemblies while consistently remapping IDs, groups, setup data, contacts, and MPC equations.
+
+The current **Export** action prepares solver input but does not start FrontISTR.
+
+### Results
+
+- Open FrontISTR ASCII `.res.0.N` series, CalculiX ASCII `.frd`, and inline ASCII VTK XML `.vtu`/`.pvtu` results.
+- Display scalar or vector-magnitude contours with a color bar.
+- Display and scale deformed shapes when displacement data is available.
+- Move through result steps manually or animate them with playback and speed controls.
+
+This post-processing UI focuses on convenient inspection. ParaView remains the recommended tool for detailed result analysis.
+
+## Materials workflow
+
+Viewport operations use lightweight previews and explicit commit/cancel behaviour. Exact values remain visible and numerically editable.
 
 On **Materials**, follow **1 Select object → 2 Select material → 3 Confirm**:
 
@@ -44,7 +112,7 @@ property; **Esc** or changing material/page discards uncommitted text. An empty
 density means unspecified. Property edits affect every section using that
 project material, independently of assignment confirmation.
 
-### External material library
+### Standard material library
 
 The app reads **materials.toml** from its working directory; if absent, it
 looks next to **bevyistr.exe**. The Materials panel displays the exact path.
@@ -93,18 +161,137 @@ materials are pink. Names remain the authoritative identity, since colors can
 be similar. Selection/hover highlights and active result contours take visual
 priority; clearing a contour restores the current material colors.
 
+## Supported file formats
+
+| Direction | Format | Current behaviour |
+|---|---|---|
+| Input | HEC-MW `.msh` | Reads mesh topology, groups, materials, sections, contact pairs, and `!EQUATION` data represented by the current model. |
+| Input | `hecmw_ctrl.dat` | Resolves and loads the referenced `.msh` and `.cnt` files together. |
+| Input | FrontISTR `.cnt` | Reads the setup subset represented by the current UI, including solver settings, BCs, loads, materials, sections, and contact behaviour. |
+| Input | Gmsh `.msh` | ASCII MSH 4.x revision 4.1 or newer; physical groups are preserved. Binary MSH is rejected. |
+| Input | Gmsh `.geo` | Runs the external `gmsh` command with `-3 -format msh41`, then loads the generated mesh. |
+| Input | Abaqus/CalculiX `.inp` | Reads `*NODE`, `*ELEMENT`, `*NSET`, and `*ELSET`; unknown element types remain marked unsupported. |
+| Result | FrontISTR `.res.0.N` | Loads one step or detects and loads a numbered ASCII series. |
+| Result | CalculiX `.frd` | Reads nodal scalar/vector fields and derives vector magnitude or von Mises values where applicable. |
+| Result | VTK XML `.vtu` / `.pvtu` | Reads inline ASCII point data. Binary, base64, appended arrays, and `CellData` are not currently supported. |
+| Output | FrontISTR project | Writes `hecmw_ctrl.dat`, HEC-MW `.msh`, and FrontISTR `.cnt`. |
+
+Gmsh conversion currently covers line, triangle, quadrilateral, tetrahedron, hexahedron, and prism families, including the supported quadratic variants. A `.geo` import requires the Gmsh executable to be available on `PATH`.
+
+## HEC-MW element coverage
+
+The following element codes are currently recognized, visualized, and written back to HEC-MW mesh files:
+
+| Family | HEC-MW codes |
+|---|---|
+| Rod / truss | `111`, `112`, `301` |
+| Plane triangle / quadrilateral | `231`, `232`, `241`, `242` |
+| Tetrahedron | `341`, `342` |
+| Prism | `351`, `352` |
+| Hexahedron | `361`, `362` |
+| Connector / interface | `511`, `541`, `542` |
+| Beam | `611`, `641` |
+| Shell | `731`, `732`, `741`, `743`, `761`, `781` |
+
+Unknown HEC-MW element codes are retained as unsupported elements but do not have generated topology for normal visualization or export.
+
+## Typical workflow
+
+1. Use **Open Mesh**, **Add Mesh**, or **Open Project** on Model.
+2. Position assembly parts and check clearance where necessary.
+3. Create or review groups with the viewport selection tools.
+4. Define contacts and MPC equations.
+5. Apply BCs, loads, materials, and sections.
+6. Configure the analysis and solver on Solve.
+7. Export the project and run FrontISTR externally.
+8. Open the generated result on Results for contour, deformation, and animation inspection.
+
+## Viewport controls
+
+| Input | Action |
+|---|---|
+| Middle drag | Orbit |
+| `Shift` + middle drag | Pan |
+| Mouse wheel | Zoom; over the sidebar it scrolls the panel instead |
+| `F` | Focus the current selection |
+| View cube | Snap to axis-aligned or corner views |
+| `Enter` | Apply the focused exact numeric value |
+| `Esc` | Cancel/restore the focused draft; otherwise clear selection |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo analysis-setup changes |
+
+Tool-specific hints are shown beside the relevant controls. Assembly, contact, BC/load, MPC, and material operations use explicit preview/draft states so an accidental click does not silently become solver input.
+
+## Workspace layout
+
+| Crate | Responsibility |
+|---|---|
+| `app` | Application entry point and Bevy composition |
+| `fem_core` | Mesh, topology, setup, result, contact, and MPC data models |
+| `hecmw` | HEC-MW/FrontISTR mesh, control, setup, result, validation, and export I/O |
+| `gmsh` | Gmsh CLI bridge and ASCII MSH 4.1+ conversion |
+| `interaction`, `picking`, `selection`, `box_select` | Viewport interaction and topology selection |
+| `camera` | Orbit/focus camera and navigation cube |
+| `visualization` | FEM geometry, highlights, glyphs, material colors, contours, and color bar |
+| `ui` | Page workflows and exact numeric editors implemented with `bevy_ui` |
+
+## Current limitations and direction
+
+- FrontISTR execution, progress monitoring, and solver-error localization are not integrated yet.
+- The UI does not yet expose all FrontISTR analysis types and keywords. Unsupported data may not round-trip through the editable setup model.
+- Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
+- Result loading currently attaches fields to the first mesh and is best suited to a single mesh or a flattened exported assembly.
+- VTK XML support is intentionally limited to inline ASCII point data.
+- Planned post-processing conveniences include richer result-field selection, hover probes, selected-node history graphs, and interactive clipping. Detailed visualization will continue to rely on ParaView.
+
+The long-term goal is to make the full FrontISTR workflow accessible without returning to a dialog-heavy pre/post interface, while preserving explicit numeric confirmation and valid solver input.
+
 ## Build & run
 
-```
-cargo build --release
-./target/release/bevyistr [path/to/mesh.msh | path/to/hecmw_ctrl.dat]
+Prerequisites:
+
+- A Rust toolchain supporting edition 2024
+- A graphics adapter/backend supported by Bevy/wgpu
+- Optional: `gmsh` on `PATH` for `.geo` meshing
+- FrontISTR installed separately to solve exported projects
+
+Development run:
+
+```text
+cargo run --package bevyistr
 ```
 
-Passing a `hecmw_ctrl.dat` loads its mesh together with the boundary
-conditions/loads/materials from the `.cnt` file it points to, same as the
-GUI's "Open Project" button. Passing a mesh file directly (`.msh`, or
-anything the Gmsh v4.1 fallback reads) loads just the mesh, same as "Open
-Mesh".
+Open an HEC-MW/Gmsh mesh or FrontISTR project directly at startup:
+
+```text
+cargo run --package bevyistr -- path/to/model.msh
+cargo run --package bevyistr -- path/to/hecmw_ctrl.dat
+```
+
+Passing `hecmw_ctrl.dat` at startup loads its mesh together with the BCs,
+loads, materials, sections, and solver settings represented by the current
+command-line readers. Passing a mesh loads it without a separate `.cnt`, as
+with **Open Mesh**. The GUI's **Open Project** path additionally restores the
+contact and MPC data represented by the current HEC-MW reader.
+
+Build a release executable:
+
+```text
+cargo build --release --package bevyistr
+```
+
+Run the workspace checks:
+
+```text
+cargo check --workspace
+cargo test --workspace
+```
+
+## References
+
+- [FrontISTR source documentation](https://source-docs.frontistr.com/)
+- [FrontISTR source repository](https://gitlab.com/FrontISTR-Commons/FrontISTR)
+- [FrontISTR tutorials](https://gitlab.com/FrontISTR-Commons/FrontISTR/-/tree/master/tutorial?ref_type=heads)
+- [Gmsh](https://gmsh.info/)
 
 ## License
 
