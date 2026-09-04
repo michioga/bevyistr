@@ -8,6 +8,7 @@ use crate::layout::{SidebarPage, SidebarPageContent};
 use bevy::prelude::*;
 use fem_core::{AnalysisSetup, FemModel};
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -76,6 +77,7 @@ enum SolverEvent {
 #[derive(Resource)]
 pub(crate) struct FrontistrRunState {
     executable: PathBuf,
+    environment_setup: Option<PathBuf>,
     project: Option<FrontistrProjectTarget>,
     phase: SolverRunPhase,
     message: String,
@@ -94,6 +96,7 @@ impl Default for FrontistrRunState {
             .unwrap_or_else(|| PathBuf::from("fistr1"));
         Self {
             executable,
+            environment_setup: detect_oneapi_setvars(),
             project: None,
             phase: SolverRunPhase::Idle,
             message: "Export a project to establish the run folder.".to_string(),
@@ -155,8 +158,9 @@ impl FrontistrRunState {
             .as_ref()
             .ok_or_else(|| "Export the project before running FrontISTR.".to_string())?;
         let executable = self.executable.clone();
+        let environment_setup = self.environment_setup.clone();
         let directory = target.directory.clone();
-        self.start_command(executable, Vec::new(), directory)
+        self.start_command(executable, Vec::new(), directory, environment_setup)
     }
 
     fn start_command(
@@ -164,6 +168,7 @@ impl FrontistrRunState {
         executable: PathBuf,
         arguments: Vec<String>,
         directory: PathBuf,
+        environment_setup: Option<PathBuf>,
     ) -> Result<(), String> {
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
@@ -178,6 +183,7 @@ impl FrontistrRunState {
                     &executable,
                     &arguments,
                     &directory,
+                    environment_setup.as_deref(),
                     event_sender,
                     stop_receiver,
                 );
@@ -281,6 +287,16 @@ impl FrontistrRunState {
             format!("{} (PATH)", self.executable.display())
         } else {
             self.executable.display().to_string()
+        }
+    }
+
+    fn environment_label(&self) -> String {
+        if let Some(path) = &self.environment_setup {
+            format!("Intel oneAPI: auto ({})", path.display())
+        } else if let Some(root) = std::env::var_os("I_MPI_ROOT") {
+            format!("Intel MPI: inherited ({})", PathBuf::from(root).display())
+        } else {
+            "Intel MPI: not detected; direct launch".to_string()
         }
     }
 
@@ -399,7 +415,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 ));
 
             panel.spawn((
-                Text::new("Executable: fistr1 (PATH)"),
+                Text::new("Executable: fistr1 (PATH)\nEnvironment: detecting Intel oneAPI..."),
                 TextFont {
                     font_size: FontSize::Px(9.5),
                     ..default()
@@ -645,7 +661,11 @@ pub(crate) fn update_frontistr_run_ui_system(
     >,
 ) {
     if let Ok(mut text) = executable_text.single_mut() {
-        **text = format!("Executable: {}", state.executable_label());
+        **text = format!(
+            "Executable: {}\nEnvironment: {}",
+            state.executable_label(),
+            state.environment_label()
+        );
     }
     if let Ok(mut text) = project_text.single_mut() {
         **text = format!("Project: {}", state.project_label());
@@ -673,9 +693,27 @@ fn run_process(
     executable: &Path,
     arguments: &[String],
     directory: &Path,
+    environment_setup: Option<&Path>,
     event_sender: Sender<SolverEvent>,
     stop_receiver: Receiver<()>,
 ) {
+    let process_environment = match environment_setup {
+        Some(script) => {
+            let _ = event_sender.send(SolverEvent::Output(
+                OutputStream::Stdout,
+                format!("Loading Intel oneAPI environment: {}", script.display()),
+            ));
+            match capture_batch_environment(script) {
+                Ok(environment) => Some(environment),
+                Err(error) => {
+                    let _ = event_sender.send(SolverEvent::SpawnFailed(error));
+                    return;
+                }
+            }
+        }
+        None => None,
+    };
+
     let mut command = Command::new(executable);
     command
         .args(arguments)
@@ -683,6 +721,9 @@ fn run_process(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(environment) = process_environment {
+        command.env_clear().envs(environment);
+    }
     configure_command(&mut command);
 
     let mut child = match command.spawn() {
@@ -742,6 +783,101 @@ fn run_process(
         SolverEvent::Finished(exit_code)
     };
     let _ = event_sender.send(terminal_event);
+}
+
+#[cfg(target_os = "windows")]
+fn detect_oneapi_setvars() -> Option<PathBuf> {
+    if std::env::var_os("I_MPI_ROOT").is_some() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(root) = std::env::var_os("ONEAPI_ROOT") {
+        candidates.push(PathBuf::from(root).join("setvars.bat"));
+    }
+    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        candidates.push(
+            PathBuf::from(program_files_x86)
+                .join("Intel")
+                .join("oneAPI")
+                .join("setvars.bat"),
+        );
+    }
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        candidates.push(
+            PathBuf::from(program_files)
+                .join("Intel")
+                .join("oneAPI")
+                .join("setvars.bat"),
+        );
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn detect_oneapi_setvars() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn capture_batch_environment(script: &Path) -> Result<Vec<(OsString, OsString)>, String> {
+    use std::os::windows::process::CommandExt;
+
+    let command_line = format!("/D /U /S /C \"call \"{}\" >nul && set\"", script.display());
+    let command_processor = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+    let mut command = Command::new(command_processor);
+    command
+        .raw_arg(command_line)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_command(&mut command);
+    let output = command.output().map_err(|error| {
+        format!(
+            "Could not load Intel oneAPI environment from {}: {error}",
+            script.display()
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Intel oneAPI environment setup failed with exit code {:?}: {}",
+            output.status.code(),
+            decode_utf16_output(&output.stderr).trim()
+        ));
+    }
+    parse_environment_dump(&decode_utf16_output(&output.stdout))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn capture_batch_environment(_script: &Path) -> Result<Vec<(OsString, OsString)>, String> {
+    Err("Windows batch environment setup is unavailable on this platform.".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn decode_utf16_output(bytes: &[u8]) -> String {
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
+}
+
+fn parse_environment_dump(dump: &str) -> Result<Vec<(OsString, OsString)>, String> {
+    let environment = dump
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            if name.is_empty() || name.starts_with('=') {
+                return None;
+            }
+            Some((OsString::from(name), OsString::from(value)))
+        })
+        .collect::<Vec<_>>();
+    if environment.is_empty() {
+        Err("Intel oneAPI environment setup returned no variables.".to_string())
+    } else {
+        Ok(environment)
+    }
 }
 
 fn spawn_output_reader<R: Read + Send + 'static>(
@@ -830,7 +966,7 @@ mod tests {
         );
 
         state
-            .start_command(executable, arguments, directory)
+            .start_command(executable, arguments, directory, None)
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while state.is_running() && Instant::now() < deadline {
@@ -845,5 +981,34 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("solver-ok"))
         );
+    }
+
+    #[test]
+    fn environment_dump_parser_preserves_values_with_equals_signs() {
+        let parsed =
+            parse_environment_dump("PATH=C:\\tools\r\nTOKEN=a=b=c\r\n=Z:=ignored\r\n").unwrap();
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0],
+            (OsString::from("PATH"), OsString::from("C:\\tools"))
+        );
+        assert_eq!(
+            parsed[1],
+            (OsString::from("TOKEN"), OsString::from("a=b=c"))
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn detected_oneapi_environment_can_be_captured() {
+        let Some(script) = detect_oneapi_setvars() else {
+            return;
+        };
+        let environment = capture_batch_environment(&script).unwrap();
+
+        assert!(environment.iter().any(|(name, value)| {
+            name == "I_MPI_ROOT" && value.to_string_lossy().contains("Intel\\oneAPI\\mpi")
+        }));
     }
 }

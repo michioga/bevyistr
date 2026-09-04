@@ -72,7 +72,7 @@ The in-application Selection guide shows the active controls and can be collapse
 - Flatten multi-part assemblies while consistently remapping IDs, groups, setup data, contacts, and MPC equations.
 - Start a local serial `fistr1` process without blocking the viewport, inspect its stdout/stderr tail, and stop it from the Solve page.
 
-**Run FrontISTR** rewrites the current model and setup to the last exported target before launch, so an edited UI state is not solved against stale files. Choose the `fistr1` executable once in the Solve page, put it on `PATH`, or set `FRONTISTR_EXECUTABLE` before starting bevyistr.
+**Run FrontISTR** rewrites the current model and setup to the last exported target before launch, so an edited UI state is not solved against stale files. Choose the `fistr1` executable once in the Solve page, put it on `PATH`, or set `FRONTISTR_EXECUTABLE` before starting bevyistr. On Windows, an installed Intel oneAPI `setvars.bat` is detected and applied to the solver child process when Intel MPI is not already configured; the terminal that launched bevyistr does not need to source it first.
 
 ### Results
 
