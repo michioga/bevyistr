@@ -13,3 +13,10 @@ members = [
     "picking",
     "box_select",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Michio Ogawa (michioga)"]
+license = "MIT"
+repository = "https://github.com/michioga/bevyistr"

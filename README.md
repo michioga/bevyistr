@@ -105,3 +105,9 @@ conditions/loads/materials from the `.cnt` file it points to, same as the
 GUI's "Open Project" button. Passing a mesh file directly (`.msh`, or
 anything the Gmsh v4.1 fallback reads) loads just the mesh, same as "Open
 Mesh".
+
+## License
+
+Copyright (c) 2026 Michio Ogawa (michioga).
+
+Licensed under the [MIT License](LICENSE).
