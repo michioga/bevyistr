@@ -1,6 +1,7 @@
 use crate::layout::{SidebarPage, SidebarPageContent};
 use crate::project_io::{ExportButton, ExportStatusText, OpenSetupButton};
 use crate::solver_editor::spawn_solver_exact_editor;
+use crate::solver_runner::spawn_solver_execution_ui;
 use bevy::prelude::*;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -218,6 +219,8 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
                 TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
             ));
         });
+
+    spawn_solver_execution_ui(parent);
 }
 
 pub(crate) fn analysis_type_button_system(

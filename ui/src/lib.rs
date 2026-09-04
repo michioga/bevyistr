@@ -19,6 +19,7 @@ mod selection_ui;
 pub mod slider;
 mod solve_ui;
 mod solver_editor;
+mod solver_runner;
 
 use bevy::prelude::*;
 use interaction::InteractionSystems;
@@ -119,6 +120,11 @@ use solve_ui::{
     analysis_type_button_system, solver_method_button_system, update_analysis_setup_stats_text,
 };
 use solver_editor::{SolverEditorState, solver_numeric_input_system};
+use solver_runner::{
+    FrontistrRunState, poll_frontistr_process_system, run_frontistr_button_system,
+    select_frontistr_executable_system, stop_frontistr_button_system,
+    update_frontistr_run_ui_system,
+};
 
 pub use slider::{SliderConfig, SliderId, SliderState, SliderThumb, SliderTrack, spawn_slider};
 
@@ -177,6 +183,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<MpcEquationEditorState>();
         app.init_resource::<MpcPairDraftState>();
         app.init_resource::<SolverEditorState>();
+        app.init_resource::<FrontistrRunState>();
         app.init_resource::<SelectedDloadKind>();
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
@@ -386,7 +393,7 @@ impl Plugin for UiPlugin {
             ),
         );
 
-        // Group 3: analysis setup — BCs, loads, materials (≤16 systems)
+        // Group 3: analysis setup — BCs, loads, materials
         app.add_systems(
             Update,
             (
@@ -417,6 +424,18 @@ impl Plugin for UiPlugin {
                 add_section_button_system.after(egrp_select_button_system),
                 analysis_type_button_system,
                 solver_method_button_system,
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
+                select_frontistr_executable_system,
+                run_frontistr_button_system,
+                stop_frontistr_button_system,
+                poll_frontistr_process_system
+                    .after(run_frontistr_button_system)
+                    .after(stop_frontistr_button_system),
+                update_frontistr_run_ui_system.after(poll_frontistr_process_system),
             ),
         );
 

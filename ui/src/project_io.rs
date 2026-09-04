@@ -10,6 +10,8 @@ use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoad
 use std::path::Path;
 use visualization::VisualizationSettings;
 
+use crate::solver_runner::FrontistrRunState;
+
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
@@ -167,6 +169,7 @@ impl CameraFitRequest {
 pub(crate) fn open_mesh_button_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
+    mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenMeshButton>,
@@ -182,6 +185,7 @@ pub(crate) fn open_mesh_button_system(
                 .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
                 .pick_file()
             {
+                run_state.clear_export_target();
                 status.loading(path.clone());
                 request.request(path);
             }
@@ -484,6 +488,7 @@ pub(crate) fn open_project_button_system(
     mut load_status: ResMut<MeshLoadStatus>,
     mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
     version: Res<FemModelVersion>,
+    mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenProjectButton>,
@@ -499,6 +504,8 @@ pub(crate) fn open_project_button_system(
             else {
                 continue;
             };
+
+            run_state.clear_export_target();
 
             match hecmw::load_hecmw_ctrl(&ctrl_path) {
                 Ok(content) => {
@@ -585,6 +592,7 @@ pub(crate) fn export_button_system(
     model: Option<Res<FemModel>>,
     status: Res<MeshLoadStatus>,
     setup: Res<fem_core::AnalysisSetup>,
+    mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
         (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
         With<ExportButton>,
@@ -592,7 +600,8 @@ pub(crate) fn export_button_system(
     mut status_query: Query<&mut Text, With<ExportStatusText>>,
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        let enabled = !run_state.is_running();
+        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
             let Some(model) = model.as_deref() else {
                 set_export_status(&mut status_query, "Error: no mesh loaded");
                 continue;
@@ -620,6 +629,7 @@ pub(crate) fn export_button_system(
 
             match hecmw::write_frontistr_project(&dir, &stem, model, &setup) {
                 Ok(summary) => {
+                    run_state.register_export(dir.clone(), stem.clone());
                     let part_note = if summary.part_count > 1 {
                         format!("  ({} parts merged)", summary.part_count)
                     } else {
@@ -647,10 +657,11 @@ pub(crate) fn export_button_system(
             }
         }
 
-        let color = match *interaction {
-            Interaction::Pressed => Color::srgb(0.12, 0.44, 0.22),
-            Interaction::Hovered => Color::srgb(0.14, 0.52, 0.26),
-            Interaction::None => Color::srgb(0.10, 0.32, 0.18),
+        let color = match (*interaction, enabled) {
+            (_, false) => Color::srgba(0.08, 0.09, 0.10, 0.72),
+            (Interaction::Pressed, true) => Color::srgb(0.12, 0.44, 0.22),
+            (Interaction::Hovered, true) => Color::srgb(0.14, 0.52, 0.26),
+            (Interaction::None, true) => Color::srgb(0.10, 0.32, 0.18),
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(Color::srgb(0.15, 0.50, 0.28));

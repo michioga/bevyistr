@@ -8,7 +8,7 @@ The project combines direct 3-D interaction with the numerical precision require
 
 > **Operate intuitively in the viewport; confirm engineering data exactly.**
 
-bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, and inspect common result formats. It does **not** yet expose every FrontISTR keyword or launch the FrontISTR solver itself.
+bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, launch a local serial FrontISTR solve, and inspect common result formats. It does **not** yet expose every FrontISTR keyword.
 
 ## Current capabilities
 
@@ -70,8 +70,9 @@ The in-application Selection guide shows the active controls and can be collapse
 - Enter substeps, maximum iterations, and convergence tolerance exactly.
 - Validate references before exporting `hecmw_ctrl.dat`, `<name>.msh`, and `<name>.cnt`.
 - Flatten multi-part assemblies while consistently remapping IDs, groups, setup data, contacts, and MPC equations.
+- Start a local serial `fistr1` process without blocking the viewport, inspect its stdout/stderr tail, and stop it from the Solve page.
 
-The current **Export** action prepares solver input but does not start FrontISTR.
+**Run FrontISTR** rewrites the current model and setup to the last exported target before launch, so an edited UI state is not solved against stale files. Choose the `fistr1` executable once in the Solve page, put it on `PATH`, or set `FRONTISTR_EXECUTABLE` before starting bevyistr.
 
 ### Results
 
@@ -203,7 +204,7 @@ Unknown HEC-MW element codes are retained as unsupported elements but do not hav
 4. Define contacts and MPC equations.
 5. Apply BCs, loads, materials, and sections.
 6. Configure the analysis and solver on Solve.
-7. Export the project and run FrontISTR externally.
+7. Export the project, then run serial FrontISTR from the Solve page (or run it externally).
 8. Open the generated result on Results for contour, deformation, and animation inspection.
 
 ## Viewport controls
@@ -236,7 +237,7 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 
 ## Current limitations and direction
 
-- FrontISTR execution, progress monitoring, and solver-error localization are not integrated yet.
+- MPI launch, structured iteration progress, and solver-error localization in the viewport are not integrated yet. The current runner is serial and shows the solver's text output.
 - The UI does not yet expose all FrontISTR analysis types and keywords. Unsupported data may not round-trip through the editable setup model.
 - Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
 - Result loading currently attaches fields to the first mesh and is best suited to a single mesh or a flattened exported assembly.
@@ -252,7 +253,7 @@ Prerequisites:
 - A Rust toolchain supporting edition 2024
 - A graphics adapter/backend supported by Bevy/wgpu
 - Optional: `gmsh` on `PATH` for `.geo` meshing
-- FrontISTR installed separately to solve exported projects
+- FrontISTR installed separately to solve exported projects (`fistr1` on `PATH`, selected in Solve, or named by `FRONTISTR_EXECUTABLE`)
 
 Development run:
 
