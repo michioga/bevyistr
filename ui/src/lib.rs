@@ -19,6 +19,7 @@ mod selection_ui;
 pub mod slider;
 mod solve_ui;
 mod solver_editor;
+mod solver_process;
 mod solver_runner;
 
 use bevy::prelude::*;
@@ -121,9 +122,10 @@ use solve_ui::{
 };
 use solver_editor::{SolverEditorState, solver_numeric_input_system};
 use solver_runner::{
-    FrontistrRunState, poll_frontistr_process_system, run_frontistr_button_system,
-    select_frontistr_executable_system, stop_frontistr_button_system,
-    update_frontistr_run_ui_system,
+    FrontistrRunState, mpi_rank_adjust_button_system, poll_frontistr_process_system,
+    run_frontistr_button_system, select_frontistr_executable_system,
+    solver_launch_mode_button_system, stop_frontistr_button_system, update_frontistr_run_ui_system,
+    update_mpi_rank_controls_system,
 };
 
 pub use slider::{SliderConfig, SliderId, SliderState, SliderThumb, SliderTrack, spawn_slider};
@@ -430,12 +432,24 @@ impl Plugin for UiPlugin {
             Update,
             (
                 select_frontistr_executable_system,
-                run_frontistr_button_system,
+                solver_launch_mode_button_system,
+                mpi_rank_adjust_button_system.after(solver_launch_mode_button_system),
+                run_frontistr_button_system
+                    .after(solver_launch_mode_button_system)
+                    .after(mpi_rank_adjust_button_system)
+                    .after(select_frontistr_executable_system)
+                    .after(export_button_system)
+                    .after(solver_numeric_input_system)
+                    .after(analysis_type_button_system)
+                    .after(solver_method_button_system),
                 stop_frontistr_button_system,
                 poll_frontistr_process_system
                     .after(run_frontistr_button_system)
                     .after(stop_frontistr_button_system),
                 update_frontistr_run_ui_system.after(poll_frontistr_process_system),
+                update_mpi_rank_controls_system
+                    .after(solver_launch_mode_button_system)
+                    .after(mpi_rank_adjust_button_system),
             ),
         );
 

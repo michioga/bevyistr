@@ -6053,11 +6053,13 @@ dependencies = [
  "gmsh",
  "hecmw",
  "interaction",
+ "libc",
  "picking",
  "rfd",
  "selection",
  "toml_edit",
  "visualization",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

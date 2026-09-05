@@ -5,16 +5,14 @@
 //! current model/setup to that target before starting `fistr1` there.
 
 use crate::layout::{SidebarPage, SidebarPageContent};
+use crate::solver_process::{
+    ProcessOutputStream, RuntimeEnvironment, SolverLaunchMode, SolverProcessConfig,
+    SolverProcessEvent, SolverProcessHandle, spawn_solver_process,
+};
 use bevy::prelude::*;
 use fem_core::{AnalysisSetup, FemModel};
 use std::collections::VecDeque;
-use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::thread;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -23,6 +21,7 @@ const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
 const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
 const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
+const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
 const BUTTON_DISABLED: Color = Color::srgba(0.08, 0.09, 0.10, 0.72);
 const RUN_NORMAL: Color = Color::srgb(0.10, 0.32, 0.18);
 const RUN_HOVERED: Color = Color::srgb(0.14, 0.48, 0.24);
@@ -60,32 +59,20 @@ impl SolverRunPhase {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum OutputStream {
-    Stdout,
-    Stderr,
-}
-
-#[derive(Debug)]
-enum SolverEvent {
-    Output(OutputStream, String),
-    SpawnFailed(String),
-    Finished(Option<i32>),
-    Stopped,
-}
-
 #[derive(Resource)]
 pub(crate) struct FrontistrRunState {
     executable: PathBuf,
-    environment_setup: Option<PathBuf>,
+    runtime_environment: RuntimeEnvironment,
+    launch_mode: SolverLaunchMode,
+    mpi_ranks: u16,
+    mpi_launcher: Option<PathBuf>,
     project: Option<FrontistrProjectTarget>,
     phase: SolverRunPhase,
     message: String,
     log_lines: VecDeque<String>,
     started_at: Option<Instant>,
     elapsed: Duration,
-    events: Option<Mutex<Receiver<SolverEvent>>>,
-    stop_sender: Option<Sender<()>>,
+    process: Option<SolverProcessHandle>,
     stop_requested: bool,
 }
 
@@ -94,17 +81,28 @@ impl Default for FrontistrRunState {
         let executable = std::env::var_os("FRONTISTR_EXECUTABLE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("fistr1"));
+        let launch_mode = match std::env::var("FRONTISTR_LAUNCH_MODE") {
+            Ok(value) if value.eq_ignore_ascii_case("mpi") => SolverLaunchMode::Mpi,
+            _ => SolverLaunchMode::Direct,
+        };
+        let mpi_ranks = std::env::var("FRONTISTR_MPI_RANKS")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|ranks| (1..=4096).contains(ranks))
+            .unwrap_or(4);
         Self {
             executable,
-            environment_setup: detect_oneapi_setvars(),
+            runtime_environment: RuntimeEnvironment::detect(),
+            launch_mode,
+            mpi_ranks,
+            mpi_launcher: std::env::var_os("FRONTISTR_MPI_LAUNCHER").map(PathBuf::from),
             project: None,
             phase: SolverRunPhase::Idle,
             message: "Export a project to establish the run folder.".to_string(),
             log_lines: VecDeque::new(),
             started_at: None,
             elapsed: Duration::ZERO,
-            events: None,
-            stop_sender: None,
+            process: None,
             stop_requested: false,
         }
     }
@@ -145,6 +143,41 @@ impl FrontistrRunState {
         }
     }
 
+    fn set_launch_mode(&mut self, mode: SolverLaunchMode) {
+        if self.is_running() {
+            return;
+        }
+        self.launch_mode = mode;
+        self.message = match mode {
+            SolverLaunchMode::Direct => "Direct launch selected (one process).".to_string(),
+            SolverLaunchMode::Mpi => {
+                format!("MPI launch selected ({} ranks).", self.mpi_ranks)
+            }
+        };
+    }
+
+    fn adjust_mpi_ranks(&mut self, delta: i16) {
+        if self.is_running() {
+            return;
+        }
+        self.mpi_ranks = (i32::from(self.mpi_ranks) + i32::from(delta)).clamp(1, 4096) as u16;
+        self.message = format!("MPI process count set to {} ranks.", self.mpi_ranks);
+    }
+
+    fn launch_label(&self) -> String {
+        match self.launch_mode {
+            SolverLaunchMode::Direct => "Direct (1 process)".to_string(),
+            SolverLaunchMode::Mpi => {
+                let launcher = self
+                    .mpi_launcher
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "auto: mpiexec / mpirun".to_string());
+                format!("MPI ({} ranks, {launcher})", self.mpi_ranks)
+            }
+        }
+    }
+
     fn report_preflight_error(&mut self, message: impl Into<String>) {
         self.phase = SolverRunPhase::Failed;
         self.message = message.into();
@@ -157,46 +190,26 @@ impl FrontistrRunState {
             .project
             .as_ref()
             .ok_or_else(|| "Export the project before running FrontISTR.".to_string())?;
-        let executable = self.executable.clone();
-        let environment_setup = self.environment_setup.clone();
-        let directory = target.directory.clone();
-        self.start_command(executable, Vec::new(), directory, environment_setup)
-    }
-
-    fn start_command(
-        &mut self,
-        executable: PathBuf,
-        arguments: Vec<String>,
-        directory: PathBuf,
-        environment_setup: Option<PathBuf>,
-    ) -> Result<(), String> {
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
         }
-
-        let (event_sender, event_receiver) = mpsc::channel();
-        let (stop_sender, stop_receiver) = mpsc::channel();
-        thread::Builder::new()
-            .name("frontistr-runner".to_string())
-            .spawn(move || {
-                run_process(
-                    &executable,
-                    &arguments,
-                    &directory,
-                    environment_setup.as_deref(),
-                    event_sender,
-                    stop_receiver,
-                );
-            })
-            .map_err(|error| format!("Could not start solver worker: {error}"))?;
+        let process = spawn_solver_process(SolverProcessConfig {
+            executable: self.executable.clone(),
+            project_stem: target.stem.clone(),
+            partitioner: std::env::var_os("FRONTISTR_PARTITIONER").map(PathBuf::from),
+            working_directory: target.directory.clone(),
+            environment: self.runtime_environment.clone(),
+            launch_mode: self.launch_mode,
+            mpi_ranks: self.mpi_ranks,
+            mpi_launcher: self.mpi_launcher.clone(),
+        })?;
 
         self.phase = SolverRunPhase::Running;
-        self.message = "FrontISTR is running in the exported project folder.".to_string();
+        self.message = "Preparing FrontISTR run...".to_string();
         self.log_lines.clear();
         self.started_at = Some(Instant::now());
         self.elapsed = Duration::ZERO;
-        self.events = Some(Mutex::new(event_receiver));
-        self.stop_sender = Some(stop_sender);
+        self.process = Some(process);
         self.stop_requested = false;
         Ok(())
     }
@@ -205,8 +218,8 @@ impl FrontistrRunState {
         if !self.is_running() || self.stop_requested {
             return;
         }
-        if let Some(sender) = &self.stop_sender {
-            let _ = sender.send(());
+        if let Some(process) = &self.process {
+            process.request_stop();
         }
         self.stop_requested = true;
         self.message = "Stopping FrontISTR...".to_string();
@@ -220,27 +233,31 @@ impl FrontistrRunState {
         }
 
         let pending = self
-            .events
+            .process
             .as_ref()
-            .map(|receiver| {
-                let receiver = receiver.lock().unwrap_or_else(|poison| poison.into_inner());
-                receiver.try_iter().collect::<Vec<_>>()
-            })
+            .map(SolverProcessHandle::poll)
             .unwrap_or_default();
 
         let mut terminal = false;
         for event in pending {
             match event {
-                SolverEvent::Output(stream, line) => self.append_log(stream, line),
-                SolverEvent::SpawnFailed(error) => {
+                SolverProcessEvent::Stage(stage) => {
+                    if !self.stop_requested {
+                        self.message = stage;
+                    }
+                }
+                SolverProcessEvent::Output(stream, line) => self.append_log(stream, line),
+                SolverProcessEvent::SpawnFailed(error) => {
                     self.phase = SolverRunPhase::Failed;
                     self.message = error;
                     terminal = true;
                 }
-                SolverEvent::Finished(code) => {
+                SolverProcessEvent::Finished(code) => {
                     if code == Some(0) {
                         self.phase = SolverRunPhase::Succeeded;
-                        self.message = "FrontISTR completed successfully.".to_string();
+                        self.message =
+                            "FrontISTR exited with code 0. Review solver output and results."
+                                .to_string();
                     } else {
                         self.phase = SolverRunPhase::Failed;
                         self.message = match code {
@@ -250,7 +267,7 @@ impl FrontistrRunState {
                     }
                     terminal = true;
                 }
-                SolverEvent::Stopped => {
+                SolverProcessEvent::Stopped => {
                     self.phase = SolverRunPhase::Stopped;
                     self.message = "FrontISTR was stopped by the user.".to_string();
                     terminal = true;
@@ -262,19 +279,19 @@ impl FrontistrRunState {
             if let Some(started_at) = self.started_at.take() {
                 self.elapsed = started_at.elapsed();
             }
-            self.events = None;
-            self.stop_sender = None;
+            self.process = None;
             self.stop_requested = false;
         }
     }
 
-    fn append_log(&mut self, stream: OutputStream, line: String) {
+    fn append_log(&mut self, stream: ProcessOutputStream, line: String) {
         let mut shortened = line.chars().take(MAX_LOG_CHARS).collect::<String>();
         if line.chars().count() > MAX_LOG_CHARS {
             shortened.push('…');
         }
-        if matches!(stream, OutputStream::Stderr) {
-            shortened.insert_str(0, "ERR  ");
+        if matches!(stream, ProcessOutputStream::Stderr) {
+            // HEC-MW also reports routine partition progress on stderr.
+            shortened.insert_str(0, "stderr  ");
         }
         self.log_lines.push_back(shortened);
         while self.log_lines.len() > MAX_LOG_LINES {
@@ -291,13 +308,7 @@ impl FrontistrRunState {
     }
 
     fn environment_label(&self) -> String {
-        if let Some(path) = &self.environment_setup {
-            format!("Intel oneAPI: auto ({})", path.display())
-        } else if let Some(root) = std::env::var_os("I_MPI_ROOT") {
-            format!("Intel MPI: inherited ({})", PathBuf::from(root).display())
-        } else {
-            "Intel MPI: not detected; direct launch".to_string()
-        }
+        self.runtime_environment.label()
     }
 
     fn project_label(&self) -> String {
@@ -344,6 +355,18 @@ impl FrontistrRunState {
 
 #[derive(Component)]
 pub(crate) struct SelectFrontistrExecutableButton;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct SolverLaunchModeButton(pub(crate) SolverLaunchMode);
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct MpiRankAdjustButton(pub(crate) i16);
+
+#[derive(Component)]
+pub(crate) struct MpiRankText;
+
+#[derive(Component)]
+pub(crate) struct MpiRankControls;
 
 #[derive(Component)]
 pub(crate) struct RunFrontistrButton;
@@ -415,7 +438,9 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 ));
 
             panel.spawn((
-                Text::new("Executable: fistr1 (PATH)\nEnvironment: detecting Intel oneAPI..."),
+                Text::new(
+                    "Executable: fistr1 (PATH)\nRuntime: detecting environment...\nLaunch: Direct (1 process)",
+                ),
                 TextFont {
                     font_size: FontSize::Px(9.5),
                     ..default()
@@ -423,6 +448,119 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 TextColor(TEXT_MUTED),
                 FrontistrExecutableText,
             ));
+
+            panel
+                .spawn((Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(5.0),
+                    ..default()
+                },))
+                .with_children(|row| {
+                    for mode in [SolverLaunchMode::Direct, SolverLaunchMode::Mpi] {
+                        row.spawn((
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                height: px(24.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            SolverLaunchModeButton(mode),
+                            Name::new(format!("SolverLaunchMode_{}", mode.label())),
+                        ))
+                        .with_child((
+                            Text::new(mode.label()),
+                            TextFont {
+                                font_size: FontSize::Px(10.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+
+            panel
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: px(5.0),
+                        ..default()
+                    },
+                    MpiRankControls,
+                    Name::new("MpiRankControls"),
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new("MPI ranks"),
+                        Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        },
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(TEXT_MUTED),
+                    ));
+                    for (delta, label) in [(-1, "−"), (1, "+")] {
+                        if delta > 0 {
+                            row.spawn((
+                                Text::new("4"),
+                                Node {
+                                    width: px(48.0),
+                                    height: px(24.0),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    border: UiRect::all(px(1.0)),
+                                    border_radius: BorderRadius::all(px(4.0)),
+                                    ..default()
+                                },
+                                BorderColor::all(PANEL_BORDER),
+                                TextFont {
+                                    font_size: FontSize::Px(10.5),
+                                    ..default()
+                                },
+                                TextColor(TEXT_MAIN),
+                                MpiRankText,
+                            ));
+                        }
+                        row.spawn((
+                            Button,
+                            Node {
+                                width: px(34.0),
+                                height: px(24.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            MpiRankAdjustButton(delta),
+                            Name::new(if delta < 0 {
+                                "DecreaseMpiRanks"
+                            } else {
+                                "IncreaseMpiRanks"
+                            }),
+                        ))
+                        .with_child((
+                            Text::new(label),
+                            TextFont {
+                                font_size: FontSize::Px(12.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+
             panel.spawn((
                 Text::new("Project: export a project first"),
                 TextFont {
@@ -501,7 +639,9 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 FrontistrStatusText,
             ));
             panel.spawn((
-                Text::new("Run refreshes the exported files, then starts fistr1 in that folder."),
+                Text::new(
+                    "MPI: write partition controls, run hecmw_part1, then solve with N ranks. Direct: solve the entire mesh. Run refreshes exported inputs.",
+                ),
                 TextFont {
                     font_size: FontSize::Px(9.5),
                     ..default()
@@ -530,16 +670,90 @@ pub(crate) fn select_frontistr_executable_system(
     for (interaction, mut background, mut border) in &mut buttons {
         let enabled = !state.is_running();
         if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
-            let dialog = rfd::FileDialog::new()
-                .set_title("Choose FrontISTR executable")
-                .add_filter("FrontISTR executable", &["exe"])
-                .add_filter("All files", &["*"]);
+            let dialog = rfd::FileDialog::new().set_title("Choose FrontISTR executable");
+            #[cfg(windows)]
+            let dialog = dialog.add_filter("FrontISTR executable", &["exe"]);
+            let dialog = dialog.add_filter("All files", &["*"]);
             if let Some(path) = dialog.pick_file() {
                 state.set_executable(path);
             }
         }
         *background = BackgroundColor(ordinary_button_color(*interaction, enabled));
         *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn solver_launch_mode_button_system(
+    mut state: ResMut<FrontistrRunState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &SolverLaunchModeButton,
+        ),
+        With<SolverLaunchModeButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        let enabled = !state.is_running();
+        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.set_launch_mode(button.0);
+        }
+        let active = state.launch_mode == button.0;
+        *background = BackgroundColor(if !enabled {
+            BUTTON_DISABLED
+        } else if active {
+            match *interaction {
+                Interaction::Pressed => BUTTON_PRESSED,
+                Interaction::Hovered | Interaction::None => BUTTON_ACTIVE,
+            }
+        } else {
+            ordinary_button_color(*interaction, true)
+        });
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn mpi_rank_adjust_button_system(
+    mut state: ResMut<FrontistrRunState>,
+    mut buttons: Query<
+        (
+            Ref<Interaction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &MpiRankAdjustButton,
+        ),
+        With<MpiRankAdjustButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        let enabled = state.launch_mode == SolverLaunchMode::Mpi && !state.is_running();
+        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.adjust_mpi_ranks(button.0);
+        }
+        *background = BackgroundColor(ordinary_button_color(*interaction, enabled));
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn update_mpi_rank_controls_system(
+    state: Res<FrontistrRunState>,
+    mut controls: Query<&mut Node, With<MpiRankControls>>,
+    mut labels: Query<&mut Text, With<MpiRankText>>,
+) {
+    if let Ok(mut node) = controls.single_mut() {
+        let display = if state.launch_mode == SolverLaunchMode::Mpi {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    if let Ok(mut text) = labels.single_mut() {
+        text.set_if_neq(Text::new(state.mpi_ranks.to_string()));
     }
 }
 
@@ -661,20 +875,21 @@ pub(crate) fn update_frontistr_run_ui_system(
     >,
 ) {
     if let Ok(mut text) = executable_text.single_mut() {
-        **text = format!(
-            "Executable: {}\nEnvironment: {}",
+        text.set_if_neq(Text::new(format!(
+            "Executable: {}\nRuntime: {}\nLaunch: {}",
             state.executable_label(),
-            state.environment_label()
-        );
+            state.environment_label(),
+            state.launch_label()
+        )));
     }
     if let Ok(mut text) = project_text.single_mut() {
-        **text = format!("Project: {}", state.project_label());
+        text.set_if_neq(Text::new(format!("Project: {}", state.project_label())));
     }
     if let Ok(mut text) = status_text.single_mut() {
-        **text = state.status_label();
+        text.set_if_neq(Text::new(state.status_label()));
     }
     if let Ok(mut text) = log_text.single_mut() {
-        **text = state.log_label();
+        text.set_if_neq(Text::new(state.log_label()));
     }
 }
 
@@ -688,232 +903,6 @@ fn ordinary_button_color(interaction: Interaction, enabled: bool) -> Color {
         Interaction::None => BUTTON_NORMAL,
     }
 }
-
-fn run_process(
-    executable: &Path,
-    arguments: &[String],
-    directory: &Path,
-    environment_setup: Option<&Path>,
-    event_sender: Sender<SolverEvent>,
-    stop_receiver: Receiver<()>,
-) {
-    let process_environment = match environment_setup {
-        Some(script) => {
-            let _ = event_sender.send(SolverEvent::Output(
-                OutputStream::Stdout,
-                format!("Loading Intel oneAPI environment: {}", script.display()),
-            ));
-            match capture_batch_environment(script) {
-                Ok(environment) => Some(environment),
-                Err(error) => {
-                    let _ = event_sender.send(SolverEvent::SpawnFailed(error));
-                    return;
-                }
-            }
-        }
-        None => None,
-    };
-
-    let mut command = Command::new(executable);
-    command
-        .args(arguments)
-        .current_dir(directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(environment) = process_environment {
-        command.env_clear().envs(environment);
-    }
-    configure_command(&mut command);
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = event_sender.send(SolverEvent::SpawnFailed(format!(
-                "Could not start {}: {error}",
-                executable.display()
-            )));
-            return;
-        }
-    };
-
-    let stdout_reader = child
-        .stdout
-        .take()
-        .map(|stdout| spawn_output_reader(stdout, OutputStream::Stdout, event_sender.clone()));
-    let stderr_reader = child
-        .stderr
-        .take()
-        .map(|stderr| spawn_output_reader(stderr, OutputStream::Stderr, event_sender.clone()));
-
-    let (stopped, exit_code) = loop {
-        match stop_receiver.try_recv() {
-            Ok(()) | Err(TryRecvError::Disconnected) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break (true, None);
-            }
-            Err(TryRecvError::Empty) => {}
-        }
-
-        match child.try_wait() {
-            Ok(Some(status)) => break (false, status.code()),
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = event_sender.send(SolverEvent::SpawnFailed(format!(
-                    "Could not monitor FrontISTR: {error}"
-                )));
-                return;
-            }
-        }
-    };
-
-    if let Some(reader) = stdout_reader {
-        let _ = reader.join();
-    }
-    if let Some(reader) = stderr_reader {
-        let _ = reader.join();
-    }
-
-    let terminal_event = if stopped {
-        SolverEvent::Stopped
-    } else {
-        SolverEvent::Finished(exit_code)
-    };
-    let _ = event_sender.send(terminal_event);
-}
-
-#[cfg(target_os = "windows")]
-fn detect_oneapi_setvars() -> Option<PathBuf> {
-    if std::env::var_os("I_MPI_ROOT").is_some() {
-        return None;
-    }
-
-    let mut candidates = Vec::new();
-    if let Some(root) = std::env::var_os("ONEAPI_ROOT") {
-        candidates.push(PathBuf::from(root).join("setvars.bat"));
-    }
-    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
-        candidates.push(
-            PathBuf::from(program_files_x86)
-                .join("Intel")
-                .join("oneAPI")
-                .join("setvars.bat"),
-        );
-    }
-    if let Some(program_files) = std::env::var_os("ProgramFiles") {
-        candidates.push(
-            PathBuf::from(program_files)
-                .join("Intel")
-                .join("oneAPI")
-                .join("setvars.bat"),
-        );
-    }
-    candidates.into_iter().find(|path| path.is_file())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn detect_oneapi_setvars() -> Option<PathBuf> {
-    None
-}
-
-#[cfg(target_os = "windows")]
-fn capture_batch_environment(script: &Path) -> Result<Vec<(OsString, OsString)>, String> {
-    use std::os::windows::process::CommandExt;
-
-    let command_line = format!("/D /U /S /C \"call \"{}\" >nul && set\"", script.display());
-    let command_processor = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
-    let mut command = Command::new(command_processor);
-    command
-        .raw_arg(command_line)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_command(&mut command);
-    let output = command.output().map_err(|error| {
-        format!(
-            "Could not load Intel oneAPI environment from {}: {error}",
-            script.display()
-        )
-    })?;
-    if !output.status.success() {
-        return Err(format!(
-            "Intel oneAPI environment setup failed with exit code {:?}: {}",
-            output.status.code(),
-            decode_utf16_output(&output.stderr).trim()
-        ));
-    }
-    parse_environment_dump(&decode_utf16_output(&output.stdout))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn capture_batch_environment(_script: &Path) -> Result<Vec<(OsString, OsString)>, String> {
-    Err("Windows batch environment setup is unavailable on this platform.".to_string())
-}
-
-#[cfg(target_os = "windows")]
-fn decode_utf16_output(bytes: &[u8]) -> String {
-    let units = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect::<Vec<_>>();
-    String::from_utf16_lossy(&units)
-}
-
-fn parse_environment_dump(dump: &str) -> Result<Vec<(OsString, OsString)>, String> {
-    let environment = dump
-        .lines()
-        .filter_map(|line| {
-            let (name, value) = line.split_once('=')?;
-            if name.is_empty() || name.starts_with('=') {
-                return None;
-            }
-            Some((OsString::from(name), OsString::from(value)))
-        })
-        .collect::<Vec<_>>();
-    if environment.is_empty() {
-        Err("Intel oneAPI environment setup returned no variables.".to_string())
-    } else {
-        Ok(environment)
-    }
-}
-
-fn spawn_output_reader<R: Read + Send + 'static>(
-    reader: R,
-    stream: OutputStream,
-    sender: Sender<SolverEvent>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        for line in BufReader::new(reader).lines() {
-            match line {
-                Ok(line) => {
-                    if sender.send(SolverEvent::Output(stream, line)).is_err() {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    let _ = sender.send(SolverEvent::Output(
-                        OutputStream::Stderr,
-                        format!("Could not read solver output: {error}"),
-                    ));
-                    break;
-                }
-            }
-        }
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn configure_command(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(target_os = "windows"))]
-fn configure_command(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
@@ -938,7 +927,7 @@ mod tests {
     fn solver_log_keeps_a_bounded_tail() {
         let mut state = FrontistrRunState::default();
         for index in 0..(MAX_LOG_LINES + 5) {
-            state.append_log(OutputStream::Stdout, format!("line {index}"));
+            state.append_log(ProcessOutputStream::Stdout, format!("line {index}"));
         }
 
         assert_eq!(state.log_lines.len(), MAX_LOG_LINES);
@@ -950,65 +939,93 @@ mod tests {
     }
 
     #[test]
-    fn asynchronous_process_collects_output_and_completion() {
+    fn mpi_rank_adjustment_is_exact_and_bounded() {
         let mut state = FrontistrRunState::default();
-        let directory = std::env::current_dir().unwrap();
+        state.set_launch_mode(SolverLaunchMode::Mpi);
+        state.mpi_ranks = 1;
 
-        #[cfg(target_os = "windows")]
-        let (executable, arguments) = (
-            PathBuf::from("cmd"),
-            vec!["/C".to_string(), "echo solver-ok".to_string()],
-        );
-        #[cfg(not(target_os = "windows"))]
-        let (executable, arguments) = (
-            PathBuf::from("sh"),
-            vec!["-c".to_string(), "echo solver-ok".to_string()],
-        );
+        state.adjust_mpi_ranks(-1);
+        assert_eq!(state.mpi_ranks, 1);
+        state.adjust_mpi_ranks(7);
+        assert_eq!(state.mpi_ranks, 8);
+        state.mpi_ranks = 4096;
+        state.adjust_mpi_ranks(1);
+        assert_eq!(state.mpi_ranks, 4096);
+    }
 
-        state
-            .start_command(executable, arguments, directory, None)
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while state.is_running() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-            state.poll();
+    #[test]
+    fn execution_controls_switch_modes_and_freeze_during_a_run() {
+        fn spawn_panel(mut commands: Commands) {
+            commands
+                .spawn(Node::default())
+                .with_children(spawn_solver_execution_ui);
         }
-
-        assert_eq!(state.phase, SolverRunPhase::Succeeded);
-        assert!(
-            state
-                .log_lines
-                .iter()
-                .any(|line| line.contains("solver-ok"))
+        let mut app = App::new();
+        app.insert_resource(FrontistrRunState {
+            launch_mode: SolverLaunchMode::Direct,
+            mpi_ranks: 2,
+            ..default()
+        });
+        app.add_systems(Startup, spawn_panel);
+        app.add_systems(
+            Update,
+            (
+                solver_launch_mode_button_system,
+                mpi_rank_adjust_button_system,
+                update_mpi_rank_controls_system,
+                update_frontistr_run_ui_system,
+            )
+                .chain(),
         );
-    }
-
-    #[test]
-    fn environment_dump_parser_preserves_values_with_equals_signs() {
-        let parsed =
-            parse_environment_dump("PATH=C:\\tools\r\nTOKEN=a=b=c\r\n=Z:=ignored\r\n").unwrap();
-
-        assert_eq!(parsed.len(), 2);
+        app.update();
+        let controls = app
+            .world_mut()
+            .query_filtered::<Entity, With<MpiRankControls>>()
+            .single(app.world())
+            .unwrap();
         assert_eq!(
-            parsed[0],
-            (OsString::from("PATH"), OsString::from("C:\\tools"))
+            app.world().get::<Node>(controls).unwrap().display,
+            Display::None
         );
+        let mpi_button = app
+            .world_mut()
+            .query::<(Entity, &SolverLaunchModeButton)>()
+            .iter(app.world())
+            .find(|(_, mode)| mode.0 == SolverLaunchMode::Mpi)
+            .unwrap()
+            .0;
+        *app.world_mut().get_mut::<Interaction>(mpi_button).unwrap() = Interaction::Pressed;
+        app.update();
         assert_eq!(
-            parsed[1],
-            (OsString::from("TOKEN"), OsString::from("a=b=c"))
+            app.world().get::<Node>(controls).unwrap().display,
+            Display::Flex
         );
-    }
+        let increment = app
+            .world_mut()
+            .query::<(Entity, &MpiRankAdjustButton)>()
+            .iter(app.world())
+            .find(|(_, delta)| delta.0 == 1)
+            .unwrap()
+            .0;
+        *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::Pressed;
+        app.update();
+        assert_eq!(app.world().resource::<FrontistrRunState>().mpi_ranks, 3);
 
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn detected_oneapi_environment_can_be_captured() {
-        let Some(script) = detect_oneapi_setvars() else {
-            return;
-        };
-        let environment = capture_batch_environment(&script).unwrap();
-
-        assert!(environment.iter().any(|(name, value)| {
-            name == "I_MPI_ROOT" && value.to_string_lossy().contains("Intel\\oneAPI\\mpi")
-        }));
+        app.world_mut().resource_mut::<FrontistrRunState>().phase = SolverRunPhase::Running;
+        let direct = app
+            .world_mut()
+            .query::<(Entity, &SolverLaunchModeButton)>()
+            .iter(app.world())
+            .find(|(_, mode)| mode.0 == SolverLaunchMode::Direct)
+            .unwrap()
+            .0;
+        *app.world_mut().get_mut::<Interaction>(direct).unwrap() = Interaction::Pressed;
+        *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::None;
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::Pressed;
+        app.update();
+        let state = app.world().resource::<FrontistrRunState>();
+        assert_eq!(state.launch_mode, SolverLaunchMode::Mpi);
+        assert_eq!(state.mpi_ranks, 3);
     }
 }

@@ -13,7 +13,7 @@ pub mod vtu;
 pub use cnt::{CntData, CntError, load_cnt_file};
 pub use cnt_writer::{write_cnt_file, write_cnt_file_with_contacts};
 pub use ctrl_reader::{HecmwCtrlContent, load_hecmw_ctrl, resolve_paths};
-pub use ctrl_writer::{HecmwCtrlParams, write_hecmw_ctrl};
+pub use ctrl_writer::{HecmwCtrlParams, write_hecmw_ctrl, write_parallel_hecmw_ctrl};
 pub use frd::{FrdError, load_frd_file};
 pub use inp::{InpError, load_inp_file};
 pub use msh_writer::{

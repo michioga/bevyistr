@@ -19,3 +19,9 @@ rfd = "0.15"
 toml_edit = { version = "=0.25.11", default-features = false, features = ["parse"] }
 selection = { path = "../selection" }
 visualization = { path = "../visualization" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

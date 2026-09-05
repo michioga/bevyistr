@@ -8,7 +8,7 @@ The project combines direct 3-D interaction with the numerical precision require
 
 > **Operate intuitively in the viewport; confirm engineering data exactly.**
 
-bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, launch a local serial FrontISTR solve, and inspect common result formats. It does **not** yet expose every FrontISTR keyword.
+bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, launch FrontISTR directly or through MPI, and inspect common result formats. It does **not** yet expose every FrontISTR keyword.
 
 ## Current capabilities
 
@@ -70,9 +70,16 @@ The in-application Selection guide shows the active controls and can be collapse
 - Enter substeps, maximum iterations, and convergence tolerance exactly.
 - Validate references before exporting `hecmw_ctrl.dat`, `<name>.msh`, and `<name>.cnt`.
 - Flatten multi-part assemblies while consistently remapping IDs, groups, setup data, contacts, and MPC equations.
-- Start a local serial `fistr1` process without blocking the viewport, inspect its stdout/stderr tail, and stop it from the Solve page.
+- Run `fistr1` directly, or partition the mesh with `hecmw_part1` and then solve through MPI, without blocking the viewport during partitioning/solving. Inspect the stdout/stderr tail and stop local child processes from the Solve page.
 
-**Run FrontISTR** rewrites the current model and setup to the last exported target before launch, so an edited UI state is not solved against stale files. Choose the `fistr1` executable once in the Solve page, put it on `PATH`, or set `FRONTISTR_EXECUTABLE` before starting bevyistr. On Windows, an installed Intel oneAPI `setvars.bat` is detected and applied to the solver child process when Intel MPI is not already configured; the terminal that launched bevyistr does not need to source it first.
+**Run FrontISTR** rewrites the current model and setup to the last exported target before launch, so an edited UI state is not solved against stale files. Choose the `fistr1` executable once in the Solve page, put it on `PATH`, or set `FRONTISTR_EXECUTABLE` before starting bevyistr.
+
+- **Direct** runs one `fistr1` process with `HECMW-ENTIRE` input.
+- **MPI** follows FrontISTR's [partition-then-solve workflow](https://source-docs.frontistr.com/execution_guide/overview/01_flow.html). It writes `hecmw_part_ctrl.dat` (`TYPE=NODE-BASED, METHOD=PMETIS, DOMAIN=N`) and `hecmw_ctrl.dat` (`part_in`: entire mesh; `part_out` and `fstrMSH`: distributed mesh), runs `hecmw_part1`, checks all N partition files, and only then runs `mpiexec -n N fistr1` (or `mpirun`). Failed or cancelled partitioning never proceeds to the solver. `hecmw_part1` is found beside the selected `fistr1`, then on the effective runtime `PATH`.
+
+Each MPI run uses a fresh `bevyistr_part_*` mesh prefix so old partition files cannot mask missing output. These files remain in the export folder; rerunning Direct or Export restores the entire-mesh control file. **Open Project** uses the original entire mesh (`part_in`) when reopening such a parallel project. The installed partitioner must support PMETIS, and the MPI launcher must match the MPI implementation used to build FrontISTR.
+
+On Windows, an installed Intel oneAPI `setvars.bat` is detected and applied to child processes when Intel MPI is not already configured. Set `FRONTISTR_RUNTIME=inherit` to keep an environment you prepared yourself. Linux inherits the launching environment without invoking this Windows adapter. Process cancellation targets the local run's child processes, not unrelated FrontISTR jobs.
 
 ### Results
 
@@ -204,7 +211,7 @@ Unknown HEC-MW element codes are retained as unsupported elements but do not hav
 4. Define contacts and MPC equations.
 5. Apply BCs, loads, materials, and sections.
 6. Configure the analysis and solver on Solve.
-7. Export the project, then run serial FrontISTR from the Solve page (or run it externally).
+7. Export the project, then run FrontISTR directly or through MPI from the Solve page (or run it externally).
 8. Open the generated result on Results for contour, deformation, and animation inspection.
 
 ## Viewport controls
@@ -237,10 +244,11 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 
 ## Current limitations and direction
 
-- MPI launch, structured iteration progress, and solver-error localization in the viewport are not integrated yet. The current runner is serial and shows the solver's text output.
+- Cluster schedulers, remote-job cancellation, structured iteration progress, and solver-error localization in the viewport are not integrated yet. The current runner targets local workstation MPI (`mpiexec` / `mpirun`) and shows text output; exit code 0 alone is not a convergence or model-validity check.
 - The UI does not yet expose all FrontISTR analysis types and keywords. Unsupported data may not round-trip through the editable setup model.
 - Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
 - Result loading currently attaches fields to the first mesh and is best suited to a single mesh or a flattened exported assembly.
+- Merging MPI rank-result files is not implemented yet; use an external post-processor for the complete distributed result.
 - VTK XML support is intentionally limited to inline ASCII point data.
 - Planned post-processing conveniences include richer result-field selection, hover probes, selected-node history graphs, and interactive clipping. Detailed visualization will continue to rely on ParaView.
 
@@ -254,12 +262,19 @@ Prerequisites:
 - A graphics adapter/backend supported by Bevy/wgpu
 - Optional: `gmsh` on `PATH` for `.geo` meshing
 - FrontISTR installed separately to solve exported projects (`fistr1` on `PATH`, selected in Solve, or named by `FRONTISTR_EXECUTABLE`)
+- For parallel execution: `hecmw_part1` with PMETIS support and an MPI launcher compatible with the installed FrontISTR
 
 Development run:
 
 ```text
 cargo run --package bevyistr
 ```
+
+Optional execution overrides are `FRONTISTR_LAUNCH_MODE=mpi`,
+`FRONTISTR_MPI_RANKS=<N>` (1–4096), `FRONTISTR_MPI_LAUNCHER=<path-or-name>`,
+`FRONTISTR_PARTITIONER=<path-or-name>`, and `FRONTISTR_RUNTIME=inherit`.
+They are platform-neutral; normal use can select Direct/MPI and the rank count
+from the Solve page instead.
 
 Open an HEC-MW/Gmsh mesh or FrontISTR project directly at startup:
 
