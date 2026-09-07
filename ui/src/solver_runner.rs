@@ -1,16 +1,17 @@
 //! Asynchronous FrontISTR process execution and its Solve-page controls.
 //!
 //! The process is deliberately kept outside Bevy's main thread.  A successful
-//! export establishes the working directory and project stem; Run rewrites the
-//! current model/setup to that target before starting `fistr1` there.
+//! export or first Run establishes the working directory and project stem;
+//! Run writes the current model/setup before starting `fistr1` there.
 
 use crate::layout::{SidebarPage, SidebarPageContent};
+use crate::app_settings::{AppSettingsText, SolverPreferences};
 use crate::solver_process::{
     ProcessOutputStream, RuntimeEnvironment, SolverLaunchMode, SolverProcessConfig,
     SolverProcessEvent, SolverProcessHandle, spawn_solver_process,
 };
 use bevy::prelude::*;
-use fem_core::{AnalysisSetup, FemModel};
+use fem_core::{AnalysisSetup, FemModel, MeshLoadStatus};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -66,6 +67,9 @@ pub(crate) struct FrontistrRunState {
     launch_mode: SolverLaunchMode,
     mpi_ranks: u16,
     mpi_launcher: Option<PathBuf>,
+    partitioner: Option<PathBuf>,
+    last_output_directory: Option<PathBuf>,
+    log_path: Option<PathBuf>,
     project: Option<FrontistrProjectTarget>,
     phase: SolverRunPhase,
     message: String,
@@ -96,9 +100,12 @@ impl Default for FrontistrRunState {
             launch_mode,
             mpi_ranks,
             mpi_launcher: std::env::var_os("FRONTISTR_MPI_LAUNCHER").map(PathBuf::from),
+            partitioner: std::env::var_os("FRONTISTR_PARTITIONER").map(PathBuf::from),
+            last_output_directory: None,
+            log_path: None,
             project: None,
             phase: SolverRunPhase::Idle,
-            message: "Export a project to establish the run folder.".to_string(),
+            message: "Press Run FrontISTR to choose an output folder and start.".to_string(),
             log_lines: VecDeque::new(),
             started_at: None,
             elapsed: Duration::ZERO,
@@ -109,11 +116,39 @@ impl Default for FrontistrRunState {
 }
 
 impl FrontistrRunState {
+    pub(crate) fn from_preferences(prefs: &SolverPreferences) -> Self {
+        Self {
+            executable: prefs.executable.clone(),
+            partitioner: prefs.partitioner.clone(),
+            mpi_launcher: prefs.mpi_launcher.clone(),
+            launch_mode: prefs.launch_mode,
+            mpi_ranks: prefs.mpi_ranks,
+            last_output_directory: prefs.last_output_directory.clone(),
+            ..default()
+        }
+    }
+
+    pub(crate) fn preferences(&self) -> SolverPreferences {
+        SolverPreferences {
+            executable: self.executable.clone(),
+            partitioner: self.partitioner.clone(),
+            mpi_launcher: self.mpi_launcher.clone(),
+            launch_mode: self.launch_mode,
+            mpi_ranks: self.mpi_ranks,
+            last_output_directory: self.last_output_directory.clone(),
+        }
+    }
+
+    pub(crate) fn last_output_directory(&self) -> Option<&std::path::Path> {
+        self.last_output_directory.as_deref()
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         self.phase == SolverRunPhase::Running
     }
 
     pub(crate) fn register_export(&mut self, directory: PathBuf, stem: String) {
+        self.last_output_directory = Some(directory.clone());
         self.project = Some(FrontistrProjectTarget { directory, stem });
         if !self.is_running() {
             self.phase = SolverRunPhase::Ready;
@@ -127,12 +162,12 @@ impl FrontistrRunState {
             return;
         }
         self.phase = SolverRunPhase::Idle;
-        self.message = "Export the current project before running FrontISTR.".to_string();
+        self.message = "Press Run FrontISTR to choose an output folder and start.".to_string();
         self.log_lines.clear();
         self.elapsed = Duration::ZERO;
     }
 
-    fn project(&self) -> Option<&FrontistrProjectTarget> {
+    pub(crate) fn project(&self) -> Option<&FrontistrProjectTarget> {
         self.project.as_ref()
     }
 
@@ -185,18 +220,53 @@ impl FrontistrRunState {
         self.elapsed = Duration::ZERO;
     }
 
+    /// The picker is injected so cancel/first-run behavior can be tested
+    /// without native dialogs or launching a solver.
+    fn prepare_inputs(
+        &mut self,
+        model: &FemModel,
+        setup: &AnalysisSetup,
+        stem: &str,
+        pick: impl FnOnce(Option<&std::path::Path>) -> Option<PathBuf>,
+    ) -> Result<bool, String> {
+        if self.is_running() {
+            return Err("FrontISTR is already running.".into());
+        }
+        let validation = hecmw::validate_frontistr_project(model, setup);
+        if validation.has_errors() {
+            return Err(validation.summary(5));
+        }
+        let target = match self.project().cloned() {
+            Some(target) => target,
+            None => {
+                let Some(directory) = pick(self.last_output_directory()) else {
+                    self.message = "Run cancelled: no output folder selected. Press Run to try again.".into();
+                    return Ok(false);
+                };
+                FrontistrProjectTarget {
+                    directory,
+                    stem: stem.to_string(),
+                }
+            }
+        };
+        hecmw::write_frontistr_project(&target.directory, &target.stem, model, setup)
+            .map_err(|error| format!("Could not write solver input: {error}"))?;
+        self.register_export(target.directory, target.stem);
+        Ok(true)
+    }
+
     fn start(&mut self) -> Result<(), String> {
         let target = self
             .project
             .as_ref()
-            .ok_or_else(|| "Export the project before running FrontISTR.".to_string())?;
+            .ok_or_else(|| "Choose an output folder before starting FrontISTR.".to_string())?;
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
         }
         let process = spawn_solver_process(SolverProcessConfig {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
-            partitioner: std::env::var_os("FRONTISTR_PARTITIONER").map(PathBuf::from),
+            partitioner: self.partitioner.clone(),
             working_directory: target.directory.clone(),
             environment: self.runtime_environment.clone(),
             launch_mode: self.launch_mode,
@@ -209,6 +279,7 @@ impl FrontistrRunState {
         self.log_lines.clear();
         self.started_at = Some(Instant::now());
         self.elapsed = Duration::ZERO;
+        self.log_path = Some(process.log_path().to_owned());
         self.process = Some(process);
         self.stop_requested = false;
         Ok(())
@@ -321,7 +392,7 @@ impl FrontistrRunState {
                     .display()
                     .to_string()
             })
-            .unwrap_or_else(|| "Export a project first".to_string())
+            .unwrap_or_else(|| "Choose output folder on first Run".to_string())
     }
 
     fn status_label(&self) -> String {
@@ -341,7 +412,7 @@ impl FrontistrRunState {
     }
 
     fn log_label(&self) -> String {
-        if self.log_lines.is_empty() {
+        let tail = if self.log_lines.is_empty() {
             "Solver output appears here.".to_string()
         } else {
             self.log_lines
@@ -349,6 +420,10 @@ impl FrontistrRunState {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n")
+        };
+        match &self.log_path {
+            Some(path) => format!("Full log: {}\n\n{tail}", path.display()),
+            None => tail,
         }
     }
 }
@@ -429,7 +504,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                     Name::new("SelectFrontistrExecutableButton"),
                 ))
                 .with_child((
-                    Text::new("Choose fistr1 executable..."),
+                    Text::new("Change fistr1 executable..."),
                     TextFont {
                         font_size: FontSize::Px(10.5),
                         ..default()
@@ -562,7 +637,13 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 });
 
             panel.spawn((
-                Text::new("Project: export a project first"),
+                Text::new("Execution preferences are saved automatically."),
+                TextFont { font_size: FontSize::Px(9.0), ..default() },
+                TextColor(TEXT_MUTED),
+                AppSettingsText,
+            ));
+            panel.spawn((
+                Text::new("Project: choose output folder on first Run"),
                 TextFont {
                     font_size: FontSize::Px(9.5),
                     ..default()
@@ -630,7 +711,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 });
 
             panel.spawn((
-                Text::new("Status: Idle\nExport a project to establish the run folder."),
+                Text::new("Status: Idle\nPress Run FrontISTR to choose an output folder and start."),
                 TextFont {
                     font_size: FontSize::Px(10.0),
                     ..default()
@@ -640,7 +721,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
             ));
             panel.spawn((
                 Text::new(
-                    "MPI: write partition controls, run hecmw_part1, then solve with N ranks. Direct: solve the entire mesh. Run refreshes exported inputs.",
+                    "Run writes inputs to the output folder, then starts analysis. MPI partitions first. Output appears below and is also saved to a log file. Stop cancels analysis.",
                 ),
                 TextFont {
                     font_size: FontSize::Px(9.5),
@@ -759,6 +840,7 @@ pub(crate) fn update_mpi_rank_controls_system(
 
 pub(crate) fn run_frontistr_button_system(
     model: Option<Res<FemModel>>,
+    status: Option<Res<MeshLoadStatus>>,
     setup: Res<AnalysisSetup>,
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
@@ -767,26 +849,24 @@ pub(crate) fn run_frontistr_button_system(
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        let enabled = state.project().is_some() && !state.is_running();
+        let enabled = !state.is_running();
         if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
             let Some(model) = model.as_deref() else {
                 state.report_preflight_error("No mesh is loaded.");
                 continue;
             };
-            let Some(target) = state.project().cloned() else {
-                continue;
-            };
-
-            let validation = hecmw::validate_frontistr_project(model, &setup);
-            if validation.has_errors() {
-                state.report_preflight_error(validation.summary(5));
-                continue;
-            }
-            if let Err(error) =
-                hecmw::write_frontistr_project(&target.directory, &target.stem, model, &setup)
-            {
-                state.report_preflight_error(format!("Could not refresh solver input: {error}"));
-                continue;
+            let stem = crate::run_output::project_stem(
+                status.as_deref().and_then(|s| s.last_path.as_deref()),
+            );
+            match state.prepare_inputs(model, &setup, &stem, |previous| {
+                crate::run_output::choose_output_directory(&stem, previous)
+            }) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    state.report_preflight_error(error);
+                    continue;
+                }
             }
             if let Err(error) = state.start() {
                 state.report_preflight_error(error);
@@ -893,7 +973,7 @@ pub(crate) fn update_frontistr_run_ui_system(
     }
 }
 
-fn ordinary_button_color(interaction: Interaction, enabled: bool) -> Color {
+pub(super) fn ordinary_button_color(interaction: Interaction, enabled: bool) -> Color {
     if !enabled {
         return BUTTON_DISABLED;
     }
@@ -905,127 +985,5 @@ fn ordinary_button_color(interaction: Interaction, enabled: bool) -> Color {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn export_target_controls_ready_state_and_can_be_cleared() {
-        let mut state = FrontistrRunState::default();
-        assert_eq!(state.phase, SolverRunPhase::Idle);
-        assert!(state.project().is_none());
-
-        state.register_export(PathBuf::from("project"), "model".to_string());
-        assert_eq!(state.phase, SolverRunPhase::Ready);
-        assert_eq!(state.project().unwrap().stem, "model");
-
-        state.clear_export_target();
-        assert_eq!(state.phase, SolverRunPhase::Idle);
-        assert!(state.project().is_none());
-    }
-
-    #[test]
-    fn solver_log_keeps_a_bounded_tail() {
-        let mut state = FrontistrRunState::default();
-        for index in 0..(MAX_LOG_LINES + 5) {
-            state.append_log(ProcessOutputStream::Stdout, format!("line {index}"));
-        }
-
-        assert_eq!(state.log_lines.len(), MAX_LOG_LINES);
-        assert_eq!(state.log_lines.front().unwrap(), "line 5");
-        assert_eq!(
-            state.log_lines.back().unwrap(),
-            &format!("line {}", MAX_LOG_LINES + 4)
-        );
-    }
-
-    #[test]
-    fn mpi_rank_adjustment_is_exact_and_bounded() {
-        let mut state = FrontistrRunState::default();
-        state.set_launch_mode(SolverLaunchMode::Mpi);
-        state.mpi_ranks = 1;
-
-        state.adjust_mpi_ranks(-1);
-        assert_eq!(state.mpi_ranks, 1);
-        state.adjust_mpi_ranks(7);
-        assert_eq!(state.mpi_ranks, 8);
-        state.mpi_ranks = 4096;
-        state.adjust_mpi_ranks(1);
-        assert_eq!(state.mpi_ranks, 4096);
-    }
-
-    #[test]
-    fn execution_controls_switch_modes_and_freeze_during_a_run() {
-        fn spawn_panel(mut commands: Commands) {
-            commands
-                .spawn(Node::default())
-                .with_children(spawn_solver_execution_ui);
-        }
-        let mut app = App::new();
-        app.insert_resource(FrontistrRunState {
-            launch_mode: SolverLaunchMode::Direct,
-            mpi_ranks: 2,
-            ..default()
-        });
-        app.add_systems(Startup, spawn_panel);
-        app.add_systems(
-            Update,
-            (
-                solver_launch_mode_button_system,
-                mpi_rank_adjust_button_system,
-                update_mpi_rank_controls_system,
-                update_frontistr_run_ui_system,
-            )
-                .chain(),
-        );
-        app.update();
-        let controls = app
-            .world_mut()
-            .query_filtered::<Entity, With<MpiRankControls>>()
-            .single(app.world())
-            .unwrap();
-        assert_eq!(
-            app.world().get::<Node>(controls).unwrap().display,
-            Display::None
-        );
-        let mpi_button = app
-            .world_mut()
-            .query::<(Entity, &SolverLaunchModeButton)>()
-            .iter(app.world())
-            .find(|(_, mode)| mode.0 == SolverLaunchMode::Mpi)
-            .unwrap()
-            .0;
-        *app.world_mut().get_mut::<Interaction>(mpi_button).unwrap() = Interaction::Pressed;
-        app.update();
-        assert_eq!(
-            app.world().get::<Node>(controls).unwrap().display,
-            Display::Flex
-        );
-        let increment = app
-            .world_mut()
-            .query::<(Entity, &MpiRankAdjustButton)>()
-            .iter(app.world())
-            .find(|(_, delta)| delta.0 == 1)
-            .unwrap()
-            .0;
-        *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::Pressed;
-        app.update();
-        assert_eq!(app.world().resource::<FrontistrRunState>().mpi_ranks, 3);
-
-        app.world_mut().resource_mut::<FrontistrRunState>().phase = SolverRunPhase::Running;
-        let direct = app
-            .world_mut()
-            .query::<(Entity, &SolverLaunchModeButton)>()
-            .iter(app.world())
-            .find(|(_, mode)| mode.0 == SolverLaunchMode::Direct)
-            .unwrap()
-            .0;
-        *app.world_mut().get_mut::<Interaction>(direct).unwrap() = Interaction::Pressed;
-        *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::None;
-        app.update();
-        *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::Pressed;
-        app.update();
-        let state = app.world().resource::<FrontistrRunState>();
-        assert_eq!(state.launch_mode, SolverLaunchMode::Mpi);
-        assert_eq!(state.mpi_ranks, 3);
-    }
-}
+#[path = "solver_runner_tests.rs"]
+mod tests;

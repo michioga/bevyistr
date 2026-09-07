@@ -1,0 +1,13 @@
+# Example only. The app writes the real file in the user configuration directory.
+# Set BEVYISTR_CONFIG to use a different path. Restart after manual edits.
+[frontistr]
+# A program on PATH, or an absolute path. Windows example:
+# executable = 'C:\Users\michi\FrontISTR\bin\fistr1.exe'
+executable = "fistr1"
+# Empty = automatic discovery (partitioner beside fistr1, then PATH).
+partitioner = ""
+mpi_launcher = ""
+launch_mode = "direct" # "direct" or "mpi"
+mpi_ranks = 4           # 1..4096
+# Only the initial folder in the picker; never an automatic write target.
+last_output_directory = ""

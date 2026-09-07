@@ -125,6 +125,10 @@ fn direct_solve_skips_partitioning() {
             .unwrap()
             .contains("TYPE=HECMW-ENTIRE")
     );
+    let transcript = std::fs::read_to_string(handle.log_path()).unwrap();
+    assert!(transcript.contains("solver-ok"));
+    assert!(transcript.contains("FrontISTR exit code: 0"));
+    assert!(crate::solver_log::completion_path(handle.log_path()).is_file());
 }
 
 #[test]
@@ -175,6 +179,9 @@ fn partition_failure_or_missing_outputs_prevents_solver_launch() {
                 .trim(),
             "hecmw_part1"
         );
+        let transcript = std::fs::read_to_string(handle.log_path()).unwrap();
+        assert!(transcript.contains("Run failed:"));
+        assert!(crate::solver_log::completion_path(handle.log_path()).is_file());
     }
 }
 
@@ -200,6 +207,69 @@ fn stopping_partition_does_not_start_solver() {
         "{events:?}"
     );
     assert!(!dir.0.join("solver-called").exists());
+    assert!(
+        std::fs::read_to_string(handle.log_path())
+            .unwrap()
+            .contains("Run stopped by user")
+    );
+    assert!(crate::solver_log::completion_path(handle.log_path()).is_file());
+}
+
+#[test]
+fn live_log_is_readable_before_exit_and_closing_reader_does_not_stop_solver() {
+    let (dir, config) = fake_project(SolverLaunchMode::Direct);
+    std::fs::write(dir.0.join("live-output"), "").unwrap();
+    let handle = spawn_solver_process(config).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(handle.log_path())
+        .unwrap()
+        .contains("running-before-completion")
+    {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!crate::solver_log::completion_path(handle.log_path()).exists());
+    drop(std::fs::File::open(handle.log_path()).unwrap());
+    std::fs::write(dir.0.join("allow-finish"), "").unwrap();
+    let events = wait_for(&handle, 10);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SolverProcessEvent::Finished(Some(0))))
+    );
+    let transcript = std::fs::read_to_string(handle.log_path()).unwrap();
+    assert!(transcript.contains("solver-ok"));
+    assert!(transcript.contains("[stderr] diagnostic-at-completion"));
+}
+
+#[test]
+fn ui_backlog_and_line_limit_do_not_truncate_or_block_the_transcript() {
+    let dir = TempProject::new();
+    let log = RunLog::create(&dir.0).unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let events = ProcessEvents::new(sender, log.clone());
+    let long_line = "結果".repeat(1500);
+    events
+        .send(SolverProcessEvent::Output(
+            ProcessOutputStream::Stdout,
+            long_line.clone(),
+        ))
+        .unwrap();
+    events
+        .send(SolverProcessEvent::Output(
+            ProcessOutputStream::Stdout,
+            "still recording".into(),
+        ))
+        .unwrap();
+    let SolverProcessEvent::Output(_, ui_line) = receiver.recv().unwrap() else {
+        panic!()
+    };
+    assert!(ui_line.chars().count() <= 1025);
+    let transcript = std::fs::read_to_string(log.path()).unwrap();
+    assert!(transcript.contains(&long_line));
+    assert!(transcript.contains("still recording"));
+    let another = RunLog::create(&dir.0).unwrap();
+    assert_ne!(log.path(), another.path());
 }
 
 #[test]
@@ -245,6 +315,8 @@ fn environment_dump_preserves_equals_and_ignores_drive_variables() {
 #[test]
 fn non_utf8_diagnostics_do_not_stop_output_drainage() {
     let (sender, receiver) = mpsc::sync_channel(4);
+    let dir = TempProject::new();
+    let sender = ProcessEvents::new(sender, RunLog::create(&dir.0).unwrap());
     spawn_output_reader(
         std::io::Cursor::new(b"bad:\xff\r\nnext line\n"),
         ProcessOutputStream::Stderr,
@@ -317,4 +389,9 @@ fn installed_frontistr_parallel_smoke() {
     );
     assert!(dir.0.join("hinge.res.0.1").is_file(), "no rank-0 result");
     assert!(dir.0.join("hinge.res.1.1").is_file(), "no rank-1 result");
+    let transcript = std::fs::read_to_string(handle.log_path()).unwrap();
+    assert!(transcript.contains("=== Partitioning (hecmw_part1) ==="));
+    assert!(transcript.contains("=== Solving ==="));
+    assert!(transcript.contains("FrontISTR exit code: 0"));
+    assert!(crate::solver_log::completion_path(handle.log_path()).is_file());
 }

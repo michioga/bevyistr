@@ -72,7 +72,9 @@ The in-application Selection guide shows the active controls and can be collapse
 - Flatten multi-part assemblies while consistently remapping IDs, groups, setup data, contacts, and MPC equations.
 - Run `fistr1` directly, or partition the mesh with `hecmw_part1` and then solve through MPI, without blocking the viewport during partitioning/solving. Inspect the stdout/stderr tail and stop local child processes from the Solve page.
 
-**Run FrontISTR** rewrites the current model and setup to the last exported target before launch, so an edited UI state is not solved against stale files. Choose the `fistr1` executable once in the Solve page, put it on `PATH`, or set `FRONTISTR_EXECUTABLE` before starting bevyistr.
+**Run FrontISTR** is available without a separate Export step. On the first run for a loaded model, it asks for an output folder, validates/writes the current inputs, and starts analysis. Cancelling the folder dialog does not start a run. Existing input files require confirmation when choosing a folder. Subsequent runs of that model refresh the same target; **Export** can still select a different target without starting analysis. A previously used folder is only a dialog hint after reopening/changing a model, never an automatically restored write target.
+
+Choose the `fistr1` executable once in Solve: its path, Direct/MPI mode, MPI rank count, and last output folder are saved automatically to **bevyistr.toml** and restored on the next launch. Alternatively, put `fistr1` on `PATH`. Explicit paths for `hecmw_part1` and the MPI launcher can also be configured in TOML.
 
 - **Direct** runs one `fistr1` process with `HECMW-ENTIRE` input.
 - **MPI** follows FrontISTR's [partition-then-solve workflow](https://source-docs.frontistr.com/execution_guide/overview/01_flow.html). It writes `hecmw_part_ctrl.dat` (`TYPE=NODE-BASED, METHOD=PMETIS, DOMAIN=N`) and `hecmw_ctrl.dat` (`part_in`: entire mesh; `part_out` and `fstrMSH`: distributed mesh), runs `hecmw_part1`, checks all N partition files, and only then runs `mpiexec -n N fistr1` (or `mpirun`). Failed or cancelled partitioning never proceeds to the solver. `hecmw_part1` is found beside the selected `fistr1`, then on the effective runtime `PATH`.
@@ -80,6 +82,18 @@ The in-application Selection guide shows the active controls and can be collapse
 Each MPI run uses a fresh `bevyistr_part_*` mesh prefix so old partition files cannot mask missing output. These files remain in the export folder; rerunning Direct or Export restores the entire-mesh control file. **Open Project** uses the original entire mesh (`part_in`) when reopening such a parallel project. The installed partitioner must support PMETIS, and the MPI launcher must match the MPI implementation used to build FrontISTR.
 
 On Windows, an installed Intel oneAPI `setvars.bat` is detected and applied to child processes when Intel MPI is not already configured. Set `FRONTISTR_RUNTIME=inherit` to keep an environment you prepared yourself. Linux inherits the launching environment without invoking this Windows adapter. Process cancellation targets the local run's child processes, not unrelated FrontISTR jobs.
+
+Solver stdout/stderr is displayed **inside Solve**; no external log console is launched. Use **Stop** to cancel analysis. Each run also saves a UTF-8 transcript as `bevyistr_run_<id>.log` in the output folder, with a `.log.done` completion marker. Full decoded lines are kept on disk independently of the shortened in-app tail, so a busy UI does not block output collection. Previous transcripts are not overwritten, and Solve displays the latest log's path.
+
+### Application preferences (bevyistr.toml)
+
+- Windows: `%APPDATA%\bevyistr\bevyistr.toml`
+- Linux: `$XDG_CONFIG_HOME/bevyistr/bevyistr.toml`, or `~/.config/bevyistr/bevyistr.toml`
+- Optional portable/custom path: set `BEVYISTR_CONFIG` to the desired TOML path before launch.
+
+The file is created when an execution preference or output folder changes; the exact location and any load/save error are shown in Solve. Preferences do not depend on the current working directory. See [bevyistr.example.toml](bevyistr.example.toml) for editable fields. An empty partitioner/launcher path means automatic discovery. Use absolute executable paths or program names on `PATH`, and TOML literal strings (`'C:\Tools\fistr1.exe'`) for Windows paths.
+
+Settings are loaded at startup. To edit the file manually, close bevyistr, edit the file, then restart. Existing unrelated keys/tables are preserved on save. Invalid settings are reported and not overwritten; the app can still be used with defaults/current in-memory values. Saving uses a same-directory temporary file and replacement to avoid truncating the existing file on a failed write. Environment overrides take precedence over TOML at startup; when preferences are changed in the UI, the current effective values are saved. Runtime environment detection (`FRONTISTR_RUNTIME`) remains separate from saved execution preferences.
 
 ### Results
 
@@ -275,6 +289,7 @@ Optional execution overrides are `FRONTISTR_LAUNCH_MODE=mpi`,
 `FRONTISTR_PARTITIONER=<path-or-name>`, and `FRONTISTR_RUNTIME=inherit`.
 They are platform-neutral; normal use can select Direct/MPI and the rank count
 from the Solve page instead.
+Solver output stays inside Solve; a separate terminal is not required.
 
 Open an HEC-MW/Gmsh mesh or FrontISTR project directly at startup:
 

@@ -57,6 +57,14 @@ fn main() {
         }
         "fistr1" => {
             fs::write("solver-called", b"yes").unwrap();
+            if Path::new("live-output").exists() {
+                println!("running-before-completion");
+                std::io::stdout().flush().unwrap();
+                while !Path::new("allow-finish").exists() {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                eprintln!("diagnostic-at-completion");
+            }
             println!("solver-ok");
         }
         "tree-parent" => {

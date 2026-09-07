@@ -612,17 +612,10 @@ pub(crate) fn export_button_system(
                 continue;
             }
 
-            let stem = status
-                .last_path
-                .as_deref()
-                .and_then(|p| p.file_stem())
-                .and_then(|s| s.to_str())
-                .unwrap_or("mesh")
-                .to_string();
-
-            let Some(dir) = rfd::FileDialog::new()
-                .set_title("Export FrontISTR files to folder")
-                .pick_folder()
+            let stem = crate::run_output::project_stem(status.last_path.as_deref());
+            let Some(dir) = crate::run_output::choose_output_directory(
+                &stem, run_state.last_output_directory(),
+            )
             else {
                 continue;
             };

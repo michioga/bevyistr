@@ -6,13 +6,17 @@
 
 #[path = "solver_process_tree.rs"]
 mod process_tree;
+use crate::solver_log::RunLog;
 use process_tree::ProcessTree;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
@@ -95,9 +99,14 @@ pub(crate) enum SolverProcessEvent {
 pub(crate) struct SolverProcessHandle {
     events: Mutex<Receiver<SolverProcessEvent>>,
     stop_sender: Sender<()>,
+    log_path: PathBuf,
 }
 
 impl SolverProcessHandle {
+    pub(crate) fn log_path(&self) -> &Path {
+        &self.log_path
+    }
+
     pub(crate) fn poll(&self) -> Vec<SolverProcessEvent> {
         let receiver = self
             .events
@@ -114,19 +123,97 @@ impl SolverProcessHandle {
 pub(crate) fn spawn_solver_process(
     config: SolverProcessConfig,
 ) -> Result<SolverProcessHandle, String> {
-    // Backpressure keeps verbose parallel output from growing an unbounded
-    // queue while the UI consumes a bounded batch each frame.
+    // The UI is a bounded, best-effort tail. Complete output is recorded on
+    // disk even while the UI is busy or its window stops updating.
     let (event_sender, event_receiver) = mpsc::sync_channel(1024);
     let (stop_sender, stop_receiver) = mpsc::channel();
+    let log = RunLog::create(&config.working_directory)
+        .map_err(|e| format!("Could not create solver log: {e}"))?;
+    let log_path = log.path().to_owned();
+    let events = ProcessEvents::new(event_sender, log);
     thread::Builder::new()
         .name("frontistr-runner".to_string())
-        .spawn(move || run_process(config, event_sender, stop_receiver))
+        .spawn(move || run_process(config, events, stop_receiver))
         .map_err(|error| format!("Could not start solver worker: {error}"))?;
 
     Ok(SolverProcessHandle {
         events: Mutex::new(event_receiver),
         stop_sender,
+        log_path,
     })
+}
+
+#[derive(Clone)]
+struct ProcessEvents {
+    ui: SyncSender<SolverProcessEvent>,
+    log: RunLog,
+    log_warning_sent: Arc<AtomicBool>,
+}
+
+impl ProcessEvents {
+    fn new(ui: SyncSender<SolverProcessEvent>, log: RunLog) -> Self {
+        Self {
+            ui,
+            log,
+            log_warning_sent: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn send(
+        &self,
+        mut event: SolverProcessEvent,
+    ) -> Result<(), mpsc::SendError<SolverProcessEvent>> {
+        let text = match &event {
+            SolverProcessEvent::Output(ProcessOutputStream::Stdout, line) => line.clone(),
+            SolverProcessEvent::Output(ProcessOutputStream::Stderr, line) => {
+                format!("[stderr] {line}")
+            }
+            SolverProcessEvent::Stage(stage) => format!("\n=== {stage} ==="),
+            SolverProcessEvent::SpawnFailed(error) => format!("\n=== Run failed: {error} ==="),
+            SolverProcessEvent::Finished(code) => {
+                format!(
+                    "\n=== FrontISTR exit code: {}. Review results and convergence. ===",
+                    code.map(|code| code.to_string())
+                        .unwrap_or_else(|| "unavailable (signal)".into())
+                )
+            }
+            SolverProcessEvent::Stopped => "\n=== Run stopped by user ===".into(),
+        };
+        let terminal = matches!(
+            event,
+            SolverProcessEvent::SpawnFailed(_)
+                | SolverProcessEvent::Finished(_)
+                | SolverProcessEvent::Stopped
+        );
+        let result = self
+            .log
+            .line(&text)
+            .and_then(|()| if terminal { self.log.finish() } else { Ok(()) });
+        if let Err(error) = result {
+            if !self.log_warning_sent.swap(true, Ordering::Relaxed) {
+                self.ui.send(SolverProcessEvent::Output(
+                    ProcessOutputStream::Stderr,
+                    format!("Log recording failed (analysis continues): {error}"),
+                ))?;
+            }
+        }
+        // Preserve full lines on disk; only the in-app tail is shortened.
+        if let SolverProcessEvent::Output(_, line) = &mut event {
+            if let Some((index, _)) = line.char_indices().nth(1024) {
+                line.truncate(index);
+                line.push('…');
+            }
+        }
+        if terminal {
+            // Never discard completion/failure: the UI must unlock Run/Export.
+            self.ui.send(event)
+        } else {
+            match self.ui.try_send(event) {
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),
+                Err(mpsc::TrySendError::Disconnected(event)) => Err(mpsc::SendError(event)),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -150,7 +237,7 @@ fn cancelled(receiver: &Receiver<()>) -> bool {
 
 fn run_process(
     config: SolverProcessConfig,
-    event_sender: SyncSender<SolverProcessEvent>,
+    event_sender: ProcessEvents,
     stop_receiver: Receiver<()>,
 ) {
     let result = run_pipeline(&config, &event_sender, &stop_receiver);
@@ -164,7 +251,7 @@ fn run_process(
 
 fn run_pipeline(
     config: &SolverProcessConfig,
-    events: &SyncSender<SolverProcessEvent>,
+    events: &ProcessEvents,
     stop: &Receiver<()>,
 ) -> Result<StepResult, String> {
     if cancelled(stop) {
@@ -273,7 +360,7 @@ fn execute_step(
     step: &ProcessStep,
     directory: &Path,
     environment: Option<&[(OsString, OsString)]>,
-    events: &SyncSender<SolverProcessEvent>,
+    events: &ProcessEvents,
     stop: &Receiver<()>,
 ) -> Result<StepResult, String> {
     if cancelled(stop) {
@@ -294,6 +381,9 @@ fn execute_step(
     if let Some(env) = environment {
         command.env_clear().envs(env.iter().cloned());
     }
+    // GNU Fortran: unbuffer stdout/stderr only, leaving mesh/result file I/O
+    // buffered. Intel Fortran's stdout is unbuffered by default.
+    command.env("GFORTRAN_UNBUFFERED_PRECONNECTED", "y");
     ProcessTree::configure(&mut command);
     let mut child = command
         .spawn()
@@ -359,7 +449,7 @@ fn executable_name(name: &str) -> OsString {
 
 fn prepare_environment(
     environment: &RuntimeEnvironment,
-    _event_sender: &SyncSender<SolverProcessEvent>,
+    _event_sender: &ProcessEvents,
 ) -> Result<Option<Vec<(OsString, OsString)>>, String> {
     match environment {
         RuntimeEnvironment::Inherited => Ok(None),
@@ -424,7 +514,7 @@ fn launch_command(
     Ok((launcher, arguments, description))
 }
 
-fn resolve_program(
+pub(super) fn resolve_program(
     program: &Path,
     environment: Option<&[(OsString, OsString)]>,
 ) -> Option<PathBuf> {
@@ -490,19 +580,17 @@ fn environment_value(environment: &[(OsString, OsString)], requested: &str) -> O
 fn spawn_output_reader<R: Read + Send + 'static>(
     reader: R,
     stream: ProcessOutputStream,
-    sender: SyncSender<SolverProcessEvent>,
+    sender: ProcessEvents,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(reader).split(b'\n') {
             match line {
                 Ok(line) => {
                     // Non-UTF8 diagnostics must not stop pipe drainage and
-                    // deadlock a native solver. Only the UI tail is retained.
+                    // deadlock a native solver. Save the complete decoded line.
                     let line = String::from_utf8_lossy(&line)
                         .trim_end_matches('\r')
-                        .chars()
-                        .take(1024)
-                        .collect();
+                        .to_owned();
                     if sender
                         .send(SolverProcessEvent::Output(stream, line))
                         .is_err()

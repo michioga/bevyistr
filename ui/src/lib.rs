@@ -19,6 +19,9 @@ mod selection_ui;
 pub mod slider;
 mod solve_ui;
 mod solver_editor;
+mod app_settings;
+mod run_output;
+mod solver_log;
 mod solver_process;
 mod solver_runner;
 
@@ -121,6 +124,7 @@ use solve_ui::{
     analysis_type_button_system, solver_method_button_system, update_analysis_setup_stats_text,
 };
 use solver_editor::{SolverEditorState, solver_numeric_input_system};
+use app_settings::{AppSettings, save_settings_system, update_settings_text_system};
 use solver_runner::{
     FrontistrRunState, mpi_rank_adjust_button_system, poll_frontistr_process_system,
     run_frontistr_button_system, select_frontistr_executable_system,
@@ -185,7 +189,11 @@ impl Plugin for UiPlugin {
         app.init_resource::<MpcEquationEditorState>();
         app.init_resource::<MpcPairDraftState>();
         app.init_resource::<SolverEditorState>();
-        app.init_resource::<FrontistrRunState>();
+        let settings = AppSettings::load_default();
+        if !app.world().contains_resource::<FrontistrRunState>() {
+            app.insert_resource(FrontistrRunState::from_preferences(&settings.solver));
+        }
+        app.insert_resource(settings);
         app.init_resource::<SelectedDloadKind>();
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
@@ -447,6 +455,8 @@ impl Plugin for UiPlugin {
                     .after(run_frontistr_button_system)
                     .after(stop_frontistr_button_system),
                 update_frontistr_run_ui_system.after(poll_frontistr_process_system),
+                save_settings_system.after(poll_frontistr_process_system),
+                update_settings_text_system.after(save_settings_system),
                 update_mpi_rank_controls_system
                     .after(solver_launch_mode_button_system)
                     .after(mpi_rank_adjust_button_system),
