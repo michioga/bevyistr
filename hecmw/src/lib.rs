@@ -7,6 +7,8 @@ pub mod inp;
 pub mod msh_writer;
 pub mod project_writer;
 pub mod result;
+pub mod native_result;
+pub mod distributed_nodes;
 pub mod series;
 pub mod vtu;
 

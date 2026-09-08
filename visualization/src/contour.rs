@@ -8,7 +8,7 @@ use bevy::{pbr::wireframe::Wireframe, prelude::*};
 use fem_core::{FemModel, FemModelVersion, FemResultSet};
 
 #[derive(Resource, Default)]
-pub(crate) struct ContourSurface(Option<RenderedSurface>);
+pub(crate) struct ContourSurface(Vec<RenderedSurface>);
 struct RenderedSurface {
     entity: Entity,
     mesh_index: usize,
@@ -36,61 +36,66 @@ pub(crate) fn update_contour_surface(
     *last_version = Some(version.value);
     if rebuild {
         *last_contour = settings.contour.clone();
-        let built = settings.contour.as_ref().and_then(|contour| {
-            let mesh = model.as_ref()?.meshes.get(contour.mesh_index)?;
-            let step = results
-                .by_mesh
-                .get(contour.mesh_index)?
-                .get(contour.step_index)?;
-            Some((
-                contour.mesh_index,
-                build_contour_surface_mesh(mesh, step, contour)?,
-            ))
-        });
-        if let Some((mesh_index, mesh)) = built {
-            if let Some(current) = &mut surface.0 {
-                // Reuse the GPU asset identity while scrubbing timesteps.
-                if let Some(mut asset) = meshes.get_mut(&current.mesh) {
-                    *asset = mesh;
-                } else {
-                    current.mesh = meshes.add(mesh);
-                }
-                current.mesh_index = mesh_index;
-                commands
-                    .entity(current.entity)
-                    .insert((Mesh3d(current.mesh.clone()), FemPartVisual { mesh_index }));
-            } else {
-                let mesh = meshes.add(mesh);
-                let material = materials.add(StandardMaterial {
-                    unlit: true,
-                    cull_mode: None,
-                    double_sided: true,
-                    ..default()
-                });
-                let entity = commands
-                    .spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                        Transform::default(),
-                        FemPartVisual { mesh_index },
-                        Name::new("Result contour surface"),
-                    ))
-                    .id();
-                surface.0 = Some(RenderedSurface {
-                    entity,
-                    mesh_index,
-                    mesh,
-                    material,
-                });
+        let mut previous = std::mem::take(&mut surface.0);
+        if let (Some(contour), Some(model)) = (&settings.contour, model.as_deref()) {
+            for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+                let Some(step) = results
+                    .by_mesh
+                    .get(mesh_index)
+                    .and_then(|steps| steps.get(contour.step_index))
+                else {
+                    continue;
+                };
+                let Some(built) = build_contour_surface_mesh(mesh, step, contour) else {
+                    continue;
+                };
+                let current =
+                    if let Some(index) = previous.iter().position(|s| s.mesh_index == mesh_index) {
+                        let mut current = previous.swap_remove(index);
+                        if let Some(mut asset) = meshes.get_mut(&current.mesh) {
+                            *asset = built;
+                        } else {
+                            current.mesh = meshes.add(built);
+                        }
+                        commands
+                            .entity(current.entity)
+                            .insert(Mesh3d(current.mesh.clone()));
+                        current
+                    } else {
+                        let mesh = meshes.add(built);
+                        let material = materials.add(StandardMaterial {
+                            unlit: true,
+                            cull_mode: None,
+                            double_sided: true,
+                            ..default()
+                        });
+                        let entity = commands
+                            .spawn((
+                                Mesh3d(mesh.clone()),
+                                MeshMaterial3d(material.clone()),
+                                Transform::default(),
+                                FemPartVisual { mesh_index },
+                                Name::new("Result contour surface"),
+                            ))
+                            .id();
+                        RenderedSurface {
+                            entity,
+                            mesh_index,
+                            mesh,
+                            material,
+                        }
+                    };
+                surface.0.push(current);
             }
-        } else if let Some(current) = surface.0.take() {
-            commands.entity(current.entity).despawn();
+        }
+        for old in previous {
+            commands.entity(old.entity).despawn();
         }
     }
     if !rebuild && !settings.is_changed() {
         return;
     }
-    if let Some(current) = &surface.0 {
+    for current in &surface.0 {
         let mut entity = commands.entity(current.entity);
         entity.insert(if VisualLayer::Shaded.visible_in(settings.mode) {
             Visibility::Visible
@@ -115,7 +120,7 @@ pub(crate) fn update_contour_surface(
 }
 
 /// Run after regular/contact visibility. Never replace edges, nodes or the
-/// surfaces of other parts with the currently selected result mesh.
+/// parts without result data. Assemblies display every part's own results.
 pub(crate) fn apply_contour_visibility(
     mut commands: Commands,
     surface: Res<ContourSurface>,
@@ -133,10 +138,7 @@ pub(crate) fn apply_contour_visibility(
 ) {
     for (entity, part, layer, mut visibility, suppressed) in &mut visuals {
         if *layer == VisualLayer::Shaded
-            && surface
-                .0
-                .as_ref()
-                .is_some_and(|s| s.mesh_index == part.mesh_index)
+            && surface.0.iter().any(|s| s.mesh_index == part.mesh_index)
         {
             *visibility = Visibility::Hidden;
             if suppressed.is_none() {
@@ -240,7 +242,7 @@ mod tests {
             .world()
             .resource::<ContourSurface>()
             .0
-            .as_ref()
+            .first()
             .unwrap()
             .mesh
             .clone();
@@ -250,18 +252,35 @@ mod tests {
             app.world()
                 .resource::<ContourSurface>()
                 .0
-                .as_ref()
+                .first()
                 .unwrap()
                 .mesh,
             handle
         );
+        // A second part's results create a second surface, reusing the first.
+        let step = app.world().resource::<FemResultSet>().by_mesh[0][0].clone();
+        app.world_mut()
+            .resource_mut::<FemResultSet>()
+            .by_mesh
+            .push(vec![step]);
+        app.update();
+        assert_eq!(app.world().resource::<ContourSurface>().0.len(), 2);
+        assert_eq!(
+            app.world().get::<Visibility>(other),
+            Some(&Visibility::Hidden)
+        );
+        assert_eq!(app.world().resource::<ContourSurface>().0[0].mesh, handle);
         app.world_mut()
             .resource_mut::<VisualizationSettings>()
             .contour = None;
         app.update();
-        assert!(app.world().resource::<ContourSurface>().0.is_none());
+        assert!(app.world().resource::<ContourSurface>().0.is_empty());
         assert_eq!(
             app.world().get::<Visibility>(base),
+            Some(&Visibility::Visible)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(other),
             Some(&Visibility::Visible)
         );
     }

@@ -1,8 +1,13 @@
 //! Parser for FrontISTR/HECMW ASCII result files (`.res.0.1`, `.res.0.2`, …).
 //!
-//! # FrontISTR result file format
+//! Native files beginning with `*fstrresult` are parsed by `native_result`:
+//! v1 and v2.0 ASCII counts, component widths/labels, and global node IDs are
+//! authoritative. Missing nodal values are errors, not implicit zeros.
 //!
-//! Each result file has the structure:
+//! # Legacy simplified fixture format
+//!
+//! The original headerless reader below remains for compatibility with
+//! simplified test/example data. This is NOT the native HEC-MW format:
 //!
 //! ```text
 //! *comment lines starting with !
@@ -11,11 +16,10 @@
 //! ...
 //! ```
 //!
-//! A header comment block is usually present. The first non-comment, non-blank
+//! The first non-comment, non-blank
 //! line gives the step number and time. Subsequent lines are node results.
 //!
-//! FrontISTR typically writes one `.res.0.N` file per output step. The
-//! number of value columns per node depends on the analysis type:
+//! In this legacy format, the number of value columns is interpreted as:
 //! * Linear static / non-linear static: 3 columns (Ux, Uy, Uz)
 //! * Heat: 1 column (temperature)
 //! * Eigenvalue: N_modes × 3 columns
@@ -84,7 +88,11 @@ pub fn load_result_file(
 ) -> Result<StepResult, ResultLoadError> {
     let text = std::fs::read_to_string(path.as_ref())?;
 
-    parse_result_str(&text, node_ids)
+    let mut result = parse_result_str(&text, node_ids)?;
+    if text.trim_start().starts_with("*fstrresult") {
+        result.step = path.as_ref().extension().and_then(|s|s.to_str()).and_then(|s|s.parse().ok()).unwrap_or(0);
+    }
+    Ok(result)
 }
 
 /// Parses a FrontISTR result file from a string.
@@ -92,6 +100,11 @@ pub fn parse_result_str(
     source: &str,
     node_ids: &[NodeId],
 ) -> Result<StepResult, ResultLoadError> {
+    if source.trim_start().starts_with("*fstrresult") {
+        return crate::native_result::NativeResult::parse(source.trim_start())
+            .and_then(|raw| raw.nodal_step(node_ids, 0))
+            .map_err(|message| ResultLoadError::Parse { line: 1, message });
+    }
     let mut lines = source.lines().enumerate();
 
     // Skip comment / blank lines until the step header.

@@ -376,9 +376,11 @@ fn installed_frontistr_parallel_smoke() {
         mpi_ranks: 2,
         mpi_launcher: std::env::var_os("FRONTISTR_MPI_LAUNCHER").map(PathBuf::from),
     };
+    let mut result_source = crate::run_results::RunResultSource::capture(&dir.0, "hinge", 2, 0).unwrap();
     let handle = spawn_solver_process(config).unwrap();
+    result_source.partition_prefix = handle.partition_prefix.clone();
     let events = wait_for(&handle, 120);
-    for event in &events {
+    for event in events.iter().take(15).chain(events.iter().rev().take(15).rev()) {
         println!("{event:?}");
     }
     assert!(
@@ -394,4 +396,13 @@ fn installed_frontistr_parallel_smoke() {
     assert!(transcript.contains("=== Solving ==="));
     assert!(transcript.contains("FrontISTR exit code: 0"));
     assert!(crate::solver_log::completion_path(handle.log_path()).is_file());
+    let mesh = hecmw::load_mesh_file(dir.0.join("hinge.msh")).unwrap();
+    result_source.finish().unwrap();
+    let ids = mesh.nodes.iter().map(|node| node.id).collect();
+    let loaded = result_source.load(&[ids]).unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].iter().map(|step| step.step).collect::<Vec<_>>(), [0,1]);
+    let Some(fem_core::ResultField::NodeVector { values, max_mag, .. }) = loaded[0].last().unwrap().field_by_name("Displacement") else { panic!("Missing displacement result") };
+    assert_eq!(values.len(), mesh.nodes.len());
+    assert!(*max_mag > 0.0);
 }

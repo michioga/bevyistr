@@ -21,6 +21,8 @@ mod solve_ui;
 mod solver_editor;
 mod app_settings;
 mod run_output;
+mod run_results;
+mod solve_results_ui;
 mod solver_log;
 mod solver_process;
 mod solver_runner;
@@ -194,6 +196,7 @@ impl Plugin for UiPlugin {
             app.insert_resource(FrontistrRunState::from_preferences(&settings.solver));
         }
         app.insert_resource(settings);
+        app.init_resource::<solve_results_ui::SolveResultsState>();
         app.init_resource::<SelectedDloadKind>();
         app.init_resource::<PlaybackState>();
         app.init_resource::<UndoStack>();
@@ -464,6 +467,16 @@ impl Plugin for UiPlugin {
         );
 
         // Group 4: UI rebuild + toggles (≤10 systems)
+        app.add_systems(Update, (
+            solve_results_ui::open_run_results_system.after(poll_frontistr_process_system),
+            solve_results_ui::poll_run_results_system
+                .after(solve_results_ui::open_run_results_system)
+                .after(open_result_button_system)
+                .after(playback_button_system)
+                .after(playback_advance_system)
+                .before(apply_slider_to_results)
+                .before(update_result_stats_text),
+        ));
         app.add_systems(
             Update,
             (

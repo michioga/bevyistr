@@ -63,6 +63,7 @@ pub(crate) fn open_result_button_system(
     mut results: ResMut<FemResultSet>,
     mut settings: ResMut<visualization::VisualizationSettings>,
     mut page: ResMut<SidebarPage>,
+    mut run_results: ResMut<crate::solve_results_ui::SolveResultsState>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
@@ -91,6 +92,7 @@ pub(crate) fn open_result_button_system(
     // Load on a separate branch to avoid holding rfd dialog open
     // while mutating FemResultSet.
     if let Some(path) = pending_path.take() {
+        run_results.cancel_pending();
         let Some(model) = model.as_deref() else {
             return;
         };
@@ -463,21 +465,20 @@ pub(crate) fn apply_slider_to_results(
     let step_index = step_value.map(|v| v.round() as usize).unwrap_or(0);
 
     // Update active step.
-    if let Some(active) = results.active.as_mut() {
-        if active.step_index != step_index {
-            active.step_index = step_index;
-            // Signal changed so update_contour_surface re-renders.
-            results.set_changed();
-        }
+    if results.active.as_ref().is_some_and(|a| a.step_index != step_index) {
+        results.active.as_mut().unwrap().step_index = step_index;
     }
 
-    // Update deformation scale in contour settings.
-    if let Some(scale) = scale_value {
-        if let Some(contour) = settings.contour.as_mut() {
-            if (contour.deformation_scale - scale).abs() > 1.0e-4 {
-                contour.deformation_scale = scale;
-                contour.step_index = step_index;
-            }
+    // Do not mark results/settings changed on idle frames: this otherwise
+    // rebuilds every part's GPU surface even when playback is stopped.
+    if settings.contour.as_ref().is_some_and(|c| {
+        c.step_index != step_index
+            || scale_value.is_some_and(|scale| c.deformation_scale != scale)
+    }) {
+        let contour = settings.contour.as_mut().unwrap();
+        contour.step_index = step_index;
+        if let Some(scale) = scale_value {
+            contour.deformation_scale = scale;
         }
     }
 }

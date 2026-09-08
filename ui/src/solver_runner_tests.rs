@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "solve_results_tests.rs"]
+mod solve_results_tests;
+
 #[test]
 fn export_target_controls_ready_state_and_can_be_cleared() {
     let mut state = FrontistrRunState::default();

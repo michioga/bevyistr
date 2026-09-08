@@ -78,6 +78,7 @@ pub(crate) struct FrontistrRunState {
     elapsed: Duration,
     process: Option<SolverProcessHandle>,
     stop_requested: bool,
+    results_source: Option<crate::run_results::RunResultSource>,
 }
 
 impl Default for FrontistrRunState {
@@ -111,6 +112,7 @@ impl Default for FrontistrRunState {
             elapsed: Duration::ZERO,
             process: None,
             stop_requested: false,
+            results_source: None,
         }
     }
 }
@@ -147,7 +149,12 @@ impl FrontistrRunState {
         self.phase == SolverRunPhase::Running
     }
 
+    pub(crate) fn completed_results(&self) -> Option<&crate::run_results::RunResultSource> {
+        (self.phase == SolverRunPhase::Succeeded).then_some(self.results_source.as_ref()).flatten()
+    }
+
     pub(crate) fn register_export(&mut self, directory: PathBuf, stem: String) {
+        self.results_source = None;
         self.last_output_directory = Some(directory.clone());
         self.project = Some(FrontistrProjectTarget { directory, stem });
         if !self.is_running() {
@@ -157,6 +164,7 @@ impl FrontistrRunState {
     }
 
     pub(crate) fn clear_export_target(&mut self) {
+        self.results_source = None;
         self.project = None;
         if self.is_running() {
             return;
@@ -255,7 +263,7 @@ impl FrontistrRunState {
         Ok(true)
     }
 
-    fn start(&mut self) -> Result<(), String> {
+    fn start(&mut self, model_version: u64) -> Result<(), String> {
         let target = self
             .project
             .as_ref()
@@ -263,6 +271,11 @@ impl FrontistrRunState {
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
         }
+        let mut results_source = crate::run_results::RunResultSource::capture(
+            &target.directory, &target.stem,
+            if self.launch_mode == SolverLaunchMode::Mpi { self.mpi_ranks } else { 1 },
+            model_version,
+        )?;
         let process = spawn_solver_process(SolverProcessConfig {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
@@ -274,6 +287,7 @@ impl FrontistrRunState {
             mpi_launcher: self.mpi_launcher.clone(),
         })?;
 
+        results_source.partition_prefix = process.partition_prefix.clone();
         self.phase = SolverRunPhase::Running;
         self.message = "Preparing FrontISTR run...".to_string();
         self.log_lines.clear();
@@ -282,6 +296,7 @@ impl FrontistrRunState {
         self.log_path = Some(process.log_path().to_owned());
         self.process = Some(process);
         self.stop_requested = false;
+        self.results_source = Some(results_source);
         Ok(())
     }
 
@@ -347,6 +362,14 @@ impl FrontistrRunState {
         }
 
         if terminal {
+            if self.phase == SolverRunPhase::Succeeded {
+                if let Some(source) = &mut self.results_source {
+                    if let Err(error) = source.finish() {
+                        self.message.push_str(&format!(" Result discovery failed: {error}"));
+                        self.results_source = None;
+                    }
+                }
+            }
             if let Some(started_at) = self.started_at.take() {
                 self.elapsed = started_at.elapsed();
             }
@@ -719,6 +742,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 TextColor(TEXT_MAIN),
                 FrontistrStatusText,
             ));
+            crate::solve_results_ui::spawn_results_handoff(panel);
             panel.spawn((
                 Text::new(
                     "Run writes inputs to the output folder, then starts analysis. MPI partitions first. Output appears below and is also saved to a log file. Stop cancels analysis.",
@@ -841,6 +865,7 @@ pub(crate) fn update_mpi_rank_controls_system(
 pub(crate) fn run_frontistr_button_system(
     model: Option<Res<FemModel>>,
     status: Option<Res<MeshLoadStatus>>,
+    version: Option<Res<fem_core::FemModelVersion>>,
     setup: Res<AnalysisSetup>,
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
@@ -868,7 +893,7 @@ pub(crate) fn run_frontistr_button_system(
                     continue;
                 }
             }
-            if let Err(error) = state.start() {
+            if let Err(error) = state.start(version.as_deref().map_or(0, |v| v.value)) {
                 state.report_preflight_error(error);
             }
         }

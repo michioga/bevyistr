@@ -100,6 +100,7 @@ pub(crate) struct SolverProcessHandle {
     events: Mutex<Receiver<SolverProcessEvent>>,
     stop_sender: Sender<()>,
     log_path: PathBuf,
+    pub(crate) partition_prefix: Option<String>,
 }
 
 impl SolverProcessHandle {
@@ -131,15 +132,24 @@ pub(crate) fn spawn_solver_process(
         .map_err(|e| format!("Could not create solver log: {e}"))?;
     let log_path = log.path().to_owned();
     let events = ProcessEvents::new(event_sender, log);
+    // Share this run's exact prefix with the result reader; never discover
+    // partition ownership by guessing among previous runs' files.
+    let partition_prefix = if config.launch_mode == SolverLaunchMode::Mpi {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+        Some(format!("bevyistr_part_{}_{}_{}", config.mpi_ranks, std::process::id(), stamp))
+    } else { None };
+    let worker_prefix = partition_prefix.clone();
     thread::Builder::new()
         .name("frontistr-runner".to_string())
-        .spawn(move || run_process(config, events, stop_receiver))
+        .spawn(move || run_process(config, events, stop_receiver, worker_prefix))
         .map_err(|error| format!("Could not start solver worker: {error}"))?;
 
     Ok(SolverProcessHandle {
         events: Mutex::new(event_receiver),
         stop_sender,
         log_path,
+        partition_prefix,
     })
 }
 
@@ -239,8 +249,9 @@ fn run_process(
     config: SolverProcessConfig,
     event_sender: ProcessEvents,
     stop_receiver: Receiver<()>,
+    partition_prefix: Option<String>,
 ) {
-    let result = run_pipeline(&config, &event_sender, &stop_receiver);
+    let result = run_pipeline(&config, &event_sender, &stop_receiver, partition_prefix.as_deref());
     let event = match result {
         Ok(StepResult::Stopped) => SolverProcessEvent::Stopped,
         Ok(StepResult::Exited(code)) => SolverProcessEvent::Finished(code),
@@ -253,6 +264,7 @@ fn run_pipeline(
     config: &SolverProcessConfig,
     events: &ProcessEvents,
     stop: &Receiver<()>,
+    partition_prefix: Option<&str>,
 ) -> Result<StepResult, String> {
     if cancelled(stop) {
         return Ok(StepResult::Stopped);
@@ -287,16 +299,7 @@ fn run_pipeline(
         }.ok_or_else(|| "hecmw_part1 was not found beside fistr1 or on PATH. Set FRONTISTR_PARTITIONER if needed.".to_string())?;
         // A fresh prefix prevents a previous successful run from masking
         // incomplete/missing output from this partitioner invocation.
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos();
-        let distributed = format!(
-            "bevyistr_part_{}_{}_{}",
-            config.mpi_ranks,
-            std::process::id(),
-            stamp
-        );
+        let distributed = partition_prefix.ok_or("Missing partition prefix")?;
         hecmw::write_parallel_hecmw_ctrl(
             &config.working_directory,
             &hecmw::HecmwCtrlParams {
@@ -304,7 +307,7 @@ fn run_pipeline(
                 cnt_name: &config.project_stem,
                 result_name: &config.project_stem,
             },
-            &distributed,
+            distributed,
             config.mpi_ranks,
         )
         .map_err(|e| format!("Could not write partition controls: {e}"))?;
@@ -328,7 +331,7 @@ fn run_pipeline(
                 ));
             }
         }
-        verify_partition_files(&config.working_directory, &distributed, config.mpi_ranks)?;
+        verify_partition_files(&config.working_directory, distributed, config.mpi_ranks)?;
     }
     if cancelled(stop) {
         return Ok(StepResult::Stopped);
