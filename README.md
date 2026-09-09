@@ -116,19 +116,26 @@ Settings are loaded at startup. To edit the file manually, close bevyistr, edit 
   starting another run invalidates a pending handoff. Failed/stopped runs cannot
   use this button.
 - Open FrontISTR ASCII `.res.0.N` series, CalculiX ASCII `.frd`, and inline ASCII VTK XML `.vtu`/`.pvtu` results.
-- Display scalar or vector-magnitude contours with a color bar.
-- Display and scale deformed shapes when displacement data is available.
+- Choose scalar components or vector magnitudes from the **Contour** menu, populated from result-file labels (Node / Element), with a color bar.
+- The menu follows the current step's file order, including custom fields. If the selected quantity is absent at another step, its selection is retained and marked unavailable rather than silently switching to another physical quantity.
+- Display native FrontISTR element scalars on their boundary faces without nodal averaging, including MPI owner-based assembly mapping.
+- Toggle **Deformation: ON/OFF** independently of the contour field; the displacement scale is preserved when switching fields or disabling deformation.
 - Move through result steps manually or animate them with playback and speed controls.
 
 This post-processing UI focuses on convenient inspection. ParaView remains the recommended tool for detailed result analysis.
 
-The new Solve handoff currently displays **nodal** fields; element records are
-validated but element-result visualization is still pending. Binary `.res`,
+The Solve handoff displays native ASCII nodal and element fields. Binary `.res`,
 adaptive/refined distributed result mapping, and automatic VTK output discovery
 are not supported by this handoff. After restarting the app, use **Open Result**
 for existing files; manual loading does not reconstruct MPI ownership or the
 previous run's fresh-file snapshot. The default field is displacement magnitude;
-full field/component selection and viewport result probing remain planned.
+viewport result probing remains planned. Component indices retain file ordering.
+
+MPI execution uses `hecmw_part1` and then `mpiexec -n N fistr1 -t T`. The MPI
+process count `N` follows the partition control, while the OpenMP thread count
+`T` is independently adjustable in Solve and is stored as
+`frontistr.openmp_threads` in the user settings TOML (or can be overridden by
+`FRONTISTR_OPENMP_THREADS`).
 
 ## Materials workflow
 
@@ -219,7 +226,7 @@ priority; clearing a contour restores the current material colors.
 | Input | Gmsh `.msh` | ASCII MSH 4.x revision 4.1 or newer; physical groups are preserved. Binary MSH is rejected. |
 | Input | Gmsh `.geo` | Runs the external `gmsh` command with `-3 -format msh41`, then loads the generated mesh. |
 | Input | Abaqus/CalculiX `.inp` | Reads `*NODE`, `*ELEMENT`, `*NSET`, and `*ELSET`; unknown element types remain marked unsupported. |
-| Result | FrontISTR `.res.<rank>.<step>` | Native ASCII v1/v2.0 nodal data. Solve handoff joins MPI owners and assembly parts; manual Open Result loads a single-rank series. |
+| Result | FrontISTR `.res.<rank>.<step>` | Native ASCII v1/v2.0 nodal and element data. Solve handoff joins MPI owners and assembly parts; manual Open Result loads a single-rank series. |
 | Result | CalculiX `.frd` | Reads nodal scalar/vector fields and derives vector magnitude or von Mises values where applicable. |
 | Result | VTK XML `.vtu` / `.pvtu` | Reads inline ASCII point data. Binary, base64, appended arrays, and `CellData` are not currently supported. |
 | Output | FrontISTR project | Writes `hecmw_ctrl.dat`, HEC-MW `.msh`, and FrontISTR `.cnt`. |

@@ -411,6 +411,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                     Name::new("ResultSliderSection"),
                                 ))
                                 .with_children(|sliders| {
+                                    crate::result_menu::spawn(sliders);
                                     spawn_slider(
                                         sliders,
                                         SliderConfig {
@@ -422,17 +423,22 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             id: SliderId::ResultStep,
                                         },
                                     );
-                                    spawn_slider(
-                                        sliders,
-                                        SliderConfig {
-                                            width: 270.0,
-                                            min: 0.0,
-                                            max: 20.0,
-                                            value: 1.0,
-                                            label: "Deform scale",
-                                            id: SliderId::DeformScale,
-                                        },
-                                    );
+                                    sliders.spawn((
+                                        crate::result_menu::DeformationScaleSection,
+                                        Node { flex_direction: FlexDirection::Column, ..default() },
+                                    )).with_children(|scale| {
+                                        spawn_slider(
+                                            scale,
+                                            SliderConfig {
+                                                width: 270.0,
+                                                min: 0.0,
+                                                max: 20.0,
+                                                value: 1.0,
+                                                label: "Deform scale",
+                                                id: SliderId::DeformScale,
+                                            },
+                                        );
+                                    });
                                     hint_text(sliders, "Left / Right: step through results");
 
                                     // ── Animation playback controls ──────────────────────

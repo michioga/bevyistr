@@ -75,6 +75,7 @@ fn fake_project(mode: SolverLaunchMode) -> (TempProject, SolverProcessConfig) {
         environment: RuntimeEnvironment::Inherited,
         launch_mode: mode,
         mpi_ranks: 2,
+        openmp_threads: 1,
         mpi_launcher: Some(dir.0.join(executable_name("mpiexec"))),
     };
     (dir, config)
@@ -364,6 +365,10 @@ fn installed_frontistr_parallel_smoke() {
     for file in ["hinge.msh", "hinge.cnt"] {
         std::fs::copy(input.join(file), dir.0.join(file)).unwrap();
     }
+    // Enable element output in the temporary test copy, leaving the tutorial untouched.
+    let cnt_path = dir.0.join("hinge.cnt");
+    let cnt = std::fs::read_to_string(&cnt_path).unwrap();
+    std::fs::write(&cnt_path, cnt.replace("!VISUAL,", "!OUTPUT_RES\nESTRESS, ON\nEMISES, ON\n!VISUAL,")).unwrap();
     let config = SolverProcessConfig {
         executable: std::env::var_os("FRONTISTR_EXECUTABLE")
             .map(PathBuf::from)
@@ -374,6 +379,7 @@ fn installed_frontistr_parallel_smoke() {
         environment: RuntimeEnvironment::detect(),
         launch_mode: SolverLaunchMode::Mpi,
         mpi_ranks: 2,
+        openmp_threads: 1,
         mpi_launcher: std::env::var_os("FRONTISTR_MPI_LAUNCHER").map(PathBuf::from),
     };
     let mut result_source = crate::run_results::RunResultSource::capture(&dir.0, "hinge", 2, 0).unwrap();
@@ -399,10 +405,13 @@ fn installed_frontistr_parallel_smoke() {
     let mesh = hecmw::load_mesh_file(dir.0.join("hinge.msh")).unwrap();
     result_source.finish().unwrap();
     let ids = mesh.nodes.iter().map(|node| node.id).collect();
-    let loaded = result_source.load(&[ids]).unwrap();
+    let elements = mesh.elements.iter().map(|e|e.id).collect();
+    let loaded = result_source.load_with_elements(&[ids], &[elements]).unwrap();
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].iter().map(|step| step.step).collect::<Vec<_>>(), [0,1]);
     let Some(fem_core::ResultField::NodeVector { values, max_mag, .. }) = loaded[0].last().unwrap().field_by_name("Displacement") else { panic!("Missing displacement result") };
     assert_eq!(values.len(), mesh.nodes.len());
     assert!(*max_mag > 0.0);
+    assert!(loaded[0].last().unwrap().fields.iter().any(|field| matches!(field,
+        fem_core::ResultField::ElementScalar { values, max, .. } if values.len() == mesh.elements.len() && *max > 0.0)));
 }

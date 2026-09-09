@@ -78,6 +78,7 @@ pub(crate) struct SolverProcessConfig {
     pub(crate) environment: RuntimeEnvironment,
     pub(crate) launch_mode: SolverLaunchMode,
     pub(crate) mpi_ranks: u16,
+    pub(crate) openmp_threads: u16,
     pub(crate) mpi_launcher: Option<PathBuf>,
 }
 
@@ -507,12 +508,15 @@ fn launch_command(
         OsString::from("-n"),
         OsString::from(&ranks),
         executable.as_os_str().to_owned(),
+        OsString::from("-t"),
+        OsString::from(config.openmp_threads.to_string()),
     ];
     let description = format!(
-        "{} -n {} {}",
+        "{} -n {} {} -t {}",
         launcher.display(),
         ranks,
-        executable.display()
+        executable.display(),
+        config.openmp_threads
     );
     Ok((launcher, arguments, description))
 }

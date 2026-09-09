@@ -60,6 +60,9 @@ pub fn detect_series(path: &Path) -> Vec<PathBuf> {
     let mut series: Vec<(u32, PathBuf)> = entries
         .filter_map(|e| e.ok())
         .filter_map(|e| {
+            if !e.file_type().ok()?.is_file() {
+                return None;
+            }
             let name = e.file_name();
             let name_str = name.to_str()?.to_owned();
 

@@ -2,7 +2,7 @@
 //! Counts, component widths/labels and IDs are explicit; missing values must
 //! never turn into plausible zero results when joining MPI partitions.
 use bevy::prelude::Vec3;
-use fem_core::{NodeId, ResultField, StepResult};
+use fem_core::{ElementId, NodeId, ResultField, StepResult};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
@@ -15,7 +15,7 @@ struct Block {
 pub struct NativeResult {
     time: Option<f32>,
     nodes: Block,
-    element_layout: Vec<(String, usize)>,
+    elements: Block,
 }
 
 struct Tokens<'a>(std::str::SplitWhitespace<'a>);
@@ -140,13 +140,13 @@ impl NativeResult {
         if tokens.0.next().is_some() {
             return Err("Extra data after HEC-MW result records".into());
         }
-        if nodes.layout.is_empty() {
-            return Err("No nodal result fields to display".into());
+        if nodes.layout.is_empty() && elements.layout.is_empty() {
+            return Err("No result fields to display".into());
         }
         Ok(Self {
             time,
             nodes,
-            element_layout: elements.layout,
+            elements,
         })
     }
 
@@ -159,34 +159,98 @@ impl NativeResult {
             (None, None) => {}
             _ => return Err("MPI result times disagree".into()),
         }
-        // This API publishes nodal fields only. Element records were checked
-        // while parsing; they cannot be merged without element ownership.
-        if self.element_layout != other.element_layout {
-            return Err("MPI element layouts disagree".into());
-        }
-        let target = &mut self.nodes;
-        let source = other.nodes;
-        if target.layout != source.layout {
-            return Err("MPI result fields disagree".into());
-        }
-        for (id, values) in source.values {
-            if let Some(previous) = target.values.get(&id) {
-                if let Some((i, (a, b))) = previous
-                    .iter()
-                    .zip(&values)
-                    .enumerate()
-                    .find(|(_, (a, b))| !close(**a, **b))
-                {
-                    return Err(format!(
-                        "Conflicting MPI node values at ID {id}, column {i}: {a} / {b}; layout {:?}",
-                        target.layout
-                    ));
+        for (kind, target, source) in [
+            ("node", &mut self.nodes, other.nodes),
+            ("element", &mut self.elements, other.elements),
+        ] {
+            if target.layout != source.layout {
+                return Err("MPI result fields disagree".into());
+            }
+            for (id, values) in source.values {
+                if let Some(previous) = target.values.get(&id) {
+                    if let Some((i, (a, b))) = previous
+                        .iter()
+                        .zip(&values)
+                        .enumerate()
+                        .find(|(_, (a, b))| !close(**a, **b))
+                    {
+                        return Err(format!(
+                            "Conflicting MPI {kind} values at ID {id}, column {i}: {a} / {b}; layout {:?}",
+                            target.layout
+                        ));
+                    }
+                } else {
+                    target.values.insert(id, values);
                 }
-            } else {
-                target.values.insert(id, values);
             }
         }
         Ok(())
+    }
+
+    pub fn retain_owned_elements(
+        &mut self,
+        ids: &std::collections::HashSet<ElementId>,
+    ) -> Result<(), String> {
+        if self.elements.layout.is_empty() {
+            return Ok(());
+        }
+        for id in ids {
+            if !self.elements.values.contains_key(&id.0) {
+                return Err(format!("Missing owned element result {}", id.0));
+            }
+        }
+        self.elements
+            .values
+            .retain(|id, _| ids.contains(&ElementId(*id)));
+        Ok(())
+    }
+
+    pub fn step(
+        &self,
+        nodes: &[NodeId],
+        elements: &[ElementId],
+        step: u32,
+    ) -> Result<StepResult, String> {
+        let mut result = self.nodal_step(nodes, step)?;
+        if !self.elements.layout.is_empty() {
+            for id in elements {
+                if !self.elements.values.contains_key(&id.0) {
+                    return Err(format!("Missing result for element {}", id.0));
+                }
+            }
+        }
+        let mut offset = 0;
+        for (name, width) in self.elements.layout.iter().filter(|_| !elements.is_empty()) {
+            for component in 0..*width {
+                // Prefix prevents collisions with a nodal field of the same name.
+                let label = if *width == 1 {
+                    format!("{name} (element)")
+                } else {
+                    format!("{name}[{}] (element)", component + 1)
+                };
+                result.fields.push(ResultField::ElementScalar {
+                    name: label,
+                    values: elements
+                        .iter()
+                        .map(|id| self.elements.values[&id.0][offset + component])
+                        .collect(),
+                    min: self
+                        .elements
+                        .values
+                        .values()
+                        .map(|v| v[offset + component])
+                        .fold(f32::INFINITY, f32::min),
+                    max: self
+                        .elements
+                        .values
+                        .values()
+                        .map(|v| v[offset + component])
+                        .fold(f32::NEG_INFINITY, f32::max),
+                });
+            }
+            offset += width;
+        }
+        Ok(result)
     }
 
     /// Drop ghost copies, using the distributed mesh's owner rank (not file
@@ -195,6 +259,9 @@ impl NativeResult {
         &mut self,
         ids: &std::collections::HashSet<NodeId>,
     ) -> Result<(), String> {
+        if self.nodes.layout.is_empty() {
+            return Ok(());
+        }
         for id in ids {
             if !self.nodes.values.contains_key(&id.0) {
                 return Err(format!("Missing owned node result {}", id.0));
@@ -207,7 +274,7 @@ impl NativeResult {
     /// Every requested node must be present. Range caches use the entire
     /// merged result so equal colors mean equal values across assembly parts.
     pub fn nodal_step(&self, node_ids: &[NodeId], step: u32) -> Result<StepResult, String> {
-        for id in node_ids {
+        for id in node_ids.iter().filter(|_| !self.nodes.layout.is_empty()) {
             if !self.nodes.values.contains_key(&id.0) {
                 return Err(format!("Missing result for node {}", id.0));
             }
@@ -215,7 +282,12 @@ impl NativeResult {
         let mut fields = Vec::new();
         let mut offset = 0;
         for (name, width) in &self.nodes.layout {
-            if name.eq_ignore_ascii_case("DISPLACEMENT") && *width >= 2 {
+            let displacement = name.eq_ignore_ascii_case("DISPLACEMENT");
+            let vector_field = displacement
+                || ["VELOCITY", "ACCELERATION", "REACTION_FORCE", "ROTATION"]
+                    .iter()
+                    .any(|label| name.eq_ignore_ascii_case(label));
+            if vector_field && *width >= 2 {
                 let vector = |v: &Vec<f32>| {
                     Vec3::new(
                         v[offset],
@@ -224,7 +296,11 @@ impl NativeResult {
                     )
                 };
                 fields.push(ResultField::NodeVector {
-                    name: "Displacement".into(),
+                    name: if displacement {
+                        "Displacement".into()
+                    } else {
+                        name.clone()
+                    },
                     values: node_ids
                         .iter()
                         .map(|id| vector(&self.nodes.values[&id.0]))
@@ -285,6 +361,40 @@ impl NativeResult {
 mod tests {
     use super::*;
     const A: &str = "*fstrresult 2.0\n*comment\nstatic\n*global\n1\n1\nTOTALTIME\n1.25D+0\n*data\n2 1\n2 1\n3 1\nDISPLACEMENT\nMISES\n10\n1 2 3 9\n20\n4 5 6 10\n1\nElementMISES\n50\n8\n";
+    #[test]
+    fn element_fields_keep_ids_components_and_owner_values() {
+        let raw = NativeResult::parse(A).unwrap();
+        let step = raw
+            .step(&[NodeId(20), NodeId(10)], &[ElementId(50)], 7)
+            .unwrap();
+        let ResultField::ElementScalar {
+            values, min, max, ..
+        } = step.field_by_name("ElementMISES (element)").unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(values, &[8.0]);
+        assert_eq!((*min, *max), (8.0, 8.0));
+        assert!(raw.step(&[], &[ElementId(99)], 7).is_err());
+        let mut owner = NativeResult::parse(A).unwrap();
+        let mut ghost = NativeResult::parse(&A.replace("50\n8", "50\n99")).unwrap();
+        owner
+            .retain_owned_elements(&[ElementId(50)].into())
+            .unwrap();
+        ghost
+            .retain_owned_elements(&std::collections::HashSet::new())
+            .unwrap();
+        owner.merge(ghost).unwrap();
+        let raw =
+            NativeResult::parse("*fstrresult\n0 2\n0 1\n2\nCUSTOM\n50\n1 2\n60\n3 4\n").unwrap();
+        let step = raw.step(&[], &[ElementId(60), ElementId(50)], 0).unwrap();
+        let ResultField::ElementScalar { values, .. } =
+            step.field_by_name("CUSTOM[2] (element)").unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(values, &[4.0, 2.0]);
+    }
     #[test]
     fn native_counts_wrapped_values_labels_and_ids() {
         let raw = NativeResult::parse(A).unwrap();

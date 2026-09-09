@@ -13,6 +13,7 @@ pub(crate) struct SolverPreferences {
     pub(crate) mpi_launcher: Option<PathBuf>,
     pub(crate) launch_mode: SolverLaunchMode,
     pub(crate) mpi_ranks: u16,
+    pub(crate) openmp_threads: u16,
     pub(crate) last_output_directory: Option<PathBuf>,
 }
 
@@ -24,6 +25,7 @@ impl Default for SolverPreferences {
             mpi_launcher: None,
             launch_mode: SolverLaunchMode::Direct,
             mpi_ranks: 4,
+            openmp_threads: 1,
             last_output_directory: None,
         }
     }
@@ -70,6 +72,13 @@ impl SolverPreferences {
                 .ok_or("frontistr.mpi_ranks must be an integer from 1 to 4096")?
                 as u16;
         }
+        if let Some(threads) = table.get("openmp_threads") {
+            settings.openmp_threads = threads
+                .as_integer()
+                .filter(|n| (1..=4096).contains(n))
+                .ok_or("frontistr.openmp_threads must be an integer from 1 to 4096")?
+                as u16;
+        }
         Ok(settings)
     }
 
@@ -98,6 +107,13 @@ impl SolverPreferences {
             .filter(|n| (1..=4096).contains(n))
         {
             self.mpi_ranks = ranks;
+        }
+        if let Some(threads) = std::env::var("FRONTISTR_OPENMP_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .filter(|n| (1..=4096).contains(n))
+        {
+            self.openmp_threads = threads;
         }
     }
 }
@@ -221,6 +237,7 @@ fn save_preferences(path: &Path, settings: &SolverPreferences) -> Result<(), Str
         SolverLaunchMode::Mpi => "mpi",
     });
     doc["frontistr"]["mpi_ranks"] = value(i64::from(settings.mpi_ranks));
+    doc["frontistr"]["openmp_threads"] = value(i64::from(settings.openmp_threads));
     let parent = path
         .parent()
         .ok_or("Settings path has no parent directory")?;
@@ -271,6 +288,7 @@ mod tests {
             mpi_launcher: Some("/opt/mpi/mpiexec".into()),
             launch_mode: SolverLaunchMode::Mpi,
             mpi_ranks: 8,
+            openmp_threads: 4,
             last_output_directory: Some(dir.path().into()),
         };
         store.save_changed(prefs.clone());

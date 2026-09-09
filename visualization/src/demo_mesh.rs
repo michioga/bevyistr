@@ -2606,6 +2606,13 @@ pub(crate) fn build_contour_surface_mesh(
     settings: &ContourSettings,
 ) -> Option<Mesh> {
     let contour_field = step.field_by_name(&settings.field_name)?;
+    let valid = match contour_field {
+        fem_core::ResultField::NodeScalar { values,.. } => values.len() == fem_mesh.nodes.len(),
+        fem_core::ResultField::NodeVector { values,.. } => values.len() == fem_mesh.nodes.len(),
+        fem_core::ResultField::ElementScalar { values,.. } => values.len() == fem_mesh.elements.len(),
+    };
+    if !valid { return None; }
+    let element_indices: std::collections::HashMap<_,_> = fem_mesh.elements.iter().enumerate().map(|(i,e)|(e.id,i)).collect();
 
     let disp_field = if settings.show_deformation {
         step.field_by_name(&settings.displacement_field)
@@ -2625,6 +2632,10 @@ pub(crate) fn build_contour_surface_mesh(
     let mut colors: Vec<[f32; 4]> = Vec::new();
 
     for face in fem_mesh.cached_boundary_faces() {
+        let element_t = if let fem_core::ResultField::ElementScalar { values,min,max,.. } = contour_field {
+            let Some(index) = face.element.and_then(|id|element_indices.get(&id)) else { continue; };
+            Some(if (max-min).abs() < 1e-12 { 0.5 } else { ((values[*index]-min)/(max-min)).clamp(0.0,1.0) })
+        } else { None };
         let Some(node_indices_in_mesh): Option<Vec<usize>> = face
             .nodes
             .iter()
@@ -2669,7 +2680,7 @@ pub(crate) fn build_contour_surface_mesh(
                     fem_core::ResultField::NodeVector { .. } => {
                         contour_field.normalize_node_vector_mag(mesh_idx)
                     }
-                    _ => 0.5,
+                    fem_core::ResultField::ElementScalar {..} => element_t.unwrap(),
                 };
 
                 let c = rainbow_color(t);

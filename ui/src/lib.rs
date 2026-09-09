@@ -15,6 +15,7 @@ mod measurement;
 mod mpc_ui;
 mod project_io;
 mod results_ui;
+mod result_menu;
 mod selection_ui;
 pub mod slider;
 mod solve_ui;
@@ -129,9 +130,11 @@ use solver_editor::{SolverEditorState, solver_numeric_input_system};
 use app_settings::{AppSettings, save_settings_system, update_settings_text_system};
 use solver_runner::{
     FrontistrRunState, mpi_rank_adjust_button_system, poll_frontistr_process_system,
+    openmp_thread_adjust_button_system,
     run_frontistr_button_system, select_frontistr_executable_system,
     solver_launch_mode_button_system, stop_frontistr_button_system, update_frontistr_run_ui_system,
     update_mpi_rank_controls_system,
+    update_openmp_thread_controls_system,
 };
 
 pub use slider::{SliderConfig, SliderId, SliderState, SliderThumb, SliderTrack, spawn_slider};
@@ -140,6 +143,10 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<bevy::input_focus::tab_navigation::TabNavigationPlugin>() {
+            app.add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin);
+        }
+        result_menu::register(app);
         app.init_gizmo_group::<AssemblyClearanceGizmos>();
         {
             let mut configs = app.world_mut().resource_mut::<GizmoConfigStore>();
@@ -445,9 +452,11 @@ impl Plugin for UiPlugin {
                 select_frontistr_executable_system,
                 solver_launch_mode_button_system,
                 mpi_rank_adjust_button_system.after(solver_launch_mode_button_system),
+                openmp_thread_adjust_button_system,
                 run_frontistr_button_system
                     .after(solver_launch_mode_button_system)
                     .after(mpi_rank_adjust_button_system)
+                    .after(openmp_thread_adjust_button_system)
                     .after(select_frontistr_executable_system)
                     .after(export_button_system)
                     .after(solver_numeric_input_system)
@@ -463,6 +472,7 @@ impl Plugin for UiPlugin {
                 update_mpi_rank_controls_system
                     .after(solver_launch_mode_button_system)
                     .after(mpi_rank_adjust_button_system),
+                update_openmp_thread_controls_system.after(openmp_thread_adjust_button_system),
             ),
         );
 

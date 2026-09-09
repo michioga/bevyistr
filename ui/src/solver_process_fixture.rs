@@ -48,11 +48,13 @@ fn main() {
         }
         "mpiexec" => {
             let args: Vec<_> = env::args_os().skip(1).collect();
-            assert_eq!(args.len(), 3);
+            assert_eq!(args.len(), 5);
             assert_eq!(args[0], "-n");
             let part = fs::read_to_string("hecmw_part_ctrl.dat").unwrap();
             assert_eq!(part.split("DOMAIN=").nth(1).unwrap().trim(), args[1]);
-            let status = Command::new(&args[2]).status().unwrap();
+            assert_eq!(args[3], "-t");
+            assert_eq!(args[4], "1");
+            let status = Command::new(&args[2]).args(&args[3..]).status().unwrap();
             std::process::exit(status.code().unwrap_or(1));
         }
         "fistr1" => {

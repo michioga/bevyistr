@@ -68,9 +68,11 @@ pub(crate) fn open_result_button_system(
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == Interaction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Open result file")
-                .add_filter("All result files", &["res", "frd", "vtu", "pvtu"])
-                .add_filter("FrontISTR result (.res.0.*)", &["res"])
+                .set_title("Open result file (FrontISTR: select any .res.<rank>.<step>)")
+                // Native results end in a numeric step, not the extension .res.
+                // Show all files by default so sparse dynamic output is visible.
+                .add_filter("All files (including FrontISTR .res.<rank>.<step>)", &["*"])
+                .add_filter("Fixed-extension results", &["res", "frd", "vtu", "pvtu"])
                 .add_filter("CalculiX result (.frd)", &["frd"])
                 .add_filter("VTK XML (.vtu / .pvtu)", &["vtu", "pvtu"])
                 .pick_file()
@@ -108,11 +110,6 @@ pub(crate) fn open_result_button_system(
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        // Ensure by_mesh slot exists for mesh 0.
-        if results.by_mesh.is_empty() {
-            results.by_mesh.push(Vec::new());
-        }
-
         let loaded_steps: Vec<fem_core::StepResult> = match ext.as_str() {
             "frd" => match hecmw::load_frd_file(&path, &node_ids) {
                 Ok(steps) => steps,
@@ -130,7 +127,7 @@ pub(crate) fn open_result_button_system(
             },
             _ => {
                 // .res.0.N — auto-detect series siblings and load all steps.
-                match hecmw::load_series(&path, &node_ids) {
+                match load_mesh_series(&path, fem_mesh) {
                     Ok(steps) => steps,
                     Err(err) => {
                         bevy::log::warn!("Result series load failed: {err}");
@@ -146,7 +143,8 @@ pub(crate) fn open_result_button_system(
         }
 
         let step_count = loaded_steps.len();
-        results.by_mesh[0].extend(loaded_steps);
+        results.by_mesh = vec![loaded_steps];
+        results.active = None;
         results.activate_first();
 
         // Auto-activate contour.
@@ -176,6 +174,20 @@ pub(crate) fn open_result_button_system(
         // navigation click.
         *page = SidebarPage::Results;
     }
+}
+
+fn load_mesh_series(path: &std::path::Path, mesh: &fem_core::FemMesh) -> Result<Vec<fem_core::StepResult>, String> {
+    let nodes = mesh.nodes.iter().map(|n|n.id).collect::<Vec<_>>();
+    let elements = mesh.elements.iter().map(|e|e.id).collect::<Vec<_>>();
+    hecmw::detect_series(path).iter().map(|path| {
+        let source = std::fs::read_to_string(path).map_err(|e|e.to_string())?;
+        if source.trim_start().starts_with("*fstrresult") {
+            let step = path.extension().and_then(|s|s.to_str()).and_then(|s|s.parse().ok()).unwrap_or(0);
+            hecmw::native_result::NativeResult::parse(source.trim_start())?.step(&nodes,&elements,step)
+        } else {
+            hecmw::load_result_file(path,&nodes).map_err(|e|e.to_string())
+        }
+    }).collect()
 }
 
 pub(crate) fn update_result_stats_text(

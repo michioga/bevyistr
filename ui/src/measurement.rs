@@ -264,13 +264,13 @@ pub(crate) fn spawn_measurement_box(mut commands: Commands) {
         });
 }
 
-/// Records whether any Bevy [`EditableText`] currently owns keyboard focus.
+/// Records whether a text editor or result menu currently owns keyboard focus.
 /// Shortcut systems in other plugins read this shared resource so typing a
 /// value cannot accidentally change the selection filter, result step, or
 /// undo the analysis setup.
 pub(crate) fn update_ui_keyboard_state(
     input_focus: Option<Res<InputFocus>>,
-    editable_text: Query<(), With<EditableText>>,
+    editable_text: Query<(), Or<(With<EditableText>, With<bevy::ui_widgets::MenuItem>, With<bevy::ui_widgets::MenuButton>)>>,
     mut keyboard_state: ResMut<UiKeyboardState>,
 ) {
     keyboard_state.text_editing = input_focus

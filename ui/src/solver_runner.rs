@@ -66,6 +66,7 @@ pub(crate) struct FrontistrRunState {
     runtime_environment: RuntimeEnvironment,
     launch_mode: SolverLaunchMode,
     mpi_ranks: u16,
+    openmp_threads: u16,
     mpi_launcher: Option<PathBuf>,
     partitioner: Option<PathBuf>,
     last_output_directory: Option<PathBuf>,
@@ -95,11 +96,17 @@ impl Default for FrontistrRunState {
             .and_then(|value| value.parse::<u16>().ok())
             .filter(|ranks| (1..=4096).contains(ranks))
             .unwrap_or(4);
+        let openmp_threads = std::env::var("FRONTISTR_OPENMP_THREADS")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|threads| (1..=4096).contains(threads))
+            .unwrap_or(1);
         Self {
             executable,
             runtime_environment: RuntimeEnvironment::detect(),
             launch_mode,
             mpi_ranks,
+            openmp_threads,
             mpi_launcher: std::env::var_os("FRONTISTR_MPI_LAUNCHER").map(PathBuf::from),
             partitioner: std::env::var_os("FRONTISTR_PARTITIONER").map(PathBuf::from),
             last_output_directory: None,
@@ -125,6 +132,7 @@ impl FrontistrRunState {
             mpi_launcher: prefs.mpi_launcher.clone(),
             launch_mode: prefs.launch_mode,
             mpi_ranks: prefs.mpi_ranks,
+            openmp_threads: prefs.openmp_threads,
             last_output_directory: prefs.last_output_directory.clone(),
             ..default()
         }
@@ -137,6 +145,7 @@ impl FrontistrRunState {
             mpi_launcher: self.mpi_launcher.clone(),
             launch_mode: self.launch_mode,
             mpi_ranks: self.mpi_ranks,
+            openmp_threads: self.openmp_threads,
             last_output_directory: self.last_output_directory.clone(),
         }
     }
@@ -205,6 +214,14 @@ impl FrontistrRunState {
         }
         self.mpi_ranks = (i32::from(self.mpi_ranks) + i32::from(delta)).clamp(1, 4096) as u16;
         self.message = format!("MPI process count set to {} ranks.", self.mpi_ranks);
+    }
+
+    fn adjust_openmp_threads(&mut self, delta: i16) {
+        if self.is_running() {
+            return;
+        }
+        self.openmp_threads = (i32::from(self.openmp_threads) + i32::from(delta)).clamp(1, 4096) as u16;
+        self.message = format!("OpenMP thread count set to {}.", self.openmp_threads);
     }
 
     fn launch_label(&self) -> String {
@@ -284,6 +301,7 @@ impl FrontistrRunState {
             environment: self.runtime_environment.clone(),
             launch_mode: self.launch_mode,
             mpi_ranks: self.mpi_ranks,
+            openmp_threads: self.openmp_threads,
             mpi_launcher: self.mpi_launcher.clone(),
         })?;
 
@@ -465,6 +483,15 @@ pub(crate) struct MpiRankText;
 
 #[derive(Component)]
 pub(crate) struct MpiRankControls;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct OpenMpThreadAdjustButton(pub(crate) i16);
+
+#[derive(Component)]
+pub(crate) struct OpenMpThreadText;
+
+#[derive(Component)]
+pub(crate) struct OpenMpThreadControls;
 
 #[derive(Component)]
 pub(crate) struct RunFrontistrButton;
@@ -654,6 +681,56 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                                 font_size: FontSize::Px(12.0),
                                 ..default()
                             },
+                            TextColor(TEXT_MAIN),
+                        ));
+                    }
+                });
+
+            panel
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: px(5.0),
+                        ..default()
+                    },
+                    OpenMpThreadControls,
+                    Name::new("OpenMpThreadControls"),
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new("OpenMP threads (-t)"),
+                        Node { flex_grow: 1.0, ..default() },
+                        TextFont { font_size: FontSize::Px(10.0), ..default() },
+                        TextColor(TEXT_MUTED),
+                    ));
+                    row.spawn((
+                        Text::new("1"),
+                        Node {
+                            width: px(48.0), height: px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(px(1.0)),
+                            border_radius: BorderRadius::all(px(4.0)), ..default()
+                        },
+                        BorderColor::all(PANEL_BORDER),
+                        TextFont { font_size: FontSize::Px(10.5), ..default() },
+                        TextColor(TEXT_MAIN), OpenMpThreadText,
+                    ));
+                    for (delta, label) in [(-1, "−"), (1, "+")] {
+                        row.spawn((
+                            Button,
+                            Node {
+                                width: px(34.0), height: px(24.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(4.0)), ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL), BorderColor::all(PANEL_BORDER),
+                            OpenMpThreadAdjustButton(delta),
+                        )).with_child((
+                            Text::new(label), TextFont { font_size: FontSize::Px(12.0), ..default() },
                             TextColor(TEXT_MAIN),
                         ));
                     }
@@ -859,6 +936,32 @@ pub(crate) fn update_mpi_rank_controls_system(
     }
     if let Ok(mut text) = labels.single_mut() {
         text.set_if_neq(Text::new(state.mpi_ranks.to_string()));
+    }
+}
+
+pub(crate) fn openmp_thread_adjust_button_system(
+    mut state: ResMut<FrontistrRunState>,
+    mut buttons: Query<
+        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &OpenMpThreadAdjustButton),
+        With<OpenMpThreadAdjustButton>,
+    >,
+) {
+    for (interaction, mut background, mut border, button) in &mut buttons {
+        let enabled = !state.is_running();
+        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+            state.adjust_openmp_threads(button.0);
+        }
+        *background = BackgroundColor(ordinary_button_color(*interaction, enabled));
+        *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn update_openmp_thread_controls_system(
+    state: Res<FrontistrRunState>,
+    mut labels: Query<&mut Text, With<OpenMpThreadText>>,
+) {
+    if let Ok(mut text) = labels.single_mut() {
+        text.set_if_neq(Text::new(state.openmp_threads.to_string()));
     }
 }
 

@@ -1,6 +1,6 @@
 //! Result files belonging to one run. Snapshotting is read-only: old results
 //! remain on disk, but are never silently mixed into this run's timeline.
-use fem_core::{NodeId, StepResult};
+use fem_core::{ElementId, NodeId, StepResult};
 use hecmw::native_result::NativeResult;
 use std::{
     collections::BTreeMap,
@@ -94,7 +94,15 @@ impl RunResultSource {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn load(&self, parts: &[Vec<NodeId>]) -> Result<Vec<Vec<StepResult>>, String> {
+        self.load_with_elements(parts, &[])
+    }
+    pub(crate) fn load_with_elements(
+        &self,
+        parts: &[Vec<NodeId>],
+        elements: &[Vec<ElementId>],
+    ) -> Result<Vec<Vec<StepResult>>, String> {
         if parts.iter().all(Vec::is_empty) {
             return Err("No model nodes for these results".into());
         }
@@ -102,17 +110,20 @@ impl RunResultSource {
         let owners = if let Some(prefix) = &self.partition_prefix {
             let mut owners = Vec::new();
             let mut all = std::collections::HashSet::new();
+            let mut all_elements = std::collections::HashSet::new();
             for rank in 0..self.ranks {
                 let path = self.directory.join(format!("{prefix}.{rank}"));
                 let expected = stamp(&path)?;
                 let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-                let ids = hecmw::distributed_nodes::owned_nodes(
+                let ids = hecmw::distributed_nodes::owned_entities(
                     std::io::BufReader::new(file),
                     rank,
                     self.ranks,
                 )
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-                if ids.iter().any(|id| !all.insert(*id)) {
+                if ids.nodes.iter().any(|id| !all.insert(*id))
+                    || ids.elements.iter().any(|id| !all_elements.insert(*id))
+                {
                     return Err("MPI nodes have multiple owners".into());
                 }
                 owners.push(ids);
@@ -162,7 +173,8 @@ impl RunResultSource {
                 let mut raw =
                     NativeResult::parse(&source).map_err(|e| format!("{}: {e}", path.display()))?;
                 if let Some(owners) = &owners {
-                    raw.retain_owned_nodes(&owners[usize::from(rank)])?;
+                    raw.retain_owned_nodes(&owners[usize::from(rank)].nodes)?;
+                    raw.retain_owned_elements(&owners[usize::from(rank)].elements)?;
                 }
                 if let Some(merged) = &mut merged {
                     merged.merge(raw)?;
@@ -171,8 +183,12 @@ impl RunResultSource {
                 }
             }
             let raw = merged.ok_or("No result partitions")?;
-            for (node_ids, results) in parts.iter().zip(&mut by_mesh) {
-                results.push(raw.nodal_step(node_ids, step)?);
+            for (mi, (node_ids, results)) in parts.iter().zip(&mut by_mesh).enumerate() {
+                results.push(raw.step(
+                    node_ids,
+                    elements.get(mi).map_or(&[], Vec::as_slice),
+                    step,
+                )?);
             }
         }
         // A second writer must not turn a completed scan into mixed data.
@@ -196,7 +212,7 @@ mod tests {
         source.partition_prefix = Some("parts".into());
         for (rank, id) in ids.into_iter().enumerate() {
             std::fs::write(dir.join(format!("parts.{rank}")), format!(
-                "!HECMW-DMD-ASCII version=5\n0\n0\n1\n1\n5\n0\nmesh\n0\n0\n0.0\n1 1 1 1\n1 {rank}\n{id}\n"
+                "!HECMW-DMD-ASCII version=5\n0\n0\n1\n1\n5\n0\nmesh\n0\n0\n0.0\n1 1 1 1\n1 {rank}\n{id}\n0.0 0.0 0.0\n3 1\n0 3\n3\n0 0 0\n"
             )).unwrap();
         }
         source
