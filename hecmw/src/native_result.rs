@@ -205,6 +205,48 @@ impl NativeResult {
         Ok(())
     }
 
+    /// Only unused mesh nodes may be absent. Keep strict ID checks for every
+    /// element node; a single MPI rank must not masquerade as a whole result.
+    pub fn step_for_mesh(&self, mesh: &fem_core::FemMesh, step: u32) -> Result<StepResult, String> {
+        let used: std::collections::HashSet<_> = mesh
+            .elements
+            .iter()
+            .flat_map(|e| e.nodes.iter().copied())
+            .collect();
+        let indices: Vec<_> = mesh
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| used.contains(&n.id) || self.nodes.values.contains_key(&n.id.0))
+            .map(|(i, _)| i)
+            .collect();
+        let nodes: Vec<_> = indices.iter().map(|&i| mesh.nodes[i].id).collect();
+        let elements: Vec<_> = mesh.elements.iter().map(|e| e.id).collect();
+        let mut result = self.step(&nodes, &elements, step)?;
+        if indices.len() != mesh.nodes.len() {
+            for field in &mut result.fields {
+                match field {
+                    ResultField::NodeScalar { values, .. } => {
+                        let mut expanded = vec![f32::NAN; mesh.nodes.len()];
+                        for (&i, &v) in indices.iter().zip(values.iter()) {
+                            expanded[i] = v;
+                        }
+                        *values = expanded;
+                    }
+                    ResultField::NodeVector { values, .. } => {
+                        let mut expanded = vec![Vec3::splat(f32::NAN); mesh.nodes.len()];
+                        for (&i, &v) in indices.iter().zip(values.iter()) {
+                            expanded[i] = v;
+                        }
+                        *values = expanded;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub fn step(
         &self,
         nodes: &[NodeId],

@@ -19,8 +19,9 @@ pub fn hover_system(
     model: Option<Res<FemModel>>,
     mut hover_result: ResMut<HoverResult>,
     viewport_tool: Res<ViewportTool>,
+    result_geometry: Option<Res<fem_core::ResultGeometry>>,
 ) {
-    if *viewport_tool != ViewportTool::Selection {
+    if *viewport_tool != ViewportTool::Selection || result_geometry.as_ref().is_some_and(|g|g.visible && g.model.is_some()) {
         clear_hovered(&mut commands, &hovered_query);
         hover_result.clear();
         return;

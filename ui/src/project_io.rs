@@ -161,7 +161,7 @@ pub(crate) struct CameraFitRequest {
 }
 
 impl CameraFitRequest {
-    fn request(&mut self) {
+    pub(crate) fn request(&mut self) {
         self.revision = self.revision.saturating_add(1);
     }
 }
@@ -447,6 +447,7 @@ pub(crate) fn apply_mesh(
 /// Recenters and re-scales the orbit camera after a mesh file is loaded.
 pub(crate) fn camera_refit_on_reload(
     model: Option<Res<FemModel>>,
+    result_geometry: Option<Res<fem_core::ResultGeometry>>,
     request: Res<CameraFitRequest>,
     mut last_version: Local<Option<u64>>,
     mut camera_query: Query<(&mut Transform, &mut OrbitCamera)>,
@@ -463,7 +464,8 @@ pub(crate) fn camera_refit_on_reload(
         return;
     }
 
-    let Some((min, max)) = model.as_deref().and_then(FemModel::bounds) else {
+    let display_model=result_geometry.as_deref().filter(|g|g.visible).and_then(|g|g.model.as_ref()).or(model.as_deref());
+    let Some((min, max)) = display_model.and_then(FemModel::bounds) else {
         return;
     };
     let (focus, radius) = camera::fit_bounds(min, max);

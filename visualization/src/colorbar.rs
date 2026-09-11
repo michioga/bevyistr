@@ -120,16 +120,18 @@ pub fn spawn_colorbar(mut commands: Commands) {
 /// result field changes.
 pub fn update_colorbar(
     results: Res<FemResultSet>,
+    geometry: Option<Res<fem_core::ResultGeometry>>,
     mut root_query:  Query<&mut Visibility, With<ColorbagRoot>>,
     mut title_query: Query<&mut Text, (With<ColorbarTitle>, Without<ColorbarMaxLabel>, Without<ColorbarMinLabel>)>,
     mut max_query:   Query<&mut Text, (With<ColorbarMaxLabel>, Without<ColorbarTitle>, Without<ColorbarMinLabel>)>,
     mut min_query:   Query<&mut Text, (With<ColorbarMinLabel>, Without<ColorbarTitle>, Without<ColorbarMaxLabel>)>,
 ) {
-    if !results.is_changed() {
+    if !results.is_changed() && !geometry.as_ref().is_some_and(|g|g.is_changed()) {
         return;
     }
 
     let Ok(mut vis) = root_query.single_mut() else { return; };
+    if geometry.as_ref().is_some_and(|g|!g.visible) { *vis=Visibility::Hidden; return; }
 
     let Some(field) = results.active_field() else {
         *vis = Visibility::Hidden;

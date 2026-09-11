@@ -10,7 +10,9 @@ pub mod result;
 pub mod native_result;
 pub mod distributed_nodes;
 pub mod series;
+pub mod result_series;
 pub mod vtu;
+pub mod vtk_scene;
 
 pub use cnt::{CntData, CntError, load_cnt_file};
 pub use cnt_writer::{write_cnt_file, write_cnt_file_with_contacts};

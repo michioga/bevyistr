@@ -35,6 +35,7 @@ fn fixture(phase: SolverRunPhase) -> (tempfile::TempDir, App, Entity, Entity) {
     })
     .insert_resource(model)
     .init_resource::<FemModelVersion>()
+    .init_resource::<fem_core::ResultGeometry>()
     .init_resource::<SolveResultsState>()
     .init_resource::<VisualizationSettings>()
     .insert_resource(SidebarPage::Solve)

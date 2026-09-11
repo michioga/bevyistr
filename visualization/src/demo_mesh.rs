@@ -1342,16 +1342,17 @@ pub(crate) fn respawn_visuals_on_reload(
         return;
     };
 
-    for entity in &visual_query {
-        commands.entity(entity).despawn();
-    }
-
     for entity in &hovered_query {
         commands.entity(entity).remove::<Hovered>();
     }
 
     for entity in &selected_query {
         commands.entity(entity).remove::<Selected>();
+    }
+
+    // Clear selection markers before despawning the entities carrying them.
+    for entity in &visual_query {
+        commands.entity(entity).despawn();
     }
 
     hover.clear();
@@ -2718,6 +2719,35 @@ pub(crate) fn build_contour_surface_mesh(
 
 /// Builds a merged line mesh for a part's boundary and beam edges.
 pub fn build_part_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
+    build_edge_mesh_with_positions(fem_mesh, |id| fem_mesh.node_position(id))
+}
+
+/// Use the same nodal displacement and scale as the contour surface.
+pub(crate) fn build_contour_edge_mesh(
+    mesh: &FemMesh,
+    step: &fem_core::StepResult,
+    settings: &ContourSettings,
+) -> Option<Mesh> {
+    let displacements = if settings.show_deformation {
+        match step.field_by_name(&settings.displacement_field) {
+            Some(fem_core::ResultField::NodeVector { values, .. }) => Some(values),
+            _ => None,
+        }
+    } else { None };
+    let positions: std::collections::HashMap<_, _> = mesh.nodes.iter().enumerate().map(|(i, node)| {
+        let position = match displacements.and_then(|v|v.get(i)) {
+            Some(displacement) => node.position + *displacement * settings.deformation_scale,
+            None => node.position,
+        };
+        (node.id, position)
+    }).collect();
+    build_edge_mesh_with_positions(mesh, |id| positions.get(&id).copied().filter(|p|p.is_finite()))
+}
+
+fn build_edge_mesh_with_positions(
+    fem_mesh: &FemMesh,
+    position: impl Fn(fem_core::NodeId) -> Option<Vec3>,
+) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut seen = BTreeSet::new();
@@ -2725,10 +2755,10 @@ pub fn build_part_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
     for edge in fem_mesh.cached_boundary_edges() {
         seen.insert(ordered_node_pair(edge.nodes));
 
-        let Some(start) = fem_mesh.node_position(edge.nodes[0]) else {
+        let Some(start) = position(edge.nodes[0]) else {
             continue;
         };
-        let Some(end) = fem_mesh.node_position(edge.nodes[1]) else {
+        let Some(end) = position(edge.nodes[1]) else {
             continue;
         };
 
@@ -2751,10 +2781,10 @@ pub fn build_part_edge_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
                 continue;
             }
 
-            let Some(start) = fem_mesh.node_position(nodes[0]) else {
+            let Some(start) = position(nodes[0]) else {
                 continue;
             };
-            let Some(end) = fem_mesh.node_position(nodes[1]) else {
+            let Some(end) = position(nodes[1]) else {
                 continue;
             };
 

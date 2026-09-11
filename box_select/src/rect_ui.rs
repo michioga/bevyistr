@@ -54,8 +54,10 @@ pub fn begin_box_select(
     mut mode: ResMut<InteractionMode>,
     ui_pointer: Res<UiPointerState>,
     viewport_tool: Res<ViewportTool>,
+    result_geometry: Option<Res<fem_core::ResultGeometry>>,
 ) {
     if !buttons.just_pressed(MouseButton::Left)
+        || result_geometry.as_ref().is_some_and(|g|g.visible && g.model.is_some())
         || ui_pointer.over_ui
         || *viewport_tool != ViewportTool::Selection
     {
@@ -172,8 +174,10 @@ pub fn perform_box_selection(
 
     model: Option<Res<FemModel>>,
     viewport_tool: Res<ViewportTool>,
+    result_geometry: Option<Res<fem_core::ResultGeometry>>,
 ) {
     if !buttons.just_released(MouseButton::Left)
+        || result_geometry.as_ref().is_some_and(|g|g.visible && g.model.is_some())
         || ui_pointer.over_ui
         || *viewport_tool != ViewportTool::Selection
     {

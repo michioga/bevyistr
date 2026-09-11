@@ -166,6 +166,7 @@ pub(crate) fn poll_run_results_system(
     version: Res<FemModelVersion>,
     mut state: ResMut<SolveResultsState>,
     mut results: ResMut<FemResultSet>,
+    mut geometry: ResMut<fem_core::ResultGeometry>,
     mut settings: ResMut<VisualizationSettings>,
     mut page: ResMut<SidebarPage>,
     mut playback: ResMut<PlaybackState>,
@@ -191,6 +192,7 @@ pub(crate) fn poll_run_results_system(
     match loaded {
         Err(error) => state.status = format!("Could not open results: {error}"),
         Ok(by_mesh) => {
+            geometry.model=None;
             let steps = by_mesh.first().map_or(0, Vec::len);
             install_results(
                 by_mesh,

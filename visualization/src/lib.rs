@@ -95,6 +95,7 @@ impl Plugin for VisualizationPlugin {
                     .after(apply_contact_review)
                     .after(respawn_elements_on_setup_change),
                 apply_contour_visibility.after(update_contour_surface),
+                contour::hide_pre_overlays_in_result_view.after(update_topology_highlights).after(spawn_boundary_visuals),
                 update_colorbar,
                 spawn_boundary_visuals,
                 spawn_boundary_load_preview,

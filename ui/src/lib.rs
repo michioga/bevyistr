@@ -15,6 +15,7 @@ mod measurement;
 mod mpc_ui;
 mod project_io;
 mod results_ui;
+mod result_open;
 mod result_menu;
 mod selection_ui;
 pub mod slider;
@@ -164,6 +165,13 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::ContactCandidateState>();
         app.init_resource::<fem_core::RigidSpiderCandidateState>();
         app.init_resource::<fem_core::FemResultSet>();
+        app.init_resource::<results_ui::ResultLoadError>();
+        app.init_resource::<result_open::ResultOpenState>();
+        app.init_resource::<fem_core::ResultGeometry>();
+        app.add_systems(Update, (
+            result_open::poll_result_open.after(open_result_button_system),
+            result_open::sync_result_page.after(result_open::poll_result_open).after(sidebar_page_button_system),
+        ));
         app.init_resource::<fem_core::AnalysisSetup>();
         app.init_resource::<fem_core::HoverPreviewTargets>();
         app.init_resource::<visualization::VisualizationSettings>();

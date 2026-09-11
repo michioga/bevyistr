@@ -341,7 +341,7 @@ pub(crate) fn update_sliders(
         for (tag, mut text) in &mut text_query {
             if tag.0 == id {
                 **text = if id == SliderId::ResultStep {
-                    format!("{}", value as u32)
+                    format!("{}", value as u32 + 1)
                 } else {
                     format!("{:.2}", value)
                 };

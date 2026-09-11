@@ -4,6 +4,17 @@ use bevy::prelude::*;
 
 use crate::{ElementId, NodeId};
 
+/// Optional independent geometry for manually opened results. The pre-model
+/// and its analysis setup stay untouched when switching Results/Model pages.
+#[derive(Resource)]
+pub struct ResultGeometry {
+    pub model: Option<crate::FemModel>,
+    pub visible: bool,
+}
+impl Default for ResultGeometry {
+    fn default() -> Self { Self {model:None,visible:true} }
+}
+
 // ─── scalar/vector field data ─────────────────────────────────────────────────
 
 /// A named scalar or vector result field on the nodes or elements of one mesh.

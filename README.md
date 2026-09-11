@@ -116,6 +116,8 @@ Settings are loaded at startup. To edit the file manually, close bevyistr, edit 
   starting another run invalidates a pending handoff. Failed/stopped runs cannot
   use this button.
 - Open FrontISTR ASCII `.res.0.N` series, CalculiX ASCII `.frd`, and inline ASCII VTK XML `.vtu`/`.pvtu` results.
+- Inline ASCII VTU opens its own coordinates/connectivity and nodal/cell scalar components, including stress and custom arrays, without a preloaded MSH. Single-piece PVTU is supported; sequences must have fixed geometry/topology. Multi-piece PVTU is rejected pending partition/ghost handling; use the native MPI result handoff or ParaView. Invalid or incomplete arrays report an error in Results without replacing the previous display. Missing unused nodes in native RES have no result (not zero) and do not affect contour ranges.
+- Open Result detects numbered `.pvtu`/`.vtu` and `.res.<rank>.<step>` sequences, including native files under sibling `STEP<number>` folders. FrontISTR piece VTUs resolve through their referencing PVTU; rank numbers are not animation frames. The requested step opens first, with frame count, output step and time shown in Results. Native results also tolerate omitted unused mesh nodes, while missing element-node results remain errors. Result edges follow deformation and animation; undeformed base edges/node markers are hidden until results are cleared.
 - Choose scalar components or vector magnitudes from the **Contour** menu, populated from result-file labels (Node / Element), with a color bar.
 - The menu follows the current step's file order, including custom fields. If the selected quantity is absent at another step, its selection is retained and marked unavailable rather than silently switching to another physical quantity.
 - Display native FrontISTR element scalars on their boundary faces without nodal averaging, including MPI owner-based assembly mapping.
@@ -228,7 +230,7 @@ priority; clearing a contour restores the current material colors.
 | Input | Abaqus/CalculiX `.inp` | Reads `*NODE`, `*ELEMENT`, `*NSET`, and `*ELSET`; unknown element types remain marked unsupported. |
 | Result | FrontISTR `.res.<rank>.<step>` | Native ASCII v1/v2.0 nodal and element data. Solve handoff joins MPI owners and assembly parts; manual Open Result loads a single-rank series. |
 | Result | CalculiX `.frd` | Reads nodal scalar/vector fields and derives vector magnitude or von Mises values where applicable. |
-| Result | VTK XML `.vtu` / `.pvtu` | Reads inline ASCII point data. Binary, base64, appended arrays, and `CellData` are not currently supported. |
+| Result | VTK XML `.vtu` / `.pvtu` | Opens standalone geometry with inline ASCII point and cell fields; detects sequences. Single-piece PVTU only. Binary, base64, appended arrays, changing topology and unsupported cell types are rejected. |
 | Output | FrontISTR project | Writes `hecmw_ctrl.dat`, HEC-MW `.msh`, and FrontISTR `.cnt`. |
 
 Gmsh conversion currently covers line, triangle, quadrilateral, tetrahedron, hexahedron, and prism families, including the supported quadratic variants. A `.geo` import requires the Gmsh executable to be available on `PATH`.
@@ -294,8 +296,8 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 - Cluster schedulers, remote-job cancellation, structured iteration progress, and solver-error localization in the viewport are not integrated yet. The current runner targets local workstation MPI (`mpiexec` / `mpirun`) and shows text output; exit code 0 alone is not a convergence or model-validity check.
 - The UI does not yet expose all FrontISTR analysis types and keywords. Unsupported data may not round-trip through the editable setup model.
 - Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
-- Result loading currently attaches fields to the first mesh and is best suited to a single mesh or a flattened exported assembly.
-- Merging MPI rank-result files is not implemented yet; use an external post-processor for the complete distributed result.
+- Open Results runs file parsing in the background. VTU/single-piece PVTU supplies its own geometry; RES suggests a nearby MSH/project and asks for confirmation, or lets you choose a matching MSH. Manually opened results have independent read-only geometry: switching to Model returns to the unchanged editable model.
+- Manual RES opening targets a single mesh or flattened assembly. Complete native MPI results are supported through the Solve handoff, not by opening one rank file. Multi-piece PVTU ghost/partition handling remains planned.
 - VTK XML support is intentionally limited to inline ASCII point data.
 - Planned post-processing conveniences include richer result-field selection, hover probes, selected-node history graphs, and interactive clipping. Detailed visualization will continue to rely on ParaView.
 

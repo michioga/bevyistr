@@ -1,9 +1,9 @@
 //! Post-processing result loading, timeline navigation, and animation UI.
 
-use crate::layout::SidebarPage;
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::prelude::*;
-use fem_core::{FemModel, FemResultSet};
+use fem_core::FemResultSet;
+#[cfg(test)]
 use visualization::ContourSettings;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -17,6 +17,9 @@ pub(crate) struct OpenResultButton;
 
 #[derive(Component)]
 pub(crate) struct ResultStatsText;
+
+#[derive(Resource, Default)]
+pub(crate) struct ResultLoadError(pub Option<String>);
 
 #[derive(Component)]
 pub(crate) struct ResultSliderSection;
@@ -53,154 +56,29 @@ pub(crate) struct PlaybackEndButton;
 #[derive(Component)]
 pub(crate) struct PlaybackPlayPauseLabel;
 
-pub(crate) fn open_result_button_system(
-    mut pending_path: Local<Option<std::path::PathBuf>>,
-    mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        With<OpenResultButton>,
-    >,
-    model: Option<Res<FemModel>>,
-    mut results: ResMut<FemResultSet>,
-    mut settings: ResMut<visualization::VisualizationSettings>,
-    mut page: ResMut<SidebarPage>,
-    mut run_results: ResMut<crate::solve_results_ui::SolveResultsState>,
-) {
-    for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_title("Open result file (FrontISTR: select any .res.<rank>.<step>)")
-                // Native results end in a numeric step, not the extension .res.
-                // Show all files by default so sparse dynamic output is visible.
-                .add_filter("All files (including FrontISTR .res.<rank>.<step>)", &["*"])
-                .add_filter("Fixed-extension results", &["res", "frd", "vtu", "pvtu"])
-                .add_filter("CalculiX result (.frd)", &["frd"])
-                .add_filter("VTK XML (.vtu / .pvtu)", &["vtu", "pvtu"])
-                .pick_file()
-            {
-                *pending_path = Some(path);
-            }
-        }
-
-        let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
-
-        *background = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
-    }
-
-    // Load on a separate branch to avoid holding rfd dialog open
-    // while mutating FemResultSet.
-    if let Some(path) = pending_path.take() {
-        run_results.cancel_pending();
-        let Some(model) = model.as_deref() else {
-            return;
-        };
-        let Some(fem_mesh) = model.meshes.first() else {
-            return;
-        };
-
-        let node_ids: Vec<fem_core::NodeId> = fem_mesh.nodes.iter().map(|n| n.id).collect();
-
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-
-        let loaded_steps: Vec<fem_core::StepResult> = match ext.as_str() {
-            "frd" => match hecmw::load_frd_file(&path, &node_ids) {
-                Ok(steps) => steps,
-                Err(err) => {
-                    bevy::log::warn!("FRD load failed: {err}");
-                    return;
-                }
-            },
-            "vtu" | "pvtu" => match hecmw::load_vtu_file(&path, &node_ids) {
-                Ok(step) => vec![step],
-                Err(err) => {
-                    bevy::log::warn!("VTU load failed: {err}");
-                    return;
-                }
-            },
-            _ => {
-                // .res.0.N — auto-detect series siblings and load all steps.
-                match load_mesh_series(&path, fem_mesh) {
-                    Ok(steps) => steps,
-                    Err(err) => {
-                        bevy::log::warn!("Result series load failed: {err}");
-                        return;
-                    }
-                }
-            }
-        };
-
-        if loaded_steps.is_empty() {
-            bevy::log::warn!("Result file contained no steps: {:?}", path.file_name());
-            return;
-        }
-
-        let step_count = loaded_steps.len();
-        results.by_mesh = vec![loaded_steps];
-        results.active = None;
-        results.activate_first();
-
-        // Auto-activate contour.
-        if let Some(active) = &results.active {
-            let has_disp = results
-                .by_mesh
-                .get(active.mesh_index)
-                .and_then(|s| s.get(active.step_index))
-                .map(|s| s.field_by_name("Displacement").is_some())
-                .unwrap_or(false);
-
-            settings.contour = Some(ContourSettings {
-                mesh_index: active.mesh_index,
-                step_index: active.step_index,
-                field_name: active.field_name.clone(),
-                show_deformation: has_disp,
-                displacement_field: "Displacement".to_string(),
-                deformation_scale: 1.0,
-            });
-        }
-
-        bevy::log::info!(
-            "Loaded {step_count} result step(s) from {:?}",
-            path.file_name()
-        );
-        // A newly loaded result is immediately visible without another
-        // navigation click.
-        *page = SidebarPage::Results;
-    }
-}
-
-fn load_mesh_series(path: &std::path::Path, mesh: &fem_core::FemMesh) -> Result<Vec<fem_core::StepResult>, String> {
-    let nodes = mesh.nodes.iter().map(|n|n.id).collect::<Vec<_>>();
-    let elements = mesh.elements.iter().map(|e|e.id).collect::<Vec<_>>();
-    hecmw::detect_series(path).iter().map(|path| {
-        let source = std::fs::read_to_string(path).map_err(|e|e.to_string())?;
-        if source.trim_start().starts_with("*fstrresult") {
-            let step = path.extension().and_then(|s|s.to_str()).and_then(|s|s.parse().ok()).unwrap_or(0);
-            hecmw::native_result::NativeResult::parse(source.trim_start())?.step(&nodes,&elements,step)
-        } else {
-            hecmw::load_result_file(path,&nodes).map_err(|e|e.to_string())
-        }
-    }).collect()
-}
+pub(crate) use crate::result_open::open_result_button_system;
 
 pub(crate) fn update_result_stats_text(
     results: Res<FemResultSet>,
+    opening: Option<Res<crate::result_open::ResultOpenState>>,
+    mut load_error: ResMut<ResultLoadError>,
     mut query: Query<&mut Text, With<ResultStatsText>>,
 ) {
-    if !results.is_changed() {
+    if !results.is_changed() && !load_error.is_changed() && !opening.as_ref().is_some_and(|s|s.is_changed()) {
         return;
     }
 
     let Ok(mut text) = query.single_mut() else {
         return;
     };
+
+    if results.is_changed() && !load_error.is_changed() {
+        load_error.0 = None;
+    }
+    if let Some(error) = &load_error.0 {
+        **text = format!("{error}\nPrevious results, if any, remain displayed.");
+        return;
+    }
 
     **text = if !results.has_results() {
         "Result: none loaded".to_string()
@@ -225,6 +103,14 @@ pub(crate) fn update_result_stats_text(
         let total_steps: usize = results.by_mesh.iter().map(|s| s.len()).sum();
         format!("Result: {total_steps} step(s) loaded")
     };
+    if let Some(active) = &results.active {
+        if let Some(steps) = results.by_mesh.get(active.mesh_index) {
+            if let Some(step) = steps.get(active.step_index) {
+                text.push_str(&format!("\nFrame {}/{} | Step {} | Time {:.6e}", active.step_index+1, steps.len(), step.step, step.time));
+            }
+        }
+    }
+    if let Some(opening)=opening { if !opening.status.is_empty() {text.push_str(&format!("\n{}",opening.status));} }
 }
 
 // ── animation playback ────────────────────────────────────────────────────────
@@ -492,5 +378,34 @@ pub(crate) fn apply_slider_to_results(
         if let Some(scale) = scale_value {
             contour.deformation_scale = scale;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sparse_timeline_updates_contour_and_visible_step_metadata() {
+        let mut app=App::new();
+        let mut results=FemResultSet::default();
+        results.by_mesh=vec![vec![
+            fem_core::StepResult {step:0,time:0.,fields:vec![fem_core::ResultField::NodeScalar{name:"S".into(),values:vec![0.],min:0.,max:0.}]},
+            fem_core::StepResult {step:5000,time:0.005,fields:vec![fem_core::ResultField::NodeScalar{name:"S".into(),values:vec![10.],min:10.,max:10.}]},
+        ]];
+        results.activate_first();
+        let mut settings=visualization::VisualizationSettings::default();
+        settings.contour=Some(ContourSettings {mesh_index:0,step_index:0,field_name:"S".into(),show_deformation:false,displacement_field:"Displacement".into(),deformation_scale:1.});
+        app.insert_resource(results).insert_resource(settings).init_resource::<ResultLoadError>()
+            .add_systems(Update,(apply_slider_to_results,update_result_stats_text).chain());
+        let slider=app.world_mut().spawn((SliderTrack,SliderState{id:SliderId::ResultStep,min:0.,max:1.,value:1.,dragging:false})).id();
+        let label=app.world_mut().spawn((ResultStatsText,Text::default())).id();
+        app.update();
+        assert_eq!(app.world().resource::<FemResultSet>().active.as_ref().unwrap().step_index,1);
+        assert_eq!(app.world().resource::<visualization::VisualizationSettings>().contour.as_ref().unwrap().step_index,1);
+        assert!(app.world().get::<Text>(label).unwrap().contains("Frame 2/2 | Step 5000"));
+        app.world_mut().get_mut::<SliderState>(slider).unwrap().value=0.;
+        app.update();
+        assert!(app.world().get::<Text>(label).unwrap().contains("Frame 1/2 | Step 0"));
     }
 }

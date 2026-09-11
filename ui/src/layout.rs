@@ -382,7 +382,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             Name::new("OpenResultButton"),
                                         ))
                                         .with_child((
-                                            Text::new("Open Result  (.res / .vtu)"),
+                                            Text::new("Open Results..."),
                                             TextFont {
                                                 font_size: FontSize::Px(12.0),
                                                 ..default()
@@ -390,6 +390,11 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             TextColor(TEXT_MAIN),
                                         ));
                                     });
+                                sec.spawn((
+                                    Text::new("VTU / PVTU: open directly, including geometry.\nRES: choose its mesh when prompted.\nYour editable model is preserved."),
+                                    TextFont {font_size:FontSize::Px(10.5),..default()},
+                                    TextColor(TEXT_MUTED),
+                                ));
                                 sec.spawn((
                                     Text::new("Result: none loaded"),
                                     TextFont {
@@ -419,7 +424,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             min: 0.0,
                                             max: 0.0,
                                             value: 0.0,
-                                            label: "Step",
+                                            label: "Frame",
                                             id: SliderId::ResultStep,
                                         },
                                     );
