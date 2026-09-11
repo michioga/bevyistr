@@ -115,6 +115,7 @@ Settings are loaded at startup. To edit the file manually, close bevyistr, edit 
   replaces results instead of appending duplicate steps. Changing the model or
   starting another run invalidates a pending handoff. Failed/stopped runs cannot
   use this button.
+- For the current opening workflow, limitations, and manual verification checklist, see the [Result viewing guide (日本語)](docs/results-guide.ja.md).
 - Open FrontISTR ASCII `.res.0.N` series, CalculiX ASCII `.frd`, and inline ASCII VTK XML `.vtu`/`.pvtu` results.
 - Inline ASCII VTU opens its own coordinates/connectivity and nodal/cell scalar components, including stress and custom arrays, without a preloaded MSH. Single-piece PVTU is supported; sequences must have fixed geometry/topology. Multi-piece PVTU is rejected pending partition/ghost handling; use the native MPI result handoff or ParaView. Invalid or incomplete arrays report an error in Results without replacing the previous display. Missing unused nodes in native RES have no result (not zero) and do not affect contour ranges.
 - Open Result detects numbered `.pvtu`/`.vtu` and `.res.<rank>.<step>` sequences, including native files under sibling `STEP<number>` folders. FrontISTR piece VTUs resolve through their referencing PVTU; rank numbers are not animation frames. The requested step opens first, with frame count, output step and time shown in Results. Native results also tolerate omitted unused mesh nodes, while missing element-node results remain errors. Result edges follow deformation and animation; undeformed base edges/node markers are hidden until results are cleared.
@@ -130,7 +131,9 @@ The Solve handoff displays native ASCII nodal and element fields. Binary `.res`,
 adaptive/refined distributed result mapping, and automatic VTK output discovery
 are not supported by this handoff. After restarting the app, use **Open Result**
 for existing files; manual loading does not reconstruct MPI ownership or the
-previous run's fresh-file snapshot. The default field is displacement magnitude;
+previous run's fresh-file snapshot. The Solve handoff initially selects the first
+field (typically displacement magnitude). Manual opening prefers `NodalMISES`
+when present in the requested step;
 viewport result probing remains planned. Component indices retain file ordering.
 
 MPI execution uses `hecmw_part1` and then `mpiexec -n N fistr1 -t T`. The MPI
@@ -298,7 +301,7 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 - Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
 - Open Results runs file parsing in the background. VTU/single-piece PVTU supplies its own geometry; RES suggests a nearby MSH/project and asks for confirmation, or lets you choose a matching MSH. Manually opened results have independent read-only geometry: switching to Model returns to the unchanged editable model.
 - Manual RES opening targets a single mesh or flattened assembly. Complete native MPI results are supported through the Solve handoff, not by opening one rank file. Multi-piece PVTU ghost/partition handling remains planned.
-- VTK XML support is intentionally limited to inline ASCII point data.
+- VTK XML support is limited to inline ASCII point/cell data and supported cell types, with fixed geometry across a sequence. Single-piece PVTU only.
 - Planned post-processing conveniences include richer result-field selection, hover probes, selected-node history graphs, and interactive clipping. Detailed visualization will continue to rely on ParaView.
 
 The long-term goal is to make the full FrontISTR workflow accessible without returning to a dialog-heavy pre/post interface, while preserving explicit numeric confirmation and valid solver input.
