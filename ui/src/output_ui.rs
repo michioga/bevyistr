@@ -9,7 +9,8 @@ use bevy::{
     prelude::*,
     ui::{InteractionDisabled, ScrollPosition},
     ui_widgets::{
-        Activate, MenuAction, MenuButton, MenuEvent, MenuFocusState, MenuItem, MenuPopup,
+        Activate, Button as WidgetButton, MenuAction, MenuButton, MenuEvent, MenuFocusState,
+        MenuItem, MenuPopup,
         popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
     },
 };
@@ -37,6 +38,7 @@ struct Apply(Entity);
 fn text(value: impl Into<String>) -> impl Bundle {
     (
         Text::new(value),
+        bevy::picking::Pickable::IGNORE,
         TextFont {
             font_size: FontSize::Px(11.0),
             ..default()
@@ -60,6 +62,8 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             .with_children(|menu| {
                 menu.spawn((
                     Button,
+                    // UI Button supplies layout/Interaction; WidgetButton emits Activate.
+                    WidgetButton,
                     MenuButton,
                     TabIndex(0),
                     Node {
@@ -94,7 +98,9 @@ fn menu_event(
 ) {
     // A quantity choice must keep the popup and keyboard focus open. Apply,
     // Escape, outside click and focus loss retain native menu dismissal.
-    if choices.contains(event.source)
+    // Propagation retargets `source` to the menu root. Keep the originating
+    // item to distinguish a multi-select click from dismissal of the popup.
+    if choices.contains(event.original_event_target())
         && matches!(event.action, MenuAction::CloseAll | MenuAction::FocusRoot)
     {
         return;
@@ -302,6 +308,98 @@ fn sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_popup_opens_and_applies_through_pointer_events() {
+        let mut app = App::new();
+        app.init_resource::<AnalysisSetup>()
+            .init_resource::<InputFocus>()
+            .insert_resource(SidebarPage::Solve)
+            .add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
+            .add_systems(Startup, |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(spawn);
+            })
+            .add_systems(Update, sync);
+        app.update();
+        let root = app
+            .world_mut()
+            .query::<(Entity, &OutputMenu)>()
+            .iter(app.world())
+            .find(|(_, menu)| menu.0 == OutputTarget::Res)
+            .unwrap()
+            .0;
+        let button = app.world().get::<Children>(root).unwrap()[0];
+        let button_text = app.world().get::<Children>(button).unwrap()[0];
+        assert_eq!(
+            app.world().get::<bevy::picking::Pickable>(button_text),
+            Some(&bevy::picking::Pickable::IGNORE)
+        );
+        crate::widget_test_input::click(app.world_mut(), button);
+        app.update();
+        let popup = app
+            .world_mut()
+            .query_filtered::<Entity, With<Draft>>()
+            .single(app.world())
+            .unwrap();
+        let choice = app
+            .world_mut()
+            .query::<(Entity, &Choice)>()
+            .iter(app.world())
+            .find(|(_, c)| c.keyword == "REACTION" && c.value == Some(true))
+            .unwrap()
+            .0;
+        let item_text = app.world().get::<Children>(choice).unwrap()[0];
+        assert_eq!(
+            app.world().get::<bevy::picking::Pickable>(item_text),
+            Some(&bevy::picking::Pickable::IGNORE)
+        );
+        crate::widget_test_input::click(app.world_mut(), choice);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Draft>(popup)
+                .unwrap()
+                .control
+                .value("REACTION"),
+            Some(true)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<AnalysisSetup>()
+                .output
+                .res
+                .value("REACTION"),
+            None
+        );
+        let apply = app
+            .world_mut()
+            .query_filtered::<Entity, With<Apply>>()
+            .single(app.world())
+            .unwrap();
+        let apply_text = app.world().get::<Children>(apply).unwrap()[0];
+        assert_eq!(
+            app.world().get::<bevy::picking::Pickable>(apply_text),
+            Some(&bevy::picking::Pickable::IGNORE)
+        );
+        crate::widget_test_input::click(app.world_mut(), apply);
+        assert_eq!(
+            app.world()
+                .resource::<AnalysisSetup>()
+                .output
+                .res
+                .value("REACTION"),
+            Some(true)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<AnalysisSetup>()
+                .output
+                .vis
+                .value("REACTION"),
+            None
+        );
+        assert!(app.world().get_entity(popup).is_err());
+    }
     #[test]
     fn popup_opens_multiple_choices_stay_open_and_dismissal_discards_draft() {
         let mut app = App::new();

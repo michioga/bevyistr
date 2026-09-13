@@ -9,7 +9,8 @@ use bevy::{
     prelude::*,
     ui::{InteractionDisabled, ScrollPosition},
     ui_widgets::{
-        Activate, MenuAction, MenuButton, MenuEvent, MenuFocusState, MenuItem, MenuPopup,
+        Activate, Button as WidgetButton, MenuAction, MenuButton, MenuEvent, MenuFocusState,
+        MenuItem, MenuPopup,
         popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
     },
 };
@@ -41,6 +42,8 @@ pub(crate) struct DeformationScaleSection;
 fn text(label: impl Into<String>) -> impl Bundle {
     (
         Text::new(label),
+        // Widget observers must receive the hit on the control, not its label.
+        bevy::picking::Pickable::IGNORE,
         TextFont {
             font_size: FontSize::Px(11.0),
             ..default()
@@ -56,6 +59,7 @@ mod tests {
     #[test]
     fn popup_lists_loaded_fields_and_activation_changes_only_the_color_field() {
         let mut app = App::new();
+        app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin));
         app.init_resource::<FemResultSet>()
             .init_resource::<VisualizationSettings>()
             .init_resource::<crate::results_ui::PlaybackState>()
@@ -107,11 +111,21 @@ mod tests {
         });
         app.update();
         assert!(app.world().get::<InteractionDisabled>(button).is_none());
-        app.world_mut().trigger(MenuEvent {
-            source: button,
-            action: MenuAction::Toggle,
-        });
-        app.world_mut().flush();
+        let button_text = app.world().get::<Children>(button).unwrap()[0];
+        assert_eq!(
+            app.world().get::<bevy::picking::Pickable>(button_text),
+            Some(&bevy::picking::Pickable::IGNORE)
+        );
+        crate::widget_test_input::click(app.world_mut(), button);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<FieldPopup>>()
+                .iter(app.world())
+                .count(),
+            1,
+            "pointer must open before the focus update"
+        );
+        app.update();
         let choices = app
             .world_mut()
             .query::<(Entity, &Choice)>()
@@ -129,12 +143,12 @@ mod tests {
             .find(|(_, name)| name == "Custom flux (element)")
             .unwrap()
             .0;
-        app.world_mut().trigger(Activate { entity: selected });
-        app.world_mut().trigger(MenuEvent {
-            source: selected,
-            action: MenuAction::CloseAll,
-        });
-        app.world_mut().flush();
+        let item_text = app.world().get::<Children>(selected).unwrap()[0];
+        assert_eq!(
+            app.world().get::<bevy::picking::Pickable>(item_text),
+            Some(&bevy::picking::Pickable::IGNORE)
+        );
+        crate::widget_test_input::click(app.world_mut(), selected);
         let contour = app
             .world()
             .resource::<VisualizationSettings>()
@@ -161,6 +175,25 @@ mod tests {
                 .count(),
             0
         );
+        let deformation = app
+            .world_mut()
+            .query_filtered::<Entity, With<DeformationButton>>()
+            .single(app.world())
+            .unwrap();
+        let deformation_text = app.world().get::<Children>(deformation).unwrap()[0];
+        assert_eq!(
+            app.world().get::<bevy::picking::Pickable>(deformation_text),
+            Some(&bevy::picking::Pickable::IGNORE)
+        );
+        crate::widget_test_input::click(app.world_mut(), deformation);
+        let contour = app
+            .world()
+            .resource::<VisualizationSettings>()
+            .contour
+            .as_ref()
+            .unwrap();
+        assert!(!contour.show_deformation);
+        assert_eq!(contour.field_name, "Custom flux (element)");
     }
 
     #[test]
@@ -302,6 +335,8 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             anchor
                 .spawn((
                     Button,
+                    // The UI marker alone does not emit Activate in Bevy 0.19.
+                    WidgetButton,
                     MenuButton,
                     FieldButton,
                     TabIndex(0),
@@ -317,6 +352,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
             Button,
+            WidgetButton,
             DeformationButton,
             button_node(),
             BackgroundColor(Color::srgb(0.14, 0.30, 0.37)),

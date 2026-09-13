@@ -17,6 +17,8 @@ mod project_io;
 mod results_ui;
 mod result_open;
 mod result_menu;
+#[cfg(test)]
+mod widget_test_input;
 mod output_ui;
 mod selection_ui;
 pub mod slider;
