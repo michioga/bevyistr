@@ -35,7 +35,7 @@ pub fn write_cnt_file_with_contacts(
     ))
 }
 
-fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
+pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
     let mut o = String::with_capacity(4096);
     writeln!(
         o,
@@ -170,6 +170,14 @@ fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {
     writeln!(o).unwrap();
     writeln!(o, "!WRITE, RESULT").unwrap();
     writeln!(o, "!WRITE, VISUAL").unwrap();
+    for control in [&setup.output.res, &setup.output.vis] {
+        for card in &control.cards {
+            writeln!(o, "{}", card.header).unwrap();
+            for line in &card.lines {
+                writeln!(o, "{line}").unwrap();
+            }
+        }
+    }
     writeln!(o, "!VISUAL, METHOD=PSR").unwrap();
     writeln!(o, "!surface_num=1").unwrap();
     writeln!(o, "!surface 1").unwrap();

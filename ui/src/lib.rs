@@ -17,6 +17,7 @@ mod project_io;
 mod results_ui;
 mod result_open;
 mod result_menu;
+mod output_ui;
 mod selection_ui;
 pub mod slider;
 mod solve_ui;
@@ -148,6 +149,7 @@ impl Plugin for UiPlugin {
             app.add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin);
         }
         result_menu::register(app);
+        output_ui::register(app);
         app.init_gizmo_group::<AssemblyClearanceGizmos>();
         {
             let mut configs = app.world_mut().resource_mut::<GizmoConfigStore>();

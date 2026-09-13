@@ -510,6 +510,32 @@ fn validate_analysis_setup(
         }
     }
 
+    for target in [fem_core::OutputTarget::Res, fem_core::OutputTarget::Vis] {
+        for card in &setup.output.get(target).cards {
+            for parameter in card.header.split(',').skip(1) {
+                let Some((key, group)) = parameter.split_once('=') else {
+                    continue;
+                };
+                if key.trim().eq_ignore_ascii_case("GROUP")
+                    && !group.trim().eq_ignore_ascii_case("ALL")
+                {
+                    if model.meshes.len() > 1 {
+                        report.error(target.keyword(), "named output GROUP cannot yet be remapped across assembly parts; review the imported CNT output controls");
+                    } else if !model.meshes[0]
+                        .node_sets
+                        .iter()
+                        .any(|set| set.name == group.trim())
+                    {
+                        report.error(
+                            target.keyword(),
+                            format!("output GROUP {} is not a mesh node group", group.trim()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     if setup.solver.substeps == 0 {
         report.error("Solver", "substeps must be at least 1");
     }
@@ -846,6 +872,26 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn assembly_output_group_is_not_silently_exported_with_a_stale_name() {
+        let mut model = fem_core::FemModel::demo_hex8();
+        model.add_mesh("second", model.meshes[0].clone());
+        let mut setup = AnalysisSetup::default();
+        setup.output.res.cards.push(fem_core::OutputCard {
+            header: "!OUTPUT_RES, GROUP=FIX".into(),
+            lines: vec!["REACTION, ON".into()],
+        });
+        let report = validate_frontistr_project(&model, &setup);
+        assert!(report.has_errors());
+        assert!(
+            report
+                .summary(100)
+                .contains("named output GROUP cannot yet be remapped")
+        );
+        let remapped = remap_setup_for_assembly(&setup, &[(0, 0), (100, 100)]);
+        assert_eq!(remapped.output, setup.output);
+    }
 
     #[test]
     fn remaps_every_mesh_scoped_analysis_target() {

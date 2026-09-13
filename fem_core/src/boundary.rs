@@ -514,6 +514,7 @@ pub struct AnalysisSetup {
     /// Solver settings for this analysis. Written as `!SOLUTION`, `!STEP`,
     /// `!SOLVER` etc. in the exported `.cnt` file.
     pub solver: SolverSettings,
+    pub output: crate::OutputSettings,
 }
 
 impl Default for AnalysisSetup {
@@ -526,6 +527,7 @@ impl Default for AnalysisSetup {
             sections: Vec::new(),
             mpc_equations: Vec::new(),
             solver: SolverSettings::default(),
+            output: crate::OutputSettings::default(),
         }
     }
 }

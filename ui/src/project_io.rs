@@ -437,6 +437,8 @@ pub(crate) fn apply_mesh(
         model.add_mesh(name, mesh);
     } else {
         setup.clear();
+        // Output controls (including imported GROUP references) are project-local.
+        setup.output = fem_core::OutputSettings::default();
         *model = FemModel::single_mesh(name, mesh);
     }
     status.loaded(path.clone());

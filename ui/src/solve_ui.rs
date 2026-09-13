@@ -220,6 +220,7 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
             ));
         });
 
+    crate::output_ui::spawn(parent);
     spawn_solver_execution_ui(parent);
 }
 

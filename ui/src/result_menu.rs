@@ -21,7 +21,10 @@ struct FieldMenu;
 #[derive(Component)]
 struct FieldButton;
 #[derive(Component)]
-struct FieldLabel;
+enum FieldLabel {
+    Button,
+    Current,
+}
 #[derive(Component)]
 struct FieldPopup;
 #[derive(Component, Clone)]
@@ -49,6 +52,116 @@ fn text(label: impl Into<String>) -> impl Bundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popup_lists_loaded_fields_and_activation_changes_only_the_color_field() {
+        let mut app = App::new();
+        app.init_resource::<FemResultSet>()
+            .init_resource::<VisualizationSettings>()
+            .init_resource::<crate::results_ui::PlaybackState>()
+            .init_resource::<InputFocus>()
+            .insert_resource(SidebarPage::Results)
+            .add_systems(Startup, |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(spawn);
+            })
+            .add_systems(Update, sync);
+        app.update();
+        let button = app
+            .world_mut()
+            .query_filtered::<Entity, With<FieldButton>>()
+            .single(app.world())
+            .unwrap();
+        assert!(app.world().get::<InteractionDisabled>(button).is_some());
+        app.world_mut().resource_mut::<FemResultSet>().by_mesh = vec![vec![fem_core::StepResult {
+            step: 7,
+            time: 1.5,
+            fields: vec![
+                ResultField::NodeVector {
+                    name: "Displacement".into(),
+                    values: vec![Vec3::X],
+                    min_mag: 1.0,
+                    max_mag: 1.0,
+                },
+                ResultField::ElementScalar {
+                    name: "Custom flux (element)".into(),
+                    values: vec![42.0],
+                    min: 42.0,
+                    max: 42.0,
+                },
+            ],
+        }]];
+        app.world_mut().resource_mut::<FemResultSet>().active = Some(ActiveResult {
+            mesh_index: 0,
+            step_index: 0,
+            field_name: "Displacement".into(),
+        });
+        app.world_mut()
+            .resource_mut::<VisualizationSettings>()
+            .contour = Some(ContourSettings {
+            mesh_index: 0,
+            step_index: 0,
+            field_name: "Displacement".into(),
+            show_deformation: true,
+            displacement_field: "Displacement".into(),
+            deformation_scale: 17.0,
+        });
+        app.update();
+        assert!(app.world().get::<InteractionDisabled>(button).is_none());
+        app.world_mut().trigger(MenuEvent {
+            source: button,
+            action: MenuAction::Toggle,
+        });
+        app.world_mut().flush();
+        let choices = app
+            .world_mut()
+            .query::<(Entity, &Choice)>()
+            .iter(app.world())
+            .map(|(entity, choice)| (entity, choice.name.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(choices.len(), 2);
+        assert!(
+            choices
+                .iter()
+                .all(|(_, name)| name == "Displacement" || name == "Custom flux (element)")
+        );
+        let selected = choices
+            .iter()
+            .find(|(_, name)| name == "Custom flux (element)")
+            .unwrap()
+            .0;
+        app.world_mut().trigger(Activate { entity: selected });
+        app.world_mut().trigger(MenuEvent {
+            source: selected,
+            action: MenuAction::CloseAll,
+        });
+        app.world_mut().flush();
+        let contour = app
+            .world()
+            .resource::<VisualizationSettings>()
+            .contour
+            .as_ref()
+            .unwrap();
+        assert_eq!(contour.field_name, "Custom flux (element)");
+        assert!(contour.show_deformation);
+        assert_eq!(contour.deformation_scale, 17.0);
+        assert_eq!(contour.step_index, 0);
+        assert_eq!(
+            app.world()
+                .resource::<FemResultSet>()
+                .active
+                .as_ref()
+                .unwrap()
+                .field_name,
+            contour.field_name
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<FieldPopup>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+    }
 
     #[test]
     fn dynamic_fields_follow_file_order_and_missing_quantity_is_not_replaced() {
@@ -175,6 +288,7 @@ fn button_node() -> Node {
     }
 }
 pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
+    parent.spawn(text("CONTOUR | fields in the loaded result"));
     parent
         .spawn((
             FieldMenu,
@@ -194,8 +308,12 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                     button_node(),
                     BackgroundColor(Color::srgb(0.14, 0.30, 0.37)),
                 ))
-                .with_child((text("Contour: choose field  v"), FieldLabel));
+                .with_child((text("Choose display field..."), FieldLabel::Button));
         });
+    parent.spawn((text("Contour: no result"), FieldLabel::Current));
+    parent.spawn(text(
+        "Choose the color field above. Deformation below changes shape independently.",
+    ));
     parent
         .spawn((
             Button,
@@ -281,6 +399,7 @@ fn menu_event(
                     Node {
                         position_type: PositionType::Absolute,
                         width: px(300),
+                        max_width: Val::Vw(90.0),
                         max_height: Val::Vh(45.0),
                         flex_direction: FlexDirection::Column,
                         overflow: Overflow::scroll_y(),
@@ -305,7 +424,17 @@ fn menu_event(
                     },
                 ))
                 .with_children(|popup| {
+                    popup.spawn(text(format!(
+                        "{} fields in this result frame",
+                        choices.len()
+                    )));
+                    popup.spawn(text("Click a field to change the contour. Esc cancels."));
                     for (name, label) in choices {
+                        let selected = results
+                            .active
+                            .as_ref()
+                            .is_some_and(|a| a.field_name == name);
+                        let label = format!("{} {label}", if selected { "[x]" } else { "[ ]" });
                         popup
                             .spawn((
                                 MenuItem,
@@ -397,14 +526,16 @@ fn sync(
     mut results: ResMut<FemResultSet>,
     settings: ResMut<VisualizationSettings>,
     page: Res<SidebarPage>,
-    mut labels: Query<&mut Text, With<FieldLabel>>,
+    mut labels: Query<(&FieldLabel, &mut Text)>,
     mut deformation_labels: Query<&mut Text, (With<DeformationLabel>, Without<FieldLabel>)>,
     buttons: Query<Entity, With<DeformationButton>>,
+    field_buttons: Query<Entity, With<FieldButton>>,
     popups: Query<Entity, With<FieldPopup>>,
     mut scale_sections: Query<&mut Node, With<DeformationScaleSection>>,
     mut items: Query<(&Choice, &Hovered, &mut BackgroundColor)>,
     mut focus: ResMut<InputFocus>,
     menu_focus: Query<(), Or<(With<FieldButton>, With<Choice>)>>,
+    mut field_count: Local<usize>,
 ) {
     let mut settings = settings;
     if *page != SidebarPage::Results && focus.get().is_some_and(|e| menu_focus.contains(e)) {
@@ -430,7 +561,25 @@ fn sync(
             commands.entity(e).despawn();
         }
     }
-    for mut label in &mut labels {
+    if results.is_changed() {
+        *field_count = fields(&results).len();
+    }
+    for e in &field_buttons {
+        if *field_count == 0 {
+            commands.entity(e).insert(InteractionDisabled);
+        } else {
+            commands.entity(e).remove::<InteractionDisabled>();
+        }
+    }
+    for (kind, mut label) in &mut labels {
+        if matches!(kind, FieldLabel::Button) {
+            label.set_if_neq(Text::new(if *field_count == 0 {
+                "Choose display field... (no fields loaded)".into()
+            } else {
+                format!("Choose display field... ({})  v", *field_count)
+            }));
+            continue;
+        }
         label.set_if_neq(Text::new(results.active.as_ref().map_or_else(
             || "Contour: no result".into(),
             |a| {
@@ -440,9 +589,9 @@ fn sync(
                         .is_some_and(|step| step.field_by_name(&a.field_name).is_some())
                 });
                 if available {
-                    format!("Contour: {}  v", a.field_name)
+                    format!("Contour: {}", a.field_name)
                 } else {
-                    format!("Contour: {} (not output at this step)  v", a.field_name)
+                    format!("Contour: {} (not output at this step)", a.field_name)
                 }
             },
         )));

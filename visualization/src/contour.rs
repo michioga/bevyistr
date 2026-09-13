@@ -241,6 +241,41 @@ mod tests {
     use fem_core::{FemMesh, ResultField, StepResult};
 
     #[test]
+    fn changing_display_field_recolors_surface_without_changing_deformation() {
+        use bevy::mesh::VertexAttributeValues;
+        let model = FemMesh::demo_hex8();
+        let step = StepResult {
+            fields: vec![
+                ResultField::NodeVector {
+                    name: "Displacement".into(), values: vec![Vec3::X; 8], min_mag: 1.0, max_mag: 1.0,
+                },
+                ResultField::NodeScalar {
+                    name: "Nodal stress".into(), values: (0..8).map(|i| i as f32).collect(), min: 0.0, max: 7.0,
+                },
+                ResultField::ElementScalar {
+                    name: "Custom element field".into(), values: vec![0.0], min: 0.0, max: 1.0,
+                },
+            ],
+            ..default()
+        };
+        let mut settings = ContourSettings {
+            mesh_index: 0, step_index: 0, field_name: "Nodal stress".into(),
+            show_deformation: true, displacement_field: "Displacement".into(), deformation_scale: 3.0,
+        };
+        let before = build_contour_surface_mesh(&model, &step, &settings).unwrap();
+        settings.field_name = "Custom element field".into();
+        let after = build_contour_surface_mesh(&model, &step, &settings).unwrap();
+        let Some(VertexAttributeValues::Float32x3(before_positions)) = before.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions missing"); };
+        let Some(VertexAttributeValues::Float32x3(after_positions)) = after.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions missing"); };
+        assert_eq!(before_positions, after_positions);
+        assert!(!after_positions.is_empty());
+        assert!(after_positions.iter().all(|p| model.nodes.iter().any(|n| n.position + 3.0 * Vec3::X == Vec3::from_array(*p))));
+        let Some(VertexAttributeValues::Float32x4(before_colors)) = before.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("colors missing"); };
+        let Some(VertexAttributeValues::Float32x4(after_colors)) = after.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("colors missing"); };
+        assert_ne!(before_colors, after_colors);
+    }
+
+    #[test]
     fn result_edges_follow_surface_deformation_scale_and_step() {
         let mesh = FemMesh::demo_hex8();
         let mut settings = ContourSettings {

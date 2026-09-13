@@ -404,6 +404,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                     TextColor(TEXT_MUTED),
                                     ResultStatsText,
                                 ));
+                                crate::result_menu::spawn(sec);
                                 sec.spawn((
                                     Node {
                                         flex_direction: FlexDirection::Column,
@@ -416,7 +417,6 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                     Name::new("ResultSliderSection"),
                                 ))
                                 .with_children(|sliders| {
-                                    crate::result_menu::spawn(sliders);
                                     spawn_slider(
                                         sliders,
                                         SliderConfig {

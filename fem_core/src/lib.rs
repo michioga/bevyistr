@@ -5,6 +5,7 @@ pub mod boundary;
 pub mod connected;
 pub mod contact;
 pub mod model;
+pub mod output;
 pub mod planar;
 pub mod result;
 pub mod spatial;
@@ -17,6 +18,7 @@ pub use connected::{
 };
 pub use contact::*;
 pub use model::*;
+pub use output::*;
 pub use planar::{
     expand_coplanar_from_element, expand_coplanar_from_face, expand_smooth_from_element,
     expand_smooth_from_face,

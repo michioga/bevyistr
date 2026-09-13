@@ -8,10 +8,11 @@
 //! tool: `!BOUNDARY`, `!CLOAD`, `!DLOAD`, `!MATERIAL` (+ `!ITEM=n`
 //! sub-blocks), and `!NGROUP`. A mesh-style `!SECTION,EGRP=...,MATERIAL=...`
 //! found in `.cnt` is accepted for compatibility, while the documented CNT
-//! `!SECTION` formulation card is left untouched. Unrecognized keywords (solver
-//! settings, step control, output control, etc.) are skipped without error
-//! — this is a setup *viewer*, not a solver front-end, so being lenient
-//! about keywords we don't display is more useful than rejecting the file.
+//! `!SECTION` formulation card is not interpreted. Solver/step settings are
+//! partially supported. `!OUTPUT_RES` / `!OUTPUT_VIS` cards are retained for
+//! output-field editing and export, including unrecognized items and header
+//! parameters. Other unrecognized keywords are currently skipped; this is
+//! not a lossless general CNT editor.
 //!
 //! # Node group resolution
 //!
@@ -66,7 +67,7 @@ impl From<io::Error> for CntError {
 /// Parsed contents of a `.cnt` file: everything [`load_cnt_file`] could
 /// extract, ready to be merged into an [`fem_core::AnalysisSetup`] by the
 /// caller (which assigns `mesh_index`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CntData {
     pub boundary_conditions: Vec<BoundaryCondition>,
     pub nodal_loads: Vec<NodalLoad>,
@@ -77,6 +78,22 @@ pub struct CntData {
     pub contact_settings: Vec<CntContactSettings>,
 
     pub solver: Option<SolverSettings>,
+    pub output: fem_core::OutputSettings,
+}
+
+impl Default for CntData {
+    fn default() -> Self {
+        Self {
+            boundary_conditions: vec![],
+            nodal_loads: vec![],
+            distributed_loads: vec![],
+            materials: vec![],
+            sections: vec![],
+            contact_settings: vec![],
+            solver: None,
+            output: fem_core::OutputSettings::inherited(),
+        }
+    }
 }
 
 /// Solver-side settings attached to a mesh `!CONTACT PAIR` by name.
@@ -129,6 +146,7 @@ impl CntData {
         if let Some(solver) = self.solver {
             setup.solver = solver;
         }
+        setup.output = self.output;
     }
 
     /// Applies `.cnt` interaction types and coefficients to contact pairs
@@ -263,6 +281,27 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
         let header = parse_keyword_header(trimmed);
 
         match header.name.as_str() {
+            "OUTPUT_RES" | "OUTPUT_VIS" => {
+                let target = if header.name == "OUTPUT_RES" {
+                    fem_core::OutputTarget::Res
+                } else {
+                    fem_core::OutputTarget::Vis
+                };
+                let mut card = fem_core::OutputCard {
+                    header: trimmed.to_string(),
+                    lines: vec![],
+                };
+                i += 1;
+                while i < lines.len() {
+                    let line = lines[i].trim();
+                    if line.starts_with('!') && !line.starts_with("!!") {
+                        break;
+                    }
+                    card.lines.push(lines[i].to_string());
+                    i += 1;
+                }
+                data.output.get_mut(target).cards.push(card);
+            }
             "SOLUTION" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
                 if let Some(solution_type) = header.params.get("TYPE") {
@@ -752,6 +791,47 @@ fn resolve_element_group(token: &str, mesh: &FemMesh) -> Vec<ElementId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_controls_round_trip_independently_without_changing_defaults() {
+        use fem_core::OutputTarget;
+        let model = fem_core::FemModel::demo_hex8();
+        let input = "!OUTPUT_RES\nDISP, OFF\nNSTRESS, ON\nFUTURE_FIELD, ON\n!OUTPUT_VIS\nNSTRESS, OFF\nEMISES, ON\n!END\n";
+        let mut setup = AnalysisSetup::default();
+        parse_cnt(input, &model.meshes[0], 0).merge_into(&mut setup);
+        assert_eq!(setup.output.res.value("DISP"), Some(false));
+        assert_eq!(setup.output.vis.value("DISP"), None);
+        assert!(
+            setup
+                .output
+                .res
+                .set(OutputTarget::Res, "REACTION", Some(true))
+        );
+        let written = crate::cnt_writer::build_cnt(&setup, &[]);
+        assert!(written.contains("FUTURE_FIELD, ON"));
+        let reloaded = parse_cnt(&written, &model.meshes[0], 0);
+        assert_eq!(reloaded.output, setup.output);
+        assert_eq!(reloaded.output.vis.value("REACTION"), None);
+        assert_eq!(reloaded.output.vis.value("NSTRESS"), Some(false));
+        parse_cnt("!END\n", &model.meshes[0], 0).merge_into(&mut setup);
+        assert_eq!(setup.output, fem_core::OutputSettings::inherited());
+        assert!(!crate::cnt_writer::build_cnt(&setup, &[]).contains("!OUTPUT_"));
+    }
+
+    #[test]
+    fn advanced_output_headers_and_repeated_cards_are_preserved() {
+        let model = fem_core::FemModel::demo_hex8();
+        let input = "!OUTPUT_RES, GROUP=FIX, ACTION=SUM\nREACTION, ON\n!! keep this note\n!OUTPUT_RES\nNSTRESS, OFF\n!OUTPUT_VIS, EXTRA=FUTURE\nCUSTOM, ON, VECTOR\n!END\n";
+        let mut setup = AnalysisSetup::default();
+        parse_cnt(input, &model.meshes[0], 0).merge_into(&mut setup);
+        let written = crate::cnt_writer::build_cnt(&setup, &[]);
+        assert!(written.contains(input.trim_end_matches("!END\n")));
+        assert_eq!(
+            parse_cnt(&written, &model.meshes[0], 0).output,
+            setup.output
+        );
+        assert!(!setup.output.res.editable(fem_core::OutputTarget::Res));
+    }
 
     #[test]
     fn preserves_gravity_direction_cosines() {
