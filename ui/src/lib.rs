@@ -26,6 +26,7 @@ pub mod slider;
 mod solve_ui;
 mod solver_editor;
 mod solver_menu;
+mod popup_keyboard;
 mod app_settings;
 mod run_output;
 mod run_results;

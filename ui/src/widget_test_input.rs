@@ -9,6 +9,45 @@ use bevy::{
     prelude::*,
 };
 
+pub(crate) fn enable_keyboard(app: &mut App) {
+    app.add_message::<bevy::input::keyboard::KeyboardInput>()
+        .add_systems(
+            PreUpdate,
+            bevy::input_focus::dispatch_focused_input::<bevy::input::keyboard::KeyboardInput>,
+        );
+    app.world_mut().spawn(bevy::window::PrimaryWindow);
+}
+
+pub(crate) fn key(app: &mut App, key_code: KeyCode) {
+    use bevy::input::{
+        ButtonState,
+        keyboard::{Key, KeyboardInput},
+    };
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+        .single(app.world())
+        .unwrap();
+    let logical_key = match key_code {
+        KeyCode::Escape => Key::Escape,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::ArrowUp => Key::ArrowUp,
+        KeyCode::ArrowDown => Key::ArrowDown,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        _ => panic!("unsupported test key"),
+    };
+    app.world_mut().write_message(KeyboardInput {
+        key_code,
+        logical_key,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    });
+    app.update();
+}
+
 fn location() -> Location {
     Location {
         target: NormalizedRenderTarget::None {

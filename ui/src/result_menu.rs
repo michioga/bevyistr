@@ -57,6 +57,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn result_popup_keyboard_navigation_selects_and_escape_preserves_field() {
+        let mut app = App::new();
+        app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
+            .init_resource::<FemResultSet>().init_resource::<VisualizationSettings>()
+            .init_resource::<crate::results_ui::PlaybackState>().init_resource::<InputFocus>()
+            .insert_resource(SidebarPage::Results)
+            .add_systems(Startup, |mut commands: Commands| { commands.spawn(Node::default()).with_children(spawn); })
+            .add_systems(Update, sync);
+        crate::widget_test_input::enable_keyboard(&mut app);
+        app.world_mut().resource_mut::<FemResultSet>().by_mesh = vec![vec![fem_core::StepResult {
+            fields: ["First", "Second"].map(|name| ResultField::NodeScalar {
+                name: name.into(), values: vec![1.0], min: 1.0, max: 1.0,
+            }).to_vec(), ..default()
+        }]];
+        app.update();
+        let button = app.world_mut().query_filtered::<Entity, With<FieldButton>>().single(app.world()).unwrap();
+        crate::widget_test_input::click(app.world_mut(), button); app.update();
+        let popup = app.world_mut().query_filtered::<Entity, With<FieldPopup>>().single(app.world()).unwrap();
+        crate::widget_test_input::key(&mut app, KeyCode::End);
+        let last = app.world().resource::<InputFocus>().get().unwrap();
+        assert_eq!(app.world().get::<Choice>(last).unwrap().name, "Second");
+        crate::widget_test_input::key(&mut app, KeyCode::Home);
+        let first = app.world().resource::<InputFocus>().get().unwrap();
+        assert_eq!(app.world().get::<Choice>(first).unwrap().name, "First");
+        crate::widget_test_input::key(&mut app, KeyCode::ArrowDown);
+        let focused = app.world().resource::<InputFocus>().get().unwrap();
+        assert_eq!(app.world().get::<Choice>(focused).unwrap().name, "Second");
+        crate::widget_test_input::key(&mut app, KeyCode::Enter);
+        assert!(app.world().get_entity(popup).is_err());
+        assert_eq!(app.world().resource::<VisualizationSettings>().contour.as_ref().unwrap().field_name, "Second");
+        crate::widget_test_input::click(app.world_mut(), button); app.update();
+        let popup = app.world_mut().query_filtered::<Entity, With<FieldPopup>>().single(app.world()).unwrap();
+        crate::widget_test_input::key(&mut app, KeyCode::Escape);
+        assert!(app.world().get_entity(popup).is_err());
+        assert_eq!(app.world().resource::<VisualizationSettings>().contour.as_ref().unwrap().field_name, "Second");
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(button));
+    }
+
+    #[test]
     fn popup_lists_loaded_fields_and_activation_changes_only_the_color_field() {
         let mut app = App::new();
         app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin));
@@ -486,6 +525,7 @@ fn menu_event(
                                 BackgroundColor(Color::srgb(0.1, 0.14, 0.17)),
                             ))
                             .observe(choose_field)
+                            .observe(crate::popup_keyboard::handle)
                             .with_child(text(label));
                     }
                 });
@@ -568,7 +608,7 @@ fn sync(
     field_buttons: Query<Entity, With<FieldButton>>,
     popups: Query<Entity, With<FieldPopup>>,
     mut scale_sections: Query<&mut Node, With<DeformationScaleSection>>,
-    mut items: Query<(&Choice, &Hovered, &mut BackgroundColor)>,
+    mut items: Query<(Entity, &Choice, &Hovered, &mut BackgroundColor)>,
     mut focus: ResMut<InputFocus>,
     menu_focus: Query<(), Or<(With<FieldButton>, With<Choice>)>>,
     mut field_count: Local<usize>,
@@ -664,12 +704,14 @@ fn sync(
             Display::None
         };
     }
-    for (choice, hovered, mut color) in &mut items {
+    for (entity, choice, hovered, mut color) in &mut items {
         let selected = results
             .active
             .as_ref()
             .is_some_and(|a| a.field_name == choice.name);
-        color.set_if_neq(BackgroundColor(if selected {
+        color.set_if_neq(BackgroundColor(if focus.get() == Some(entity) {
+            Color::srgb(0.22, 0.40, 0.47)
+        } else if selected {
             Color::srgb(0.16, 0.43, 0.51)
         } else if hovered.get() {
             Color::srgb(0.22, 0.28, 0.32)

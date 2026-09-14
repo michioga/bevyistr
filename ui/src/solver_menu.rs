@@ -1,10 +1,9 @@
 //! Discrete solver choices: click to commit, native menu dismissal to cancel.
 use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
-use bevy::input::{ButtonState, keyboard::KeyboardInput};
 use bevy::{
     input_focus::{
-        FocusCause, FocusedInput, InputFocus,
-        tab_navigation::{NavAction, TabIndex, TabNavigation},
+        FocusCause, InputFocus,
+        tab_navigation::{NavAction, TabIndex},
     },
     picking::{Pickable, hover::Hovered},
     prelude::*,
@@ -251,7 +250,7 @@ fn menu_event(
                                 BackgroundColor(Color::srgb(0.10, 0.14, 0.17)),
                             ))
                             .observe(choose)
-                            .observe(menu_keyboard)
+                            .observe(crate::popup_keyboard::handle)
                             .with_child(text(format!(
                                 "{} {}\n{}",
                                 if choice.selected(&setup.solver) {
@@ -265,52 +264,6 @@ fn menu_event(
                     }
                 });
         }
-    }
-}
-
-// Native MenuPlugin handles Enter at the item. Handle Escape/arrows on the
-// same item rather than relying on keyboard traversal to its popup ancestor.
-fn menu_keyboard(
-    mut event: On<FocusedInput<KeyboardInput>>,
-    parents: Query<&ChildOf>,
-    popups: Query<(), With<Popup>>,
-    navigation: TabNavigation,
-    mut focus: ResMut<InputFocus>,
-    mut commands: Commands,
-) {
-    if event.input.repeat || event.input.state != ButtonState::Pressed {
-        return;
-    }
-    if !parents
-        .iter_ancestors(event.original_event_target())
-        .any(|e| popups.contains(e))
-    {
-        return;
-    }
-    match event.input.key_code {
-        KeyCode::Escape => {
-            event.propagate(false);
-            commands.trigger(MenuEvent {
-                source: event.focused_entity,
-                action: MenuAction::FocusRoot,
-            });
-            commands.trigger(MenuEvent {
-                source: event.focused_entity,
-                action: MenuAction::CloseAll,
-            });
-        }
-        KeyCode::ArrowUp | KeyCode::ArrowDown => {
-            event.propagate(false);
-            let action = if event.input.key_code == KeyCode::ArrowUp {
-                NavAction::Previous
-            } else {
-                NavAction::Next
-            };
-            if let Ok(next) = navigation.navigate(&focus, action) {
-                focus.set(next, FocusCause::Navigated);
-            }
-        }
-        _ => {}
     }
 }
 
