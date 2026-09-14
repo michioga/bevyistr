@@ -2646,22 +2646,9 @@ pub(crate) fn build_contour_surface_mesh(
             continue;
         };
 
-        let points: Vec<Vec3> = node_indices_in_mesh
-            .iter()
-            .filter_map(|&idx| fem_mesh.nodes.get(idx))
-            .map(|node| {
-                if let (Some(disp), true) = (&disp_field, settings.show_deformation) {
-                    if let fem_core::ResultField::NodeVector { values, .. } = disp {
-                        if let Some(&disp_vec) =
-                            values.get(*node_index_map.get(&node.id).unwrap_or(&usize::MAX))
-                        {
-                            return node.position + disp_vec * settings.deformation_scale;
-                        }
-                    }
-                }
-                node.position
-            })
-            .collect();
+        let points: Vec<Vec3> = node_indices_in_mesh.iter().map(|&index| {
+            crate::result_probe::deformed_position(fem_mesh.nodes[index].position, index, disp_field, settings.deformation_scale)
+        }).collect();
 
         if points.len() < 3 {
             continue;

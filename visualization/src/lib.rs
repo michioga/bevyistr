@@ -1,6 +1,7 @@
 mod boundary_viz;
 mod colorbar;
 mod contour;
+pub mod result_probe;
 mod demo_mesh;
 mod material_colors;
 pub use material_colors::{

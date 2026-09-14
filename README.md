@@ -126,6 +126,7 @@ Settings are loaded at startup. To edit the file manually, close bevyistr, edit 
 - Display native FrontISTR element scalars on their boundary faces without nodal averaging, including MPI owner-based assembly mapping.
 - Toggle **Deformation: ON/OFF** independently of the contour field; the displacement scale is preserved when switching fields or disabling deformation.
 - Move through result steps manually or animate them with playback and speed controls.
+- Pause playback and hover a result surface to inspect the selected contour field, part/element IDs and step/time. Nodal fields report the nearest vertex of the hit display triangle (with a node marker), not an interpolated cursor value; element fields report stored values without averaging. Probing follows displayed deformation without scaling result values. Missing values are unavailable, and units remain those of the result/model. Surface probes are hidden during playback, dragging and UI interaction; line-only elements are not supported.
 
 This post-processing UI focuses on convenient inspection. ParaView remains the recommended tool for detailed result analysis.
 
@@ -304,7 +305,7 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 - Open Results runs file parsing in the background. VTU/single-piece PVTU supplies its own geometry; RES suggests a nearby MSH/project and asks for confirmation, or lets you choose a matching MSH. Manually opened results have independent read-only geometry: switching to Model returns to the unchanged editable model.
 - Manual RES opening targets a single mesh or flattened assembly. Complete native MPI results are supported through the Solve handoff, not by opening one rank file. Multi-piece PVTU ghost/partition handling remains planned.
 - VTK XML support is limited to inline ASCII point/cell data and supported cell types, with fixed geometry across a sequence. Single-piece PVTU only.
-- Planned post-processing conveniences include richer result-field selection, hover probes, selected-node history graphs, and interactive clipping. Detailed visualization will continue to rely on ParaView.
+- Planned post-processing conveniences include selected-node history graphs and interactive clipping. Detailed visualization will continue to rely on ParaView.
 
 The long-term goal is to make the full FrontISTR workflow accessible without returning to a dialog-heavy pre/post interface, while preserving explicit numeric confirmation and valid solver input.
 

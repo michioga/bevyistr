@@ -347,7 +347,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         });
     parent.spawn((text("Contour: no result"), FieldLabel::Current));
     parent.spawn(text(
-        "Choose the color field above. Deformation below changes shape independently.",
+        "Choose the color field above. Hover the model for values (pause playback first). Deformation changes shape independently.",
     ));
     parent
         .spawn((
