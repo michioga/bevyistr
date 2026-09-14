@@ -25,6 +25,8 @@ mod selection_ui;
 pub mod slider;
 mod solve_ui;
 mod solver_editor;
+mod solver_menu;
+mod popup_keyboard;
 mod app_settings;
 mod run_output;
 mod run_results;
@@ -128,9 +130,7 @@ use selection_ui::{
     update_hover_preview_group, update_selection_context, update_selection_info_text,
     update_selection_operation_hint, update_selection_stats_text, update_surface_selection_hint,
 };
-use solve_ui::{
-    analysis_type_button_system, solver_method_button_system, update_analysis_setup_stats_text,
-};
+use solve_ui::update_analysis_setup_stats_text;
 use solver_editor::{SolverEditorState, solver_numeric_input_system};
 use app_settings::{AppSettings, save_settings_system, update_settings_text_system};
 use solver_runner::{
@@ -154,6 +154,7 @@ impl Plugin for UiPlugin {
         result_menu::register(app);
         result_probe_ui::register(app);
         output_ui::register(app);
+        solver_menu::register(app);
         app.init_gizmo_group::<AssemblyClearanceGizmos>();
         {
             let mut configs = app.world_mut().resource_mut::<GizmoConfigStore>();
@@ -456,8 +457,6 @@ impl Plugin for UiPlugin {
                 section_type_button_system,
                 egrp_select_button_system,
                 add_section_button_system.after(egrp_select_button_system),
-                analysis_type_button_system,
-                solver_method_button_system,
             ),
         );
         app.add_systems(
@@ -473,9 +472,7 @@ impl Plugin for UiPlugin {
                     .after(openmp_thread_adjust_button_system)
                     .after(select_frontistr_executable_system)
                     .after(export_button_system)
-                    .after(solver_numeric_input_system)
-                    .after(analysis_type_button_system)
-                    .after(solver_method_button_system),
+                    .after(solver_numeric_input_system),
                 stop_frontistr_button_system,
                 poll_frontistr_process_system
                     .after(run_frontistr_button_system)

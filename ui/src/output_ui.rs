@@ -34,6 +34,8 @@ struct Choice {
 }
 #[derive(Component)]
 struct Apply(Entity);
+#[derive(Component)]
+struct OutputItem;
 
 fn text(value: impl Into<String>) -> impl Bundle {
     (
@@ -189,17 +191,17 @@ fn menu_event(
                 if editable {
                     p.spawn(text("Default = solver default, not OFF. Available fields depend on analysis / elements."));
                     // Apply at the top stays reachable without scrolling through the list.
-                    p.spawn((MenuItem, Apply(popup), Hovered::default(), TabIndex(0),
+                    p.spawn((MenuItem, OutputItem, Apply(popup), Hovered::default(), TabIndex(0),
                         Node { min_height: px(28), flex_shrink: 0.0, padding: UiRect::all(px(5)), ..default() },
                         BackgroundColor(Color::srgb(0.12, 0.35, 0.23))))
-                        .observe(apply).with_child(text("Apply output fields"));
+                        .observe(apply).observe(crate::popup_keyboard::handle).with_child(text("Apply output fields"));
                     for &(keyword, label) in OUTPUT_QUANTITIES {
                         p.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center,
                             min_height: px(34), flex_shrink: 0.0, column_gap: px(3), ..default() })
                             .with_children(|row| {
                                 row.spawn((text(format!("{keyword}\n{label}")), Node { flex_grow: 1.0, flex_basis: px(180), ..default() }));
                                 for (value, label) in [(None, "Default"), (Some(true), "ON"), (Some(false), "OFF")] {
-                                    let mut button = row.spawn((MenuItem, Choice { keyword, value, popup },
+                                    let mut button = row.spawn((MenuItem, OutputItem, Choice { keyword, value, popup },
                                         Hovered::default(), TabIndex(0),
                                         Node { width: px(if value.is_none() { 52 } else { 34 }), min_height: px(27),
                                             flex_shrink: 0.0, padding: UiRect::all(px(4)), ..default() },
@@ -208,7 +210,7 @@ fn menu_event(
                                     if matches!(keyword, "DISP" | "NMISES") && value == Some(false) {
                                         button.insert(InteractionDisabled);
                                     }
-                                    button.observe(choose).with_child(text(label));
+                                    button.observe(choose).observe(crate::popup_keyboard::handle).with_child(text(label));
                                 }
                             });
                     }
@@ -217,8 +219,10 @@ fn menu_event(
                     for card in &control.cards {
                         p.spawn(text(format!("{}\n{}", card.header, card.lines.join("\n"))));
                     }
-                    p.spawn((MenuItem, TabIndex(0), Hovered::default(),
+                    p.spawn((MenuItem, OutputItem, TabIndex(0), Hovered::default(),
+                        BackgroundColor(Color::srgb(0.12, 0.35, 0.23)),
                         Node { min_height: px(28), flex_shrink: 0.0, ..default() }))
+                        .observe(crate::popup_keyboard::handle)
                         .with_child(text("Close (unchanged)"));
                 }
             });
@@ -270,10 +274,19 @@ fn sync(
     mut commands: Commands,
     drafts: Query<(Entity, &Draft)>,
     mut labels: Query<(&OutputLabel, &mut Text)>,
-    mut choices: Query<(&Choice, &Hovered, &mut BackgroundColor)>,
+    mut choices: Query<(Entity, Option<&Choice>, &Hovered, &mut BackgroundColor), With<OutputItem>>,
+    mut focus: ResMut<InputFocus>,
+    parents: Query<&ChildOf>,
+    menus: Query<(), With<OutputMenu>>,
 ) {
+    if *page != SidebarPage::Solve && focus.get().is_some_and(|e| parents.iter_ancestors(e).any(|p| menus.contains(p))) {
+        focus.clear();
+    }
     for (entity, draft) in &drafts {
         if *page != SidebarPage::Solve || setup.output != draft.original {
+            if focus.get().is_some_and(|e| e == entity || parents.iter_ancestors(e).any(|p| p == entity)) {
+                focus.clear();
+            }
             commands.entity(entity).despawn();
         }
     }
@@ -291,14 +304,18 @@ fn sync(
         };
         text.0 = format!("{}: {summary}  v", label.0.label());
     }
-    for (choice, hovered, mut background) in &mut choices {
-        let selected = drafts
+    for (entity, choice, hovered, mut background) in &mut choices {
+        let selected = choice.is_some_and(|choice| drafts
             .get(choice.popup)
-            .is_ok_and(|(_, d)| d.control.value(choice.keyword) == choice.value);
-        background.set_if_neq(BackgroundColor(if selected {
+            .is_ok_and(|(_, d)| d.control.value(choice.keyword) == choice.value));
+        background.set_if_neq(BackgroundColor(if focus.get() == Some(entity) {
+            Color::srgb(0.22, 0.40, 0.47)
+        } else if selected {
             Color::srgb(0.16, 0.43, 0.51)
         } else if hovered.get() {
             Color::srgb(0.22, 0.28, 0.32)
+        } else if choice.is_none() {
+            Color::srgb(0.12, 0.35, 0.23)
         } else {
             Color::srgb(0.1, 0.14, 0.17)
         }));
@@ -308,6 +325,45 @@ fn sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_popup_keyboard_edits_stay_draft_and_escape_cancels() {
+        let mut app = App::new();
+        app.init_resource::<AnalysisSetup>().init_resource::<InputFocus>()
+            .insert_resource(SidebarPage::Solve)
+            .add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
+            .add_systems(Startup, |mut commands: Commands| { commands.spawn(Node::default()).with_children(spawn); })
+            .add_systems(Update, sync);
+        crate::widget_test_input::enable_keyboard(&mut app);
+        app.update();
+        let root = app.world_mut().query::<(Entity, &OutputMenu)>().iter(app.world())
+            .find(|(_, m)| m.0 == OutputTarget::Res).unwrap().0;
+        let button = app.world().get::<Children>(root).unwrap()[0];
+        crate::widget_test_input::click(app.world_mut(), button); app.update();
+        let popup = app.world_mut().query_filtered::<Entity, With<Draft>>().single(app.world()).unwrap();
+        let choice = app.world_mut().query::<(Entity, &Choice)>().iter(app.world())
+            .find(|(_, c)| c.keyword == "REACTION" && c.value == Some(true)).unwrap().0;
+        app.world_mut().resource_mut::<InputFocus>().set(choice, FocusCause::Navigated);
+        crate::widget_test_input::key(&mut app, KeyCode::Enter);
+        assert_eq!(app.world().get::<Draft>(popup).unwrap().control.value("REACTION"), Some(true));
+        assert_eq!(app.world().resource::<AnalysisSetup>().output.res.value("REACTION"), None);
+        crate::widget_test_input::key(&mut app, KeyCode::Escape);
+        assert!(app.world().get_entity(popup).is_err(), "Escape must not be suppressed as a multi-select click");
+        assert_eq!(app.world().resource::<AnalysisSetup>().output.res.value("REACTION"), None);
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(button));
+        // Reopen, edit, Home returns to Apply; Enter commits only then.
+        crate::widget_test_input::click(app.world_mut(), button); app.update();
+        let choice = app.world_mut().query::<(Entity, &Choice)>().iter(app.world())
+            .find(|(_, c)| c.keyword == "REACTION" && c.value == Some(true)).unwrap().0;
+        app.world_mut().resource_mut::<InputFocus>().set(choice, FocusCause::Navigated);
+        crate::widget_test_input::key(&mut app, KeyCode::Enter);
+        crate::widget_test_input::key(&mut app, KeyCode::Home);
+        let focused = app.world().resource::<InputFocus>().get().unwrap();
+        assert!(app.world().get::<Apply>(focused).is_some());
+        crate::widget_test_input::key(&mut app, KeyCode::Enter);
+        assert_eq!(app.world().resource::<AnalysisSetup>().output.res.value("REACTION"), Some(true));
+        assert_eq!(app.world_mut().query_filtered::<Entity, With<Draft>>().iter(app.world()).count(), 0);
+    }
 
     #[test]
     fn output_popup_opens_and_applies_through_pointer_events() {
@@ -522,6 +578,7 @@ mod tests {
     fn sync_initializes_and_discards_stale_drafts() {
         let mut app = App::new();
         app.init_resource::<AnalysisSetup>()
+            .init_resource::<InputFocus>()
             .insert_resource(SidebarPage::Solve)
             .add_systems(Update, sync);
         let original = OutputSettings::default();

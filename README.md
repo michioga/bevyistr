@@ -65,8 +65,11 @@ The in-application Selection guide shows the active controls and can be collapse
 ### Solve setup and export
 
 - Load a standalone FrontISTR `.cnt` file into the current mesh.
-- Select Static, Nonlinear static, Dynamic, or Eigenvalue analysis.
-- Select MUMPS, CG, GMRES, or Direct as the linear solver method; MUMPS is presented first in the UI.
+- Open **Analysis type: ...** on Solve to choose Static, Nonlinear static, Dynamic, or Eigenvalue analysis.
+- Open **Linear solver: ...** to choose MUMPS, CG, GMRES, or Direct. MUMPS is listed first; opening the menu does not replace the current setting or change the default.
+- Both popups show the selected item with `[x]` and the corresponding CNT keyword. Click an item (or navigate with arrow keys and press Enter) to apply it; Esc or focus loss closes the menu unchanged. Ctrl+Z / Ctrl+Y undo / redo a selection. Numeric settings remain unchanged when selecting an analysis type or solver. Project loads and Undo refresh the visible current values.
+- Result-field, output-field, analysis-type and solver popups share keyboard controls: Up/Down moves focus, Home/End goes to the first/last available item, Enter activates, and Esc cancels. Focus is highlighted and navigation scrolls the popup to keep the focused item visible. In output-field menus, Enter on a quantity changes only the draft; Home then Enter activates **Apply output fields**, while Esc discards the draft.
+- The linear solver method **Direct** is separate from the execution mode **Direct / MPI** below: choosing a method does not change the process or thread count.
 - Enter substeps, maximum iterations, and convergence tolerance exactly.
 - Validate references before exporting `hecmw_ctrl.dat`, `<name>.msh`, and `<name>.cnt`.
 - Flatten multi-part assemblies while consistently remapping IDs, groups, setup data, contacts, and MPC equations.
