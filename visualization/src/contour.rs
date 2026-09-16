@@ -59,13 +59,14 @@ pub(crate) fn update_contour_surface(
     version: Res<FemModelVersion>,
     results: Res<FemResultSet>,
     settings: Res<VisualizationSettings>,
+    range_mode: Option<Res<crate::ContourRangeMode>>,
     mut surface: ResMut<ContourSurface>,
     mut last_contour: Local<Option<ContourSettings>>,
     mut last_version: Local<Option<u64>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let rebuild = *last_version != Some(version.value)
+    let rebuild = range_mode.as_ref().is_some_and(|r| r.is_changed()) || *last_version != Some(version.value)
         || *last_contour != settings.contour
         || results.is_changed()
         || geometry.as_ref().is_some_and(|g| g.is_changed());
@@ -79,6 +80,7 @@ pub(crate) fn update_contour_surface(
             .and_then(|g| g.model.as_ref())
             .or(model.as_deref());
         if let (true, Some(contour), Some(model)) = (visible, &settings.contour, model) {
+            let range = crate::contour_range::resolve(&results, range_mode.as_deref().copied().unwrap_or_default());
             for (mesh_index, mesh) in model.meshes.iter().enumerate() {
                 let Some(step) = results
                     .by_mesh
@@ -87,7 +89,10 @@ pub(crate) fn update_contour_surface(
                 else {
                     continue;
                 };
-                let Some(built) = build_contour_surface_mesh(mesh, step, contour) else {
+                if let (Some(selected), Some(field)) = (results.active_field(), step.field_by_name(&contour.field_name)) {
+                    if !crate::contour_range::same_kind(selected, field) { continue; }
+                }
+                let Some(built) = build_contour_surface_mesh(mesh, step, contour, range) else {
                     continue;
                 };
                 let Some(edges) = build_contour_edge_mesh(mesh, step, contour) else {
@@ -262,9 +267,9 @@ mod tests {
             mesh_index: 0, step_index: 0, field_name: "Nodal stress".into(),
             show_deformation: true, displacement_field: "Displacement".into(), deformation_scale: 3.0,
         };
-        let before = build_contour_surface_mesh(&model, &step, &settings).unwrap();
+        let before = build_contour_surface_mesh(&model, &step, &settings, None).unwrap();
         settings.field_name = "Custom element field".into();
-        let after = build_contour_surface_mesh(&model, &step, &settings).unwrap();
+        let after = build_contour_surface_mesh(&model, &step, &settings, None).unwrap();
         let Some(VertexAttributeValues::Float32x3(before_positions)) = before.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions missing"); };
         let Some(VertexAttributeValues::Float32x3(after_positions)) = after.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions missing"); };
         assert_eq!(before_positions, after_positions);
@@ -299,7 +304,7 @@ mod tests {
             for enabled in [true, false] {
                 settings.show_deformation = enabled;
                 let edges = build_contour_edge_mesh(&mesh, &step, &settings).unwrap();
-                let surface = build_contour_surface_mesh(&mesh, &step, &settings).unwrap();
+                let surface = build_contour_surface_mesh(&mesh, &step, &settings, None).unwrap();
                 let Some(bevy::mesh::VertexAttributeValues::Float32x3(edge_points)) =
                     edges.attribute(Mesh::ATTRIBUTE_POSITION)
                 else {

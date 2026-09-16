@@ -5,6 +5,7 @@ use crate::{
     slider::{SliderId, SliderState, SliderTrack},
 };
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 use fem_core::{FemModel, FemResultSet, ResultGeometry};
 use std::{
     path::{Path, PathBuf},
@@ -16,6 +17,24 @@ pub(crate) struct ResultOpenState {
     pending: Option<Mutex<mpsc::Receiver<Result<hecmw::vtk_scene::ResultScene, String>>>>,
     path: PathBuf,
     pub status: String,
+}
+
+#[derive(Component)]
+pub(crate) struct OpenResultRequested;
+
+/// Legacy UI Interaction can report Pressed on a control exposed by a closing
+/// popup. Only the picking widget's completed click/keyboard activation may
+/// request a dialog; menu items are not descendants of this button.
+pub(crate) fn request_result_open(
+    event: On<Activate>,
+    buttons: Query<(), With<OpenResultButton>>,
+    page: Res<SidebarPage>,
+    state: Res<ResultOpenState>,
+    mut commands: Commands,
+) {
+    if *page == SidebarPage::Results && state.pending.is_none() && buttons.contains(event.entity) {
+        commands.entity(event.entity).insert(OpenResultRequested);
+    }
 }
 
 fn candidate_mesh(path: &Path) -> Option<PathBuf> {
@@ -77,14 +96,24 @@ fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<GeometryInput> {
 }
 
 pub(crate) fn open_result_button_system(
-    mut buttons: Query<(Ref<Interaction>, &mut BackgroundColor), With<OpenResultButton>>,
+    mut buttons: Query<
+        (
+            Entity,
+            &Interaction,
+            &mut BackgroundColor,
+            Has<OpenResultRequested>,
+        ),
+        With<OpenResultButton>,
+    >,
+    mut commands: Commands,
+    page: Res<SidebarPage>,
     model: Option<Res<FemModel>>,
     mut state: ResMut<ResultOpenState>,
     mut error: ResMut<ResultLoadError>,
     mut playback: ResMut<PlaybackState>,
     mut run_results: ResMut<crate::solve_results_ui::SolveResultsState>,
 ) {
-    for (interaction, mut background) in &mut buttons {
+    for (entity, interaction, mut background, requested) in &mut buttons {
         *background = BackgroundColor(if state.pending.is_some() {
             Color::srgb(0.13, 0.15, 0.16)
         } else if *interaction == Interaction::None {
@@ -92,10 +121,11 @@ pub(crate) fn open_result_button_system(
         } else {
             Color::srgb(0.18, 0.45, 0.55)
         });
-        if *interaction != Interaction::Pressed
-            || !interaction.is_changed()
-            || state.pending.is_some()
-        {
+        if !requested {
+            continue;
+        }
+        commands.entity(entity).remove::<OpenResultRequested>();
+        if state.pending.is_some() || *page != SidebarPage::Results {
             continue;
         }
         let Some(path) = rfd::FileDialog::new()
@@ -226,6 +256,7 @@ pub(crate) fn poll_result_open(
             deformation_scale: 1.,
         });
     }
+    let piece_count = scene.model.meshes.len();
     geometry.model = Some(scene.model);
     geometry.visible = true;
     *page = SidebarPage::Results;
@@ -247,6 +278,9 @@ pub(crate) fn poll_result_open(
         "{} | {count} frames\nResult geometry only; Model returns to your editable model.",
         state.path.file_name().unwrap_or_default().to_string_lossy()
     );
+    if piece_count > 1 {
+        state.status.push_str(&format!("\n{piece_count} VTK pieces | local IDs; common color range.\nPartitions are not welded. Unmarked overlaps / internal boundaries remain."));
+    }
 }
 
 pub(crate) fn sync_result_page(
@@ -272,12 +306,18 @@ mod tests {
     use super::*;
     #[test]
     fn opening_is_transactional_and_model_page_preserves_pre_geometry() {
+        for piece_count in [1, 2] {
+            check_transactional_open(piece_count);
+        }
+    }
+
+    fn check_transactional_open(piece_count: usize) {
         let mut app = App::new();
         let pre = FemModel::demo_hex8();
         let mut result_mesh = fem_core::FemMesh::demo_hex8();
         result_mesh.nodes[0].position.x = 10.;
         let (tx, rx) = mpsc::channel();
-        tx.send(Ok(hecmw::vtk_scene::ResultScene {
+        let mut scene = hecmw::vtk_scene::ResultScene {
             model: FemModel::single_mesh("Result", result_mesh),
             steps: vec![vec![fem_core::StepResult {
                 step: 5,
@@ -289,8 +329,14 @@ mod tests {
                     max: 1.,
                 }],
             }]],
-        }))
-        .unwrap();
+        };
+        if piece_count == 2 {
+            scene
+                .model
+                .add_mesh("Second piece", fem_core::FemMesh::demo_hex8());
+            scene.steps.push(scene.steps[0].clone());
+        }
+        tx.send(Ok(scene)).unwrap();
         app.insert_resource(pre.clone())
             .insert_resource(ResultOpenState {
                 pending: Some(Mutex::new(rx)),
@@ -306,6 +352,27 @@ mod tests {
             .insert_resource(SidebarPage::Model)
             .add_systems(Update, (poll_result_open, sync_result_page).chain());
         app.update();
+        assert_eq!(
+            app.world().resource::<FemResultSet>().by_mesh.len(),
+            piece_count
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ResultGeometry>()
+                .model
+                .as_ref()
+                .unwrap()
+                .meshes
+                .len(),
+            piece_count
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ResultOpenState>()
+                .status
+                .contains("not welded"),
+            piece_count > 1
+        );
         assert_eq!(
             app.world().resource::<FemModel>().meshes[0].nodes,
             pre.meshes[0].nodes

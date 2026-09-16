@@ -45,7 +45,7 @@ pub(crate) fn read_piece(path: &Path) -> Result<String, VtuError> {
             .collect();
         if pieces.len() != 1 {
             return Err(VtuError::UnsupportedFormat(
-                "Multi-piece PVTU requires global node mapping. Use native .res results through the Solve result handoff, or inspect this PVTU in ParaView.".into()));
+                "Multi-piece PVTU cannot be mapped onto the supplied pre-mesh without global node mapping. Use Results > Open Results to open its own partition geometry, or use native .res through the Solve handoff.".into()));
         }
         std::fs::read_to_string(path.parent().unwrap_or(Path::new(".")).join(pieces[0]))?
     } else {

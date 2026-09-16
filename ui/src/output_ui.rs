@@ -68,18 +68,13 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                     WidgetButton,
                     MenuButton,
                     TabIndex(0),
-                    Node {
-                        width: percent(100),
-                        min_height: px(28),
-                        padding: UiRect::all(px(5)),
-                        ..default()
-                    },
+                    crate::popup_trigger::node(),
+                    crate::popup_trigger::bundle(),
                     BackgroundColor(Color::srgb(0.14, 0.30, 0.37)),
                 ))
-                .with_child((
-                    text(format!("{} fields...", target.label())),
-                    OutputLabel(target),
-                ));
+                .with_children(|button| crate::popup_trigger::content(button,
+                    (text(format!("{} fields...", target.label())), OutputLabel(target)),
+                    "Click to edit output fields. Apply commits; Esc cancels."));
             });
     }
     parent.spawn(text(
@@ -264,7 +259,7 @@ fn apply(
 pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
-        sync.after(crate::layout::sidebar_page_button_system),
+        sync.after(crate::layout::sidebar_page_button_system).in_set(crate::popup_trigger::MenuSync),
     );
 }
 
@@ -302,7 +297,7 @@ fn sync(
         } else {
             "choose output fields"
         };
-        text.0 = format!("{}: {summary}  v", label.0.label());
+        text.0 = format!("{}: {summary}", label.0.label());
     }
     for (entity, choice, hovered, mut background) in &mut choices {
         let selected = choice.is_some_and(|choice| drafts

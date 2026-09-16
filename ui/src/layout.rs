@@ -379,10 +379,14 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             BackgroundColor(BUTTON_NORMAL),
                                             BorderColor::all(PANEL_BORDER),
                                             OpenResultButton,
+                                            bevy::ui_widgets::Button,
+                                            bevy::input_focus::tab_navigation::TabIndex(0),
                                             Name::new("OpenResultButton"),
                                         ))
+                                        .observe(crate::result_open::request_result_open)
                                         .with_child((
                                             Text::new("Open Results..."),
+                                            Pickable::IGNORE,
                                             TextFont {
                                                 font_size: FontSize::Px(12.0),
                                                 ..default()

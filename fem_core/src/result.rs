@@ -136,6 +136,18 @@ impl ResultField {
         }
     }
 
+    /// Returns the constant displayed scalar (or vector magnitude), if available.
+    pub fn constant_value(&self) -> Option<f32> {
+        let (min, max, available) = match self {
+            Self::NodeScalar { min, max, values, .. }
+            | Self::ElementScalar { min, max, values, .. } =>
+                (*min, *max, values.iter().any(|v| v.is_finite())),
+            Self::NodeVector { min_mag, max_mag, values, .. } =>
+                (*min_mag, *max_mag, values.iter().any(|v| v.length().is_finite())),
+        };
+        (available && min.is_finite() && min == max).then_some(min)
+    }
+
     /// Maps a value to a `[0, 1]` parameter for colormap lookup.
     ///
     /// Returns the midpoint (`0.5`) when the field's min == max.
@@ -284,4 +296,21 @@ pub fn rainbow_color(t: f32) -> LinearRgba {
     };
 
     LinearRgba::new(r, g, b, 1.0)
+}
+
+#[cfg(test)]
+mod constant_tests {
+    use super::*;
+    #[test]
+    fn only_finite_equal_ranges_with_available_values_are_constant() {
+        let scalar = |values, min, max| ResultField::NodeScalar { name: "P".into(), values, min, max };
+        assert_eq!(scalar(vec![0.], 0., 0.).constant_value(), Some(0.));
+        assert_eq!(scalar(vec![-2.], -2., -2.).constant_value(), Some(-2.));
+        assert_eq!(scalar(vec![0., 1e-15], 0., 1e-15).constant_value(), None);
+        assert_eq!(scalar(vec![f32::NAN], 0., 0.).constant_value(), None);
+        assert_eq!(scalar(vec![], 0., 0.).constant_value(), None);
+        assert_eq!(scalar(vec![1.], f32::NAN, f32::NAN).constant_value(), None);
+        assert_eq!(ResultField::NodeVector { name: "V".into(), values: vec![Vec3::X, Vec3::Y], min_mag: 1., max_mag: 1. }.constant_value(), Some(1.));
+        assert_eq!(ResultField::ElementScalar { name: "S".into(), values: vec![42.], min: 42., max: 42. }.constant_value(), Some(42.));
+    }
 }

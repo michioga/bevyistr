@@ -103,6 +103,9 @@ pub(crate) fn update_result_stats_text(
         let total_steps: usize = results.by_mesh.iter().map(|s| s.len()).sum();
         format!("Result: {total_steps} step(s) loaded")
     };
+    if let Some(value) = results.active_field().and_then(|field| field.constant_value()) {
+        text.push_str(&format!("\nConstant field: {value:.4e} (uniform color)"));
+    }
     if let Some(active) = &results.active {
         if let Some(steps) = results.by_mesh.get(active.mesh_index) {
             if let Some(step) = steps.get(active.step_index) {

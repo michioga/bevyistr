@@ -1,6 +1,8 @@
 mod boundary_viz;
 mod colorbar;
 mod contour;
+mod contour_range;
+pub use contour_range::ContourRangeMode;
 pub mod result_probe;
 mod demo_mesh;
 mod material_colors;
@@ -40,6 +42,7 @@ pub struct VisualizationPlugin;
 impl Plugin for VisualizationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<VisualizationSettings>();
+        app.init_resource::<ContourRangeMode>();
         app.init_resource::<MaterialColorMode>();
         app.init_resource::<ContourSurface>();
         app.init_resource::<ContactReviewSettings>();

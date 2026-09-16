@@ -2605,8 +2605,10 @@ pub(crate) fn build_contour_surface_mesh(
     fem_mesh: &FemMesh,
     step: &fem_core::StepResult,
     settings: &ContourSettings,
+    range: Option<(f32, f32)>,
 ) -> Option<Mesh> {
     let contour_field = step.field_by_name(&settings.field_name)?;
+    let range = range.or_else(|| crate::contour_range::bounds(contour_field))?;
     let valid = match contour_field {
         fem_core::ResultField::NodeScalar { values,.. } => values.len() == fem_mesh.nodes.len(),
         fem_core::ResultField::NodeVector { values,.. } => values.len() == fem_mesh.nodes.len(),
@@ -2633,9 +2635,9 @@ pub(crate) fn build_contour_surface_mesh(
     let mut colors: Vec<[f32; 4]> = Vec::new();
 
     for face in fem_mesh.cached_boundary_faces() {
-        let element_t = if let fem_core::ResultField::ElementScalar { values,min,max,.. } = contour_field {
+        let element_t = if let fem_core::ResultField::ElementScalar { values,.. } = contour_field {
             let Some(index) = face.element.and_then(|id|element_indices.get(&id)) else { continue; };
-            Some(if (max-min).abs() < 1e-12 { 0.5 } else { ((values[*index]-min)/(max-min)).clamp(0.0,1.0) })
+            Some(crate::contour_range::normalize(values[*index], range))
         } else { None };
         let Some(node_indices_in_mesh): Option<Vec<usize>> = face
             .nodes
@@ -2662,11 +2664,11 @@ pub(crate) fn build_contour_surface_mesh(
             .iter()
             .map(|&mesh_idx| {
                 let t = match contour_field {
-                    fem_core::ResultField::NodeScalar { .. } => {
-                        contour_field.normalize_node_scalar(mesh_idx)
+                    fem_core::ResultField::NodeScalar { values, .. } => {
+                        crate::contour_range::normalize(values[mesh_idx], range)
                     }
-                    fem_core::ResultField::NodeVector { .. } => {
-                        contour_field.normalize_node_vector_mag(mesh_idx)
+                    fem_core::ResultField::NodeVector { values, .. } => {
+                        crate::contour_range::normalize(values[mesh_idx].length(), range)
                     }
                     fem_core::ResultField::ElementScalar {..} => element_t.unwrap(),
                 };

@@ -17,6 +17,7 @@ mod project_io;
 mod results_ui;
 mod result_open;
 mod result_menu;
+mod result_range_ui;
 mod result_probe_ui;
 #[cfg(test)]
 mod widget_test_input;
@@ -27,6 +28,7 @@ mod solve_ui;
 mod solver_editor;
 mod solver_menu;
 mod popup_keyboard;
+mod popup_trigger;
 mod app_settings;
 mod run_output;
 mod run_results;
@@ -152,9 +154,11 @@ impl Plugin for UiPlugin {
             app.add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin);
         }
         result_menu::register(app);
+        result_range_ui::register(app);
         result_probe_ui::register(app);
         output_ui::register(app);
         solver_menu::register(app);
+        popup_trigger::register(app);
         app.init_gizmo_group::<AssemblyClearanceGizmos>();
         {
             let mut configs = app.world_mut().resource_mut::<GizmoConfigStore>();
