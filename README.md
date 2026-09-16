@@ -10,6 +10,12 @@ The project combines direct 3-D interaction with the numerical precision require
 
 bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, launch FrontISTR directly or through MPI, and inspect common result formats. It does **not** yet expose every FrontISTR keyword.
 
+## Manual (日本語)
+
+The [Japanese user manual](docs/src/introduction.md) is organized as an mdBook; see its [table of contents](docs/src/SUMMARY.md). It covers viewport operation, setup, execution, and result viewing, with current limitations kept explicit.
+
+Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. Pages deployment is manual from main; adding these files does not publish the site.
+
 ## Current capabilities
 
 ### Model import and assembly
@@ -120,7 +126,7 @@ Settings are loaded at startup. To edit the file manually, close bevyistr, edit 
   replaces results instead of appending duplicate steps. Changing the model or
   starting another run invalidates a pending handoff. Failed/stopped runs cannot
   use this button.
-- For the current opening workflow, limitations, and manual verification checklist, see the [Result viewing guide (日本語)](docs/results-guide.ja.md).
+- For the current opening workflow and limitations, see the [Results manual (日本語)](docs/src/results/index.md). The [manual verification checklist](docs/verification.md) is maintained separately.
 - Open FrontISTR ASCII `.res.0.N` series, CalculiX ASCII `.frd`, and inline ASCII VTK XML `.vtu`/`.pvtu` results.
 - Inline ASCII VTU opens its own coordinates/connectivity and nodal/cell scalar components, including stress and custom arrays, without a preloaded MSH. Single- and multi-piece PVTU are supported with fixed geometry/topology across sequences. Multi-piece results keep local IDs and values separate, with a common contour range per frame; coincident points are not welded or averaged. Explicit duplicate/hidden ghost cells are excluded, but unmarked overlaps and internal partition boundaries remain. Missing pieces or inconsistent fields reject the entire load without replacing the previous display. Missing unused nodes in native RES have no result (not zero) and do not affect contour ranges.
 - Open Result detects numbered `.pvtu`/`.vtu` and `.res.<rank>.<step>` sequences, including native files under sibling `STEP<number>` folders. FrontISTR piece VTUs resolve through their referencing PVTU; rank numbers are not animation frames. The requested step opens first, with frame count, output step and time shown in Results. Native results also tolerate omitted unused mesh nodes, while missing element-node results remain errors. Result edges follow deformation and animation; undeformed base edges/node markers are hidden until results are cleared.
@@ -241,7 +247,7 @@ priority; clearing a contour restores the current material colors.
 | Input | Abaqus/CalculiX `.inp` | Reads `*NODE`, `*ELEMENT`, `*NSET`, and `*ELSET`; unknown element types remain marked unsupported. |
 | Result | FrontISTR `.res.<rank>.<step>` | Native ASCII v1/v2.0 nodal and element data. Solve handoff joins MPI owners and assembly parts; manual Open Result loads a single-rank series. |
 | Result | CalculiX `.frd` | Reads nodal scalar/vector fields and derives vector magnitude or von Mises values where applicable. |
-| Result | VTK XML `.vtu` / `.pvtu` | Opens standalone geometry with inline ASCII point and cell fields; detects sequences. Single-piece PVTU only. Binary, base64, appended arrays, changing topology and unsupported cell types are rejected. |
+| Result | VTK XML `.vtu` / `.pvtu` | Opens standalone geometry with inline ASCII point and cell fields; detects sequences. Single- and multi-piece PVTU keep local IDs separate without welding unmarked overlaps. Binary, base64, appended arrays, changing topology and unsupported cell types are rejected. |
 | Output | FrontISTR project | Writes `hecmw_ctrl.dat`, HEC-MW `.msh`, and FrontISTR `.cnt`. |
 
 Gmsh conversion currently covers line, triangle, quadrilateral, tetrahedron, hexahedron, and prism families, including the supported quadratic variants. A `.geo` import requires the Gmsh executable to be available on `PATH`.
