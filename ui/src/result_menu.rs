@@ -451,9 +451,10 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         });
     parent.spawn((text("Contour: no result"), FieldLabel::Current));
     parent.spawn(text(
-        "Choose the color field above. Hover the model for values (pause playback first). Deformation changes shape independently.",
+        "Hover for values; click to pin a node/element (pause playback first). Deformation changes shape independently.",
     ));
     crate::result_range_ui::spawn(parent);
+    crate::result_probe_pin::spawn(parent);
     parent
         .spawn((
             Button,

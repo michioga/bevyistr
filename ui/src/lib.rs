@@ -19,6 +19,8 @@ mod result_open;
 mod result_menu;
 mod result_range_ui;
 mod result_probe_ui;
+mod result_probe_pin;
+mod playback_controls;
 #[cfg(test)]
 mod widget_test_input;
 mod output_ui;
@@ -551,7 +553,7 @@ impl Plugin for UiPlugin {
                     .after(contact_candidate_action_button_system)
                     .after(accept_contact_button_system)
                     .after(slider::update_sliders),
-                apply_slider_to_results.after(slider::update_sliders),
+                apply_slider_to_results.after(slider::update_sliders).after(playback_advance_system),
                 update_mesh_stats_text,
                 update_selection_stats_text,
                 update_contact_candidate_text,

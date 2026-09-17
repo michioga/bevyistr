@@ -8,8 +8,7 @@ use crate::measurement::MeasurementBoxState;
 use crate::mpc_ui::spawn_mpc_ui;
 use crate::project_io::spawn_model_file_ui;
 use crate::results_ui::{
-    OpenResultButton, PlaybackEndButton, PlaybackPlayPauseButton, PlaybackPlayPauseLabel,
-    PlaybackRewindButton, ResultSliderSection, ResultStatsText,
+    OpenResultButton, ResultSliderSection, ResultStatsText,
 };
 use crate::selection_ui::{
     DEFAULT_SMOOTH_ANGLE_DEG, SELECTION_GUIDE_TEXT, SelectionContextText, SelectionGuidePanel,
@@ -450,91 +449,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                     });
                                     hint_text(sliders, "Left / Right: step through results");
 
-                                    // ── Animation playback controls ──────────────────────
-                                    sliders
-                                        .spawn((Node {
-                                            flex_direction: FlexDirection::Row,
-                                            column_gap: px(4.0),
-                                            margin: UiRect::top(px(6.0)),
-                                            ..default()
-                                        },))
-                                        .with_children(|row| {
-                                            // ◀◀
-                                            row.spawn((
-                                                Button,
-                                                Node {
-                                                    width: px(36.0),
-                                                    height: px(28.0),
-                                                    justify_content: JustifyContent::Center,
-                                                    align_items: AlignItems::Center,
-                                                    border: UiRect::all(px(1.0)),
-                                                    border_radius: BorderRadius::all(px(5.0)),
-                                                    ..default()
-                                                },
-                                                BackgroundColor(BUTTON_NORMAL),
-                                                BorderColor::all(PANEL_BORDER),
-                                                PlaybackRewindButton,
-                                            ))
-                                            .with_child((
-                                                Text::new("|<"),
-                                                TextFont {
-                                                    font_size: FontSize::Px(10.0),
-                                                    ..default()
-                                                },
-                                                TextColor(TEXT_MAIN),
-                                            ));
-
-                                            // ▶ / ‖
-                                            row.spawn((
-                                                Button,
-                                                Node {
-                                                    flex_grow: 1.0,
-                                                    height: px(28.0),
-                                                    justify_content: JustifyContent::Center,
-                                                    align_items: AlignItems::Center,
-                                                    border: UiRect::all(px(1.0)),
-                                                    border_radius: BorderRadius::all(px(5.0)),
-                                                    ..default()
-                                                },
-                                                BackgroundColor(BUTTON_NORMAL),
-                                                BorderColor::all(PANEL_BORDER),
-                                                PlaybackPlayPauseButton,
-                                            ))
-                                            .with_child((
-                                                Text::new("Play"),
-                                                TextFont {
-                                                    font_size: FontSize::Px(11.0),
-                                                    ..default()
-                                                },
-                                                TextColor(TEXT_MAIN),
-                                                PlaybackPlayPauseLabel,
-                                            ));
-
-                                            // ▶▶
-                                            row.spawn((
-                                                Button,
-                                                Node {
-                                                    width: px(36.0),
-                                                    height: px(28.0),
-                                                    justify_content: JustifyContent::Center,
-                                                    align_items: AlignItems::Center,
-                                                    border: UiRect::all(px(1.0)),
-                                                    border_radius: BorderRadius::all(px(5.0)),
-                                                    ..default()
-                                                },
-                                                BackgroundColor(BUTTON_NORMAL),
-                                                BorderColor::all(PANEL_BORDER),
-                                                PlaybackEndButton,
-                                            ))
-                                            .with_child((
-                                                Text::new(">|"),
-                                                TextFont {
-                                                    font_size: FontSize::Px(10.0),
-                                                    ..default()
-                                                },
-                                                TextColor(TEXT_MAIN),
-                                            ));
-                                        });
+                                    crate::playback_controls::spawn(sliders);
 
                                     spawn_slider(
                                         sliders,
