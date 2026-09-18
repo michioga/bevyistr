@@ -9,8 +9,8 @@ use bevy::{
 use fem_core::{FemMesh, FemModel, FemResultSet, ResultField, ResultGeometry, UiPointerState};
 use visualization::{VisualizationSettings, result_probe::ProbeHit};
 
-#[derive(Clone, Copy, Debug)]
-enum Target {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Target {
     Node {
         index: usize,
         id: fem_core::NodeId,
@@ -37,7 +37,7 @@ impl Target {
         }
     }
 
-    fn value(self, field: Option<&ResultField>) -> Option<f32> {
+    pub(crate) fn value(self, field: Option<&ResultField>) -> Option<f32> {
         let value = match (self, field?) {
             (Self::Node { index, .. }, ResultField::NodeScalar { values, .. }) => {
                 *values.get(index)?
@@ -66,12 +66,29 @@ pub(crate) struct ProbePin {
     pub hovered: Option<(usize, ProbeHit)>,
     pinned: Option<(usize, Target)>,
     press: Option<Vec2>,
+    generation: u64,
 }
 
 impl ProbePin {
+    #[cfg(test)]
+    pub(crate) fn for_test(part: usize, target: Target) -> Self {
+        Self {
+            pinned: Some((part, target)),
+            ..default()
+        }
+    }
+
     pub fn clear(&mut self) {
+        if self.pinned.is_some() {
+            self.generation = self.generation.wrapping_add(1);
+        }
         self.pinned = None;
         self.press = None;
+    }
+
+    pub(crate) fn selection(&self) -> Option<(u64, usize, Target)> {
+        self.pinned
+            .map(|(part, target)| (self.generation, part, target))
     }
 
     fn click(
@@ -147,6 +164,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             },
             TextColor(Color::WHITE),
         ));
+    crate::probe_history::spawn(parent);
 }
 
 fn describe(
@@ -243,6 +261,19 @@ pub(crate) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clearing_and_repinning_the_same_id_invalidates_history_identity() {
+        let target = Target::Node {
+            index: 0,
+            id: fem_core::NodeId(1),
+        };
+        let mut pin = ProbePin::for_test(0, target);
+        let first = pin.selection();
+        pin.clear();
+        pin.pinned = Some((0, target));
+        assert_ne!(first, pin.selection());
+    }
+
     #[test]
     fn clear_button_uses_normal_widget_activation() {
         let mut app = App::new();

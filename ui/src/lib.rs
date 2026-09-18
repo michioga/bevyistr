@@ -20,6 +20,7 @@ mod result_menu;
 mod result_range_ui;
 mod result_probe_ui;
 mod result_probe_pin;
+mod probe_history;
 mod playback_controls;
 #[cfg(test)]
 mod widget_test_input;

@@ -27,6 +27,16 @@
 - 撮影中はカメラを固定し、切り替え操作の前後で少し間を空けてください。
 - 公開用配置予定: `src/assets/videos/results-color-range.mp4`
 
+## 3. 固定プローブの履歴（動作確認後）
+
+- 保存名: `results-probe-history.png`
+- 掲載先: [ホバープローブ・固定プローブ](src/results/probe.md)
+- データ: 円柱など、複数フレームで値が変わる公開可能な結果。
+- 操作: 停止中に表面をクリックして固定し、`>`で途中のフレームへ進めます。
+- 写してほしいもの: PINNED欄の部品・対象ID・物理量、HISTORYグラフの黄色い目印、モデル。
+- 保存先: `D:\Work\bevyistr\docs\media-inbox\results-probe-history.png`
+- 公開用配置予定: `src/assets/images/results-probe-history.png`
+
 ## 後で依頼する候補（今回は不要）
 
 - 左→右／右→左ドラッグによる選択の違い。
