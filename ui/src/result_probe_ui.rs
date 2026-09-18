@@ -23,10 +23,20 @@ struct ProbeCache {
 }
 
 pub(crate) fn register(app: &mut App) {
-    app.add_systems(Startup, spawn).add_systems(
-        PostUpdate,
-        update.after(bevy::transform::TransformSystems::Propagate),
-    );
+    app.init_resource::<crate::result_probe_pin::ProbePin>()
+        .init_resource::<Assets<Image>>()
+        .init_resource::<crate::probe_history::HistoryCache>()
+        .add_systems(Startup, spawn)
+        .add_systems(
+            PostUpdate,
+            (
+                update,
+                crate::result_probe_pin::update,
+                crate::probe_history::update,
+            )
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate),
+        );
 }
 
 fn spawn(mut commands: Commands) {
@@ -117,7 +127,15 @@ fn update(
     mut cache: Local<ProbeCache>,
     mut overlays: Query<(&Overlay, &mut Node)>,
     mut text: Query<&mut Text, With<ProbeText>>,
+    mut pin: ResMut<crate::result_probe_pin::ProbePin>,
 ) {
+    pin.hovered = None;
+    if geometry.is_changed()
+        || version.is_changed()
+        || model.as_ref().is_some_and(|m| m.is_changed())
+    {
+        pin.clear();
+    }
     for (_, mut node) in &mut overlays {
         node.display = Display::None;
     }
@@ -194,6 +212,7 @@ fn update(
     let Some((part, hit)) = best else {
         return;
     };
+    pin.hovered = Some((part, hit.clone()));
     let step = &results.by_mesh[part][contour.step_index];
     for mut text in &mut text {
         text.set_if_neq(Text::new(describe(part, step, &contour.field_name, &hit)));
@@ -364,5 +383,68 @@ mod tests {
             app.world().get::<Node>(tooltip).unwrap().display,
             Display::Flex
         );
+
+        // Real mouse press/release pins a sample; moving onto the timeline and
+        // starting playback must not lose its part-local identity.
+        app.world_mut()
+            .commands()
+            .spawn(Node::default())
+            .with_children(crate::result_probe_pin::spawn);
+        app.world_mut().flush();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        {
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            mouse.release(MouseButton::Left);
+        }
+        app.update();
+        let pinned_label = |app: &mut App| {
+            app.world_mut()
+                .query::<&Text>()
+                .iter(app.world())
+                .find(|t| t.0.starts_with("PINNED"))
+                .map(|t| t.0.clone())
+        };
+        assert!(pinned_label(&mut app).unwrap().contains("4.200000e1"));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.world_mut().resource_mut::<UiPointerState>().over_ui = true;
+        app.world_mut().resource_mut::<PlaybackState>().playing = true;
+        app.world_mut().resource_mut::<FemResultSet>().by_mesh[0].push(StepResult {
+            step: 1,
+            time: 0.25,
+            fields: vec![ResultField::ElementScalar {
+                name: "E".into(),
+                values: vec![84.],
+                min: 84.,
+                max: 84.,
+            }],
+        });
+        app.world_mut()
+            .resource_mut::<VisualizationSettings>()
+            .contour
+            .as_mut()
+            .unwrap()
+            .step_index = 1;
+        app.update();
+        let label = pinned_label(&mut app).unwrap();
+        assert!(label.contains("8.400000e1"));
+        assert!(label.contains("Step 1 | Time 2.500000e-1"));
+        app.world_mut()
+            .resource_mut::<VisualizationSettings>()
+            .contour
+            .as_mut()
+            .unwrap()
+            .field_name = "missing".into();
+        app.update();
+        assert!(pinned_label(&mut app).unwrap().contains("unavailable"));
+        // A newly loaded scene clears even a pin with IDs reused by that scene.
+        app.world_mut().resource_mut::<ResultGeometry>().model = Some(FemModel::demo_hex8());
+        app.update();
+        assert!(pinned_label(&mut app).is_none());
     }
 }

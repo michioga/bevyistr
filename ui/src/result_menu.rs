@@ -57,6 +57,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn changing_velocity_fields_never_requests_the_open_results_dialog() {
+        use crate::result_open::{OpenResultRequested, ResultOpenState, request_result_open, open_result_button_system};
+        use crate::results_ui::{OpenResultButton, ResultLoadError};
+        let mut app = App::new();
+        app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
+            .init_resource::<FemResultSet>()
+            .init_resource::<VisualizationSettings>()
+            .init_resource::<crate::results_ui::PlaybackState>()
+            .init_resource::<crate::solve_results_ui::SolveResultsState>()
+            .init_resource::<ResultOpenState>()
+            .init_resource::<ResultLoadError>()
+            .init_resource::<InputFocus>()
+            .insert_resource(SidebarPage::Results)
+            .add_systems(Startup, |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(spawn);
+            })
+            .add_systems(Update, (sync, open_result_button_system).chain());
+        crate::widget_test_input::enable_keyboard(&mut app);
+        let open = app.world_mut().spawn((Button, WidgetButton, OpenResultButton, BackgroundColor::default()))
+            .observe(request_result_open).id();
+        app.world_mut().resource_mut::<FemResultSet>().by_mesh = vec![vec![fem_core::StepResult {
+            fields: ["VELOCITY", "VELOCITY[1]", "VELOCITY[2]"].map(|name| ResultField::NodeScalar {
+                name: name.into(), values: vec![0.], min: 0., max: 0.,
+            }).to_vec(), ..default()
+        }]];
+        app.update();
+        let button = app.world_mut().query_filtered::<Entity, With<FieldButton>>().single(app.world()).unwrap();
+        for name in ["VELOCITY", "VELOCITY[1]", "VELOCITY[2]", "VELOCITY[1]"] {
+            crate::widget_test_input::click(app.world_mut(), button);
+            app.update();
+            let choice = app.world_mut().query::<(Entity, &Choice)>().iter(app.world())
+                .find(|(_, c)| c.name == name).unwrap().0;
+            // A popup may overlap Open Results when it opens above its anchor.
+            // Simulate the stale legacy pressed state as the popup disappears.
+            app.world_mut().entity_mut(open).insert(Interaction::Pressed);
+            crate::widget_test_input::click(app.world_mut(), choice);
+            app.update(); // Must not enter the native file dialog.
+            assert!(app.world().get::<OpenResultRequested>(open).is_none());
+            assert_eq!(app.world().resource::<FemResultSet>().active.as_ref().unwrap().field_name, name);
+        }
+        crate::widget_test_input::click(app.world_mut(), button);
+        app.update();
+        crate::widget_test_input::key(&mut app, KeyCode::Escape);
+        assert!(app.world().get::<OpenResultRequested>(open).is_none());
+
+        // A real click still requests a dialog; consume it without native UI.
+        crate::widget_test_input::click(app.world_mut(), open);
+        assert!(app.world().get::<OpenResultRequested>(open).is_some());
+        app.world_mut().entity_mut(open).remove::<OpenResultRequested>();
+        app.world_mut().resource_mut::<InputFocus>().set(open, FocusCause::Navigated);
+        let window = app.world_mut().query_filtered::<Entity, With<bevy::window::PrimaryWindow>>().single(app.world()).unwrap();
+        app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+                key_code: KeyCode::Enter, logical_key: bevy::input::keyboard::Key::Enter,
+                state: bevy::input::ButtonState::Pressed, text: None, repeat: false,
+                window,
+        });
+        app.world_mut().run_schedule(PreUpdate);
+        app.world_mut().flush();
+        assert!(app.world().get::<OpenResultRequested>(open).is_some());
+    }
+
+    #[test]
     fn result_popup_keyboard_navigation_selects_and_escape_preserves_field() {
         let mut app = App::new();
         app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
@@ -379,15 +441,20 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                     MenuButton,
                     FieldButton,
                     TabIndex(0),
-                    button_node(),
+                    crate::popup_trigger::node(),
+                    crate::popup_trigger::bundle(),
                     BackgroundColor(Color::srgb(0.14, 0.30, 0.37)),
                 ))
-                .with_child((text("Choose display field..."), FieldLabel::Button));
+                .with_children(|button| crate::popup_trigger::content(button,
+                    (text("Display field: none"), FieldLabel::Button),
+                    "Click to choose a contour field. Enter opens; Esc closes."));
         });
     parent.spawn((text("Contour: no result"), FieldLabel::Current));
     parent.spawn(text(
-        "Choose the color field above. Hover the model for values (pause playback first). Deformation changes shape independently.",
+        "Hover for values; click to pin a node/element (pause playback first). Deformation changes shape independently.",
     ));
+    crate::result_range_ui::spawn(parent);
+    crate::result_probe_pin::spawn(parent);
     parent
         .spawn((
             Button,
@@ -594,7 +661,7 @@ fn displacement_available(results: &FemResultSet, contour: &ContourSettings) -> 
 pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
-        sync.after(crate::results_ui::apply_slider_to_results),
+        sync.after(crate::results_ui::apply_slider_to_results).in_set(crate::popup_trigger::MenuSync),
     );
 }
 fn sync(
@@ -650,9 +717,9 @@ fn sync(
     for (kind, mut label) in &mut labels {
         if matches!(kind, FieldLabel::Button) {
             label.set_if_neq(Text::new(if *field_count == 0 {
-                "Choose display field... (no fields loaded)".into()
+                "Display field: no results".into()
             } else {
-                format!("Choose display field... ({})  v", *field_count)
+                format!("Display field: {}", results.active.as_ref().map_or("Choose...", |a| a.field_name.as_str()))
             }));
             continue;
         }
@@ -665,7 +732,7 @@ fn sync(
                         .is_some_and(|step| step.field_by_name(&a.field_name).is_some())
                 });
                 if available {
-                    format!("Contour: {}", a.field_name)
+                    format!("{} fields available | click above to choose", *field_count)
                 } else {
                     format!("Contour: {} (not output at this step)", a.field_name)
                 }

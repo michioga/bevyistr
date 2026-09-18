@@ -1,0 +1,12 @@
+/* Media stays inside the reading column on desktop and narrow viewports. */
+.content img, .content video {
+    max-width: 100%;
+    height: auto;
+}
+.content video {
+    display: block;
+    margin: 1rem auto;
+    background: #111;
+}
+figure { margin: 1.5rem 0; }
+figcaption { font-size: 0.9em; margin-top: 0.5rem; }

@@ -31,6 +31,34 @@ fn integers(source: &str, name: &str) -> Result<Vec<usize>, String> {
 }
 
 fn parse_scene_piece(source: &str) -> Result<(FemMesh, StepResult), String> {
+    for tag in ["PointData", "CellData"] {
+        if let Some(block) = section(source, tag).map_err(|e| e.to_string())? {
+            for tail in block.split("<DataArray").skip(1) {
+                let header = tail.split('>').next().ok_or("Invalid DataArray header")?;
+                if attr_value(header, "Name") == Some("vtkGhostType")
+                    && attr_value(header, "NumberOfComponents").unwrap_or("1") != "1"
+                {
+                    return Err("vtkGhostType must have one component".into());
+                }
+            }
+        }
+    }
+    let header = source
+        .split("<Piece ")
+        .nth(1)
+        .and_then(|s| s.split('>').next())
+        .ok_or("Missing Piece")?;
+    let point_count = attr_value(header, "NumberOfPoints")
+        .ok_or("Missing NumberOfPoints")?
+        .parse::<usize>()
+        .map_err(|_| "Invalid NumberOfPoints")?;
+    let cell_count = attr_value(header, "NumberOfCells")
+        .ok_or("Missing NumberOfCells")?
+        .parse::<usize>()
+        .map_err(|_| "Invalid NumberOfCells")?;
+    if point_count > u32::MAX as usize || cell_count > u32::MAX as usize {
+        return Err("VTK local IDs exceed 32-bit range".into());
+    }
     let point_block = section(source, "Points")
         .map_err(|e| e.to_string())?
         .ok_or("Missing Points")?;
@@ -41,6 +69,9 @@ fn parse_scene_piece(source: &str) -> Result<(FemMesh, StepResult), String> {
     };
     if coords.n_comp != 3 || coords.values.len() % 3 != 0 {
         return Err("Invalid coordinates".into());
+    }
+    if coords.values.len() / 3 != point_count {
+        return Err("NumberOfPoints disagrees with coordinates".into());
     }
     let nodes: Vec<_> = coords
         .values
@@ -54,7 +85,10 @@ fn parse_scene_piece(source: &str) -> Result<(FemMesh, StepResult), String> {
     let connectivity = integers(cells, "connectivity")?;
     let offsets = integers(cells, "offsets")?;
     let types = integers(cells, "types")?;
-    if offsets.len() != types.len() || offsets.last().copied() != Some(connectivity.len()) {
+    if offsets.len() != types.len()
+        || types.len() != cell_count
+        || offsets.last().copied().unwrap_or(0) != connectivity.len()
+    {
         return Err("Invalid VTK cell offsets/count".into());
     }
     let mut elements = Vec::new();
@@ -125,7 +159,7 @@ fn parse_scene_piece(source: &str) -> Result<(FemMesh, StepResult), String> {
             }
         }
     }
-    Ok((FemMesh::new(nodes, elements), step))
+    crate::vtk_partitions::filter_ghosts(FemMesh::new(nodes, elements), step)
 }
 
 fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
@@ -137,20 +171,41 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
         let pieces: Vec<_> = source
             .split("<Piece ")
             .skip(1)
-            .filter_map(|s| s.split('>').next().and_then(|s| attr_value(s, "Source")))
-            .collect();
+            .map(|s| {
+                s.split('>')
+                    .next()
+                    .and_then(|s| attr_value(s, "Source"))
+                    .filter(|s| !s.is_empty())
+                    .ok_or("PVTU piece is missing Source")
+            })
+            .collect::<Result<_, _>>()?;
         if pieces.is_empty() {
             return Err("PVTU has no pieces".into());
         }
-        if pieces.len() != 1 {
-            return Err("Multi-piece PVTU needs partition/ghost handling and is not supported yet. Open native MPI results through Solve, or use ParaView.".into());
-        }
+        let mut seen = std::collections::HashSet::new();
+        let wrapper_time = vtk_time(&source)?;
         pieces
             .iter()
             .map(|s| {
-                let text = std::fs::read_to_string(path.parent().unwrap_or(Path::new(".")).join(s))
-                    .map_err(|e| e.to_string())?;
-                parse_scene_piece(&text)
+                let file = path.parent().unwrap_or(Path::new(".")).join(s);
+                let resolved = file
+                    .canonicalize()
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                if !seen.insert(resolved) {
+                    return Err(format!("Duplicate PVTU piece reference: {s}"));
+                }
+                let text = std::fs::read_to_string(&file)
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                let (mesh, mut step) = parse_scene_piece(&text).map_err(|e| format!("{s}: {e}"))?;
+                if let Some(time) = wrapper_time {
+                    if vtk_time(&text)?
+                        .is_some_and(|t| (t - time).abs() > 1e-6 * time.abs().max(1.0))
+                    {
+                        return Err(format!("{s}: TimeValue disagrees with PVTU"));
+                    }
+                    step.time = time;
+                }
+                Ok((mesh, step))
             })
             .collect()
     } else {
@@ -158,10 +213,26 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
     }
 }
 
+fn vtk_time(source: &str) -> Result<Option<f32>, String> {
+    let Some(block) = section(source, "FieldData").map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    Ok(arrays(block)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .find(|a| matches!(a.name.as_str(), "TimeValue" | "TOTALTIME") && a.values.len() == 1)
+        .map(|a| a.values[0]))
+}
+
 pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
     let mut scene: Option<ResultScene> = None;
     for (number, file) in crate::result_series::detect_result_series(path) {
-        let parts = read_parts(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let mut parts = read_parts(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        crate::vtk_partitions::validate_and_share_ranges(&mut parts)
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+        if parts.iter().all(|(m, _)| m.elements.is_empty()) {
+            return Err("No visible VTK cells after ghost filtering".into());
+        }
         if let Some(scene) = &mut scene {
             if scene.model.meshes.len() != parts.len() {
                 return Err("VTK piece count changes across steps".into());
@@ -181,10 +252,10 @@ pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
             let mut parts = parts.into_iter();
             let (mesh, mut step) = parts.next().ok_or("No VTK geometry")?;
             step.step = number;
-            let mut model = FemModel::single_mesh("VTK piece 0", mesh);
+            let mut model = FemModel::single_mesh("VTK piece 1 (local IDs)", mesh);
             let mut steps = vec![vec![step]];
             for (i, (mesh, mut step)) in parts.enumerate() {
-                model.add_mesh(format!("VTK piece {}", i + 1), mesh);
+                model.add_mesh(format!("VTK piece {} (local IDs)", i + 2), mesh);
                 step.step = number;
                 steps.push(vec![step]);
             }
@@ -193,6 +264,10 @@ pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
     }
     scene.ok_or("No result steps".into())
 }
+
+#[cfg(test)]
+#[path = "vtk_partitions_tests.rs"]
+mod partition_tests;
 
 #[cfg(test)]
 mod tests {
@@ -231,7 +306,9 @@ mod tests {
             assert_eq!(scene.model.meshes[0].elements.len(), elements);
             assert!(!scene.model.meshes[0].cached_boundary_faces().is_empty());
             assert!(!scene.steps[0].is_empty());
-            if !file.contains("heat") {assert_eq!(scene.steps[0].len(),2);}
+            if !file.contains("heat") {
+                assert_eq!(scene.steps[0].len(), 2);
+            }
         }
     }
 }

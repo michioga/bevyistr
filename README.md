@@ -10,6 +10,12 @@ The project combines direct 3-D interaction with the numerical precision require
 
 bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, launch FrontISTR directly or through MPI, and inspect common result formats. It does **not** yet expose every FrontISTR keyword.
 
+## Manual (日本語)
+
+The [Japanese user manual](docs/src/introduction.md) is organized as an mdBook; see its [table of contents](docs/src/SUMMARY.md). It covers viewport operation, setup, execution, and result viewing, with current limitations kept explicit.
+
+Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. Pages deployment is manual from main; adding these files does not publish the site.
+
 ## Current capabilities
 
 ### Model import and assembly
@@ -120,16 +126,19 @@ Settings are loaded at startup. To edit the file manually, close bevyistr, edit 
   replaces results instead of appending duplicate steps. Changing the model or
   starting another run invalidates a pending handoff. Failed/stopped runs cannot
   use this button.
-- For the current opening workflow, limitations, and manual verification checklist, see the [Result viewing guide (日本語)](docs/results-guide.ja.md).
+- For the current opening workflow and limitations, see the [Results manual (日本語)](docs/src/results/index.md). The [manual verification checklist](docs/verification.md) is maintained separately.
 - Open FrontISTR ASCII `.res.0.N` series, CalculiX ASCII `.frd`, and inline ASCII VTK XML `.vtu`/`.pvtu` results.
-- Inline ASCII VTU opens its own coordinates/connectivity and nodal/cell scalar components, including stress and custom arrays, without a preloaded MSH. Single-piece PVTU is supported; sequences must have fixed geometry/topology. Multi-piece PVTU is rejected pending partition/ghost handling; use the native MPI result handoff or ParaView. Invalid or incomplete arrays report an error in Results without replacing the previous display. Missing unused nodes in native RES have no result (not zero) and do not affect contour ranges.
+- Inline ASCII VTU opens its own coordinates/connectivity and nodal/cell scalar components, including stress and custom arrays, without a preloaded MSH. Single- and multi-piece PVTU are supported with fixed geometry/topology across sequences. Multi-piece results keep local IDs and values separate, with a common contour range per frame; coincident points are not welded or averaged. Explicit duplicate/hidden ghost cells are excluded, but unmarked overlaps and internal partition boundaries remain. Missing pieces or inconsistent fields reject the entire load without replacing the previous display. Missing unused nodes in native RES have no result (not zero) and do not affect contour ranges.
 - Open Result detects numbered `.pvtu`/`.vtu` and `.res.<rank>.<step>` sequences, including native files under sibling `STEP<number>` folders. FrontISTR piece VTUs resolve through their referencing PVTU; rank numbers are not animation frames. The requested step opens first, with frame count, output step and time shown in Results. Native results also tolerate omitted unused mesh nodes, while missing element-node results remain errors. Result edges follow deformation and animation; undeformed base edges/node markers are hidden until results are cleared.
-- In Results, **Choose display field... (count)** opens a popup populated from the current result frame's actual fields (Node / Element). The selected item is marked `[x]`; clicking another field immediately changes the contour and color bar while preserving deformation settings. The selector is independent of the animation sliders and disabled until fields are loaded.
+- In Results, **Display field: current value** opens a popup populated from the current result frame's actual fields (Node / Element). The selected item is marked `[x]`; clicking another field immediately changes the contour and color bar while preserving deformation settings. The selector is independent of the animation sliders and disabled until fields are loaded. Result, solver and output selectors share a separate right-hand `>` / `v` indicator and hover/focus hints.
+- **COLOR RANGE** selects the current frame's range (default) or a shared range over all loaded frames. All frames keeps the same color/value mapping during playback, across all parts, without changing stored values or deformation. Missing fields are skipped rather than treated as zero. The legend identifies its range mode; result statistics still describe the current frame.
+- Constant scalar fields (or constant vector magnitudes) show **Constant field**. When the selected legend range is also constant, its single color matches the surface. All frames retains a gradient if other frames have different values. Missing-only or empty fields are not reported as constant zero.
 - The menu follows the current step's file order, including custom fields. If the selected quantity is absent at another step, its selection is retained and marked unavailable rather than silently switching to another physical quantity.
 - Display native FrontISTR element scalars on their boundary faces without nodal averaging, including MPI owner-based assembly mapping.
 - Toggle **Deformation: ON/OFF** independently of the contour field; the displacement scale is preserved when switching fields or disabling deformation.
 - Move through result steps manually or animate them with playback and speed controls.
-- Pause playback and hover a result surface to inspect the selected contour field, part/element IDs and step/time. Nodal fields report the nearest vertex of the hit display triangle (with a node marker), not an interpolated cursor value; element fields report stored values without averaging. Probing follows displayed deformation without scaling result values. Missing values are unavailable, and units remain those of the result/model. Surface probes are hidden during playback, dragging and UI interaction; line-only elements are not supported.
+- Pause playback and hover a result surface to inspect the selected contour field, part/element IDs and step/time. Nodal fields report the nearest vertex of the hit display triangle (with a node marker), not an interpolated cursor value; element fields report stored values without averaging. Probing follows displayed deformation without scaling result values. Missing values are unavailable, and units remain those of the result/model. Hover probes are hidden during playback, dragging and UI interaction; line-only elements are not supported.
+- Click a result surface while paused to pin that part-local node or element in the Results panel. The pinned value follows frame/field changes and remains visible during playback. Nodal and element associations are never converted implicitly; incompatible or missing fields show unavailable. Click another surface point to replace the target, or use **Clear pinned probe**. Loading another model/result or leaving Results clears the pin. This is read-only inspection, not a change to pre-processing selection or analysis data.
 
 This post-processing UI focuses on convenient inspection. ParaView remains the recommended tool for detailed result analysis.
 
@@ -140,7 +149,7 @@ for existing files; manual loading does not reconstruct MPI ownership or the
 previous run's fresh-file snapshot. The Solve handoff initially selects the first
 field (typically displacement magnitude). Manual opening prefers `NodalMISES`
 when present in the requested step;
-viewport result probing remains planned. Component indices retain file ordering.
+surface values can be inspected with the hover probe. Component indices retain file ordering.
 
 MPI execution uses `hecmw_part1` and then `mpiexec -n N fistr1 -t T`. The MPI
 process count `N` follows the partition control, while the OpenMP thread count
@@ -239,7 +248,7 @@ priority; clearing a contour restores the current material colors.
 | Input | Abaqus/CalculiX `.inp` | Reads `*NODE`, `*ELEMENT`, `*NSET`, and `*ELSET`; unknown element types remain marked unsupported. |
 | Result | FrontISTR `.res.<rank>.<step>` | Native ASCII v1/v2.0 nodal and element data. Solve handoff joins MPI owners and assembly parts; manual Open Result loads a single-rank series. |
 | Result | CalculiX `.frd` | Reads nodal scalar/vector fields and derives vector magnitude or von Mises values where applicable. |
-| Result | VTK XML `.vtu` / `.pvtu` | Opens standalone geometry with inline ASCII point and cell fields; detects sequences. Single-piece PVTU only. Binary, base64, appended arrays, changing topology and unsupported cell types are rejected. |
+| Result | VTK XML `.vtu` / `.pvtu` | Opens standalone geometry with inline ASCII point and cell fields; detects sequences. Single- and multi-piece PVTU keep local IDs separate without welding unmarked overlaps. Binary, base64, appended arrays, changing topology and unsupported cell types are rejected. |
 | Output | FrontISTR project | Writes `hecmw_ctrl.dat`, HEC-MW `.msh`, and FrontISTR `.cnt`. |
 
 Gmsh conversion currently covers line, triangle, quadrilateral, tetrahedron, hexahedron, and prism families, including the supported quadratic variants. A `.geo` import requires the Gmsh executable to be available on `PATH`.
@@ -305,10 +314,10 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 - Cluster schedulers, remote-job cancellation, structured iteration progress, and solver-error localization in the viewport are not integrated yet. The current runner targets local workstation MPI (`mpiexec` / `mpirun`) and shows text output; exit code 0 alone is not a convergence or model-validity check.
 - The UI does not yet expose all FrontISTR analysis types and keywords. Unsupported data may not round-trip through the editable setup model.
 - Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
-- Open Results runs file parsing in the background. VTU/single-piece PVTU supplies its own geometry; RES suggests a nearby MSH/project and asks for confirmation, or lets you choose a matching MSH. Manually opened results have independent read-only geometry: switching to Model returns to the unchanged editable model.
-- Manual RES opening targets a single mesh or flattened assembly. Complete native MPI results are supported through the Solve handoff, not by opening one rank file. Multi-piece PVTU ghost/partition handling remains planned.
-- VTK XML support is limited to inline ASCII point/cell data and supported cell types, with fixed geometry across a sequence. Single-piece PVTU only.
-- Planned post-processing conveniences include selected-node history graphs and interactive clipping. Detailed visualization will continue to rely on ParaView.
+- Open Results runs file parsing in the background. VTU/PVTU supplies its own geometry; RES suggests a nearby MSH/project and asks for confirmation, or lets you choose a matching MSH. Manually opened results have independent read-only geometry: switching to Model returns to the unchanged editable model.
+- Manual RES opening targets a single mesh or flattened assembly. Complete native MPI results are supported through the Solve handoff, not by opening one rank file. Multi-piece PVTU loading does not reconstruct global ownership or remove unmarked partition overlaps. Probe IDs must be interpreted together with the piece/part number.
+- VTK XML support is limited to inline ASCII point/cell data and supported cell types, with fixed piece order/count and geometry across a sequence. Ghost support is limited to duplicate/hidden flags; other flags are rejected. Binary/appended VTK and global-ID-based partition welding remain unsupported.
+- A pinned node/element has a read-only history graph for the selected field, with a current-frame marker. Recorded time/load-factor spacing is used only when finite and strictly increasing; otherwise the axis explicitly uses frame order. Missing values break the line rather than being zero-filled. Multiple-target comparisons, history export and interactive clipping remain planned. Detailed visualization will continue to rely on ParaView.
 
 The long-term goal is to make the full FrontISTR workflow accessible without returning to a dialog-heavy pre/post interface, while preserving explicit numeric confirmation and valid solver input.
 

@@ -121,16 +121,12 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                         MenuButton,
                         Selector,
                         TabIndex(0),
-                        Node {
-                            width: percent(100),
-                            min_height: px(28),
-                            padding: UiRect::all(px(5)),
-                            border_radius: BorderRadius::all(px(4)),
-                            ..default()
-                        },
+                        crate::popup_trigger::node(),
+                        crate::popup_trigger::bundle(),
                         BackgroundColor(Color::srgb(0.14, 0.30, 0.37)),
                     ))
-                    .with_child((text(kind.title()), Label(kind)));
+                    .with_children(|button| crate::popup_trigger::content(button,
+                        (text(kind.title()), Label(kind)), "Click to choose a value. Enter opens; Esc closes."));
             });
     }
     parent.spawn(text(
@@ -302,7 +298,7 @@ pub(crate) fn register(app: &mut App) {
         Update,
         sync.after(crate::layout::sidebar_page_button_system)
             .after(crate::layout::undo_redo_system)
-            .after(crate::solver_editor::solver_numeric_input_system),
+            .after(crate::solver_editor::solver_numeric_input_system).in_set(crate::popup_trigger::MenuSync),
     );
 }
 fn sync(
@@ -328,7 +324,7 @@ fn sync(
     }
     for (label, mut value) in &mut labels {
         value.set_if_neq(Text::new(format!(
-            "{}: {}  v",
+            "{}: {}",
             label.0.title(),
             label.0.current(&setup.solver).label()
         )));

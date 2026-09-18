@@ -6,12 +6,6 @@ use fem_core::FemResultSet;
 #[cfg(test)]
 use visualization::ContourSettings;
 
-const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
-const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
-const BUTTON_HOVERED: Color = Color::srgba(0.18, 0.22, 0.24, 0.96);
-const BUTTON_ACTIVE: Color = Color::srgb(0.18, 0.45, 0.55);
-const BUTTON_PRESSED: Color = Color::srgb(0.22, 0.55, 0.66);
-
 #[derive(Component)]
 pub(crate) struct OpenResultButton;
 
@@ -44,17 +38,7 @@ impl Default for PlaybackState {
     }
 }
 
-#[derive(Component)]
-pub(crate) struct PlaybackRewindButton;
-
-#[derive(Component)]
-pub(crate) struct PlaybackPlayPauseButton;
-
-#[derive(Component)]
-pub(crate) struct PlaybackEndButton;
-
-#[derive(Component)]
-pub(crate) struct PlaybackPlayPauseLabel;
+pub(crate) use crate::playback_controls::sync as playback_button_system;
 
 pub(crate) use crate::result_open::open_result_button_system;
 
@@ -103,6 +87,9 @@ pub(crate) fn update_result_stats_text(
         let total_steps: usize = results.by_mesh.iter().map(|s| s.len()).sum();
         format!("Result: {total_steps} step(s) loaded")
     };
+    if let Some(value) = results.active_field().and_then(|field| field.constant_value()) {
+        text.push_str(&format!("\nConstant field: {value:.4e} (uniform color)"));
+    }
     if let Some(active) = &results.active {
         if let Some(steps) = results.by_mesh.get(active.mesh_index) {
             if let Some(step) = steps.get(active.step_index) {
@@ -115,108 +102,10 @@ pub(crate) fn update_result_stats_text(
 
 // ── animation playback ────────────────────────────────────────────────────────
 
-pub(crate) fn playback_button_system(
-    mut playback: ResMut<PlaybackState>,
-    results: Option<Res<FemResultSet>>,
-    mut play_btns: Query<
-        (
-            Ref<Interaction>,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &Children,
-        ),
-        (
-            With<PlaybackPlayPauseButton>,
-            Without<PlaybackRewindButton>,
-            Without<PlaybackEndButton>,
-        ),
-    >,
-    mut rewind_btns: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        (
-            With<PlaybackRewindButton>,
-            Without<PlaybackPlayPauseButton>,
-            Without<PlaybackEndButton>,
-        ),
-    >,
-    mut end_btns: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
-        (
-            With<PlaybackEndButton>,
-            Without<PlaybackPlayPauseButton>,
-            Without<PlaybackRewindButton>,
-        ),
-    >,
-    mut labels: Query<&mut Text, With<PlaybackPlayPauseLabel>>,
-    mut sliders: Query<&mut SliderState, With<SliderTrack>>,
-) {
-    let step_count = results
-        .as_deref()
-        .map(|r| r.by_mesh.iter().map(|s| s.len()).max().unwrap_or(0))
-        .unwrap_or(0);
-
-    for (interaction, mut bg, mut border, children) in &mut play_btns {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            playback.playing = !playback.playing;
-            playback.elapsed = 0.0;
-        }
-        let active = playback.playing;
-        let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
-        };
-        *bg = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
-
-        for &child in children {
-            if let Ok(mut t) = labels.get_mut(child) {
-                **t = if playback.playing {
-                    "Pause".to_string()
-                } else {
-                    "Play".to_string()
-                };
-            }
-        }
-    }
-
-    for (interaction, mut bg, mut border) in &mut rewind_btns {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            playback.playing = false;
-            for mut s in &mut sliders {
-                if s.id == SliderId::ResultStep {
-                    s.value = 0.0;
-                    s.clamp_value();
-                }
-            }
-        }
-        *bg = BackgroundColor(if *interaction != Interaction::None {
-            BUTTON_HOVERED
-        } else {
-            BUTTON_NORMAL
-        });
-        *border = BorderColor::all(PANEL_BORDER);
-    }
-
-    for (interaction, mut bg, mut border) in &mut end_btns {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
-            playback.playing = false;
-            let last = (step_count.saturating_sub(1)) as f32;
-            for mut s in &mut sliders {
-                if s.id == SliderId::ResultStep {
-                    s.value = last;
-                    s.clamp_value();
-                }
-            }
-        }
-        *bg = BackgroundColor(if *interaction != Interaction::None {
-            BUTTON_HOVERED
-        } else {
-            BUTTON_NORMAL
-        });
-        *border = BorderColor::all(PANEL_BORDER);
-    }
+/// Number of frames in the active timeline, shared by playback and navigation.
+pub(crate) fn result_frame_count(results: &FemResultSet) -> usize {
+    let mesh = results.active.as_ref().map_or(0, |a| a.mesh_index);
+    results.by_mesh.get(mesh).map_or(0, Vec::len)
 }
 
 /// Advances the result step automatically when [`PlaybackState::playing`]
@@ -234,9 +123,9 @@ pub(crate) fn playback_advance_system(
 
     let step_count = results
         .as_deref()
-        .map(|r| r.by_mesh.iter().map(|s| s.len()).max().unwrap_or(0))
+        .map(result_frame_count)
         .unwrap_or(0);
-    if step_count == 0 {
+    if step_count < 2 {
         playback.playing = false;
         return;
     }
@@ -260,6 +149,8 @@ pub(crate) fn playback_advance_system(
             continue;
         }
         let next = (s.value + 1.0) % step_count as f32;
+        s.min = 0.0;
+        s.max = step_count.saturating_sub(1) as f32;
         s.value = next;
         s.clamp_value();
     }

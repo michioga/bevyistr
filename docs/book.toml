@@ -1,0 +1,21 @@
+[book]
+title = "bevyistr ユーザーマニュアル"
+authors = ["Michio Ogawa (michioga)"]
+language = "ja"
+src = "src"
+description = "Bevy Aistar — FrontISTRプリポストの操作マニュアル"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/bevyistr/"
+git-repository-url = "https://github.com/michioga/bevyistr"
+additional-css = ["theme/manual.css"]
+
+[output.html.playground]
+runnable = false
+
+[output.html.print]
+enable = true

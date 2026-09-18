@@ -308,7 +308,7 @@ mod tests {
             ..default()
         };
         let rendered =
-            crate::demo_mesh::build_contour_surface_mesh(&mesh, &step, &settings).unwrap();
+            crate::demo_mesh::build_contour_surface_mesh(&mesh, &step, &settings, None).unwrap();
         let Some(VertexAttributeValues::Float32x3(vertices)) =
             rendered.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
