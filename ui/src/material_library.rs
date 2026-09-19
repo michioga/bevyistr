@@ -1,6 +1,6 @@
 //! Library selections are drafts. Only final confirmation changes AnalysisSetup.
 use crate::layout::{ScrollableList, SidebarPage};
-use crate::material_catalog::{Catalog, LibraryUnits, default_path};
+use crate::material_catalog::{Catalog, LibraryUnits, default_path, read_standard};
 use crate::materials_ui::{SelectedEgrp, SelectedMaterialForSection};
 use bevy::{prelude::*, ui::ScrollPosition};
 use fem_core::{AnalysisSetup, FemMaterial};
@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-type LoadReply = Result<Catalog, String>;
+type LoadReply = Result<(Catalog, bool), String>;
 
 #[derive(Resource)]
 pub(crate) struct MaterialLibraryState {
@@ -20,6 +20,7 @@ pub(crate) struct MaterialLibraryState {
     pub(crate) selected: Option<String>,
     pub(crate) units: Option<LibraryUnits>,
     pub(crate) path: PathBuf,
+    bundled: bool,
     revision: u64,
     pub(crate) status: String,
     pending: Option<Mutex<Receiver<LoadReply>>>,
@@ -31,20 +32,22 @@ impl Default for MaterialLibraryState {
 }
 impl MaterialLibraryState {
     pub(crate) fn from_path(path: PathBuf) -> Self {
-        let result = Catalog::read(&path);
+        let result = read_standard(&path);
         let mut state = Self {
             catalog: None,
             selected: None,
             units: None,
             path: path.clone(),
+            bundled: false,
             revision: 0,
             status: String::new(),
             pending: None,
         };
-        state.install(result);
+        state.install_standard(result);
         state
     }
     pub(crate) fn install(&mut self, result: Result<Catalog, String>) {
+        self.bundled = false;
         self.selected = None;
         self.revision += 1;
         match result {
@@ -57,6 +60,11 @@ impl MaterialLibraryState {
                 self.status = format!("Cannot load library: {error}");
             }
         }
+    }
+    fn install_standard(&mut self, reply: LoadReply) {
+        let bundled = reply.as_ref().is_ok_and(|(_, bundled)| *bundled);
+        self.install(reply.map(|(catalog, _)| catalog));
+        self.bundled = bundled;
     }
     pub(crate) fn draft(&self) -> Option<FemMaterial> {
         if self.pending.is_some() {
@@ -75,12 +83,13 @@ impl MaterialLibraryState {
             return;
         }
         let (tx, rx) = mpsc::channel();
+        self.path = default_path();
         let path = self.path.clone();
         self.pending = Some(Mutex::new(rx));
         self.selected = None;
         self.status = "Reloading materials.toml...".into();
         std::thread::spawn(move || {
-            let _ = tx.send(Catalog::read(&path));
+            let _ = tx.send(read_standard(&path));
         });
     }
 }
@@ -246,7 +255,7 @@ pub(crate) fn material_library_system(
     match reply {
         Some(Ok(reply)) => {
             state.pending = None;
-            state.install(reply);
+            state.install_standard(reply);
         }
         Some(Err(TryRecvError::Disconnected)) => {
             state.pending = None;
@@ -318,10 +327,11 @@ pub(crate) fn material_library_system(
         }));
     }
     for mut path in &mut paths {
-        path.set_if_neq(Text::new(format!(
-            "Standard file: {}",
-            state.path.display()
-        )));
+        path.set_if_neq(Text::new(if state.bundled {
+            format!("Bundled defaults | Override: {}", state.path.display())
+        } else {
+            format!("Standard file: {}", state.path.display())
+        }));
     }
     let text = if !state.status.is_empty() {
         state.status.clone()

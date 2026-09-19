@@ -1,11 +1,19 @@
 [package]
-name = "hecmw"
+name = "bevyistr-hecmw"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "HEC-MW and FrontISTR input/output support for bevyistr"
+readme = "README.md"
+keywords = ["fem", "frontistr", "bevy", "visualization"]
+categories = ["science", "visualization"]
+include = ["src/**", "tests/**", "examples/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+
+[lib]
+name = "hecmw"
 
 [dependencies]
 bevy = "0.19"
-fem_core = { path = "../fem_core" }
+fem_core.workspace = true

@@ -199,7 +199,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 ))
                 .with_children(|bar| {
                     bar.spawn((
-                        Text::new("bevyistr"),
+                        Text::new(concat!("bevyistr v", env!("CARGO_PKG_VERSION"))),
                         TextFont {
                             font_size: FontSize::Px(13.0),
                             ..default()

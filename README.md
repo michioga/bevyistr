@@ -4,6 +4,10 @@ A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
+Version **0.2.0** is being prepared for release. See [release preparation](docs/releasing.md)
+for package checks and remaining publication gates. This does not imply that the
+version is already available on crates.io.
+
 The project combines direct 3-D interaction with the numerical precision required by finite-element analysis:
 
 > **Operate intuitively in the viewport; confirm engineering data exactly.**
@@ -192,12 +196,15 @@ project material, independently of assignment confirmation.
 The app reads **materials.toml** from its working directory; if absent, it
 looks next to **bevyistr.exe**. The Materials panel displays the exact path.
 For Cargo runs from the repository root, edit [materials.toml](materials.toml).
-For a standalone distribution, ship this file alongside the executable.
+To customize a standalone distribution, ship this file alongside the executable.
 The standard file is loaded automatically at startup. Edit the displayed file,
 then press **Reload materials.toml** to apply library changes without recompiling
-or restarting; reload runs off the UI thread. There is no embedded fallback:
-missing files, invalid values, duplicate names, and TOML syntax errors are
-reported in the panel without modifying existing model data. Re-select a library
+or restarting; reload runs off the UI thread. If neither external file exists,
+the app uses embedded standard records and displays **Bundled defaults** with
+the external override path. No file is created or overwritten automatically.
+Invalid values, duplicate names, unreadable files, and TOML syntax errors in an
+existing external file are reported rather than silently using the fallback.
+Reload also detects a newly created override file. Re-select a library
 material after reloading; stale drafts cannot be confirmed.
 
 Files are UTF-8 (a BOM is accepted), up to 1 MiB. Add entries as follows:
