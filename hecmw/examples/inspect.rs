@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 fn main() {
     let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) else {
-        eprintln!("usage: cargo run -p hecmw --example inspect -- <mesh.msh>");
+        eprintln!("usage: cargo run -p bevyistr-hecmw --example inspect -- <mesh.msh>");
         std::process::exit(2);
     };
 

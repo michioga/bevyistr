@@ -1984,19 +1984,124 @@ dependencies = [
 
 [[package]]
 name = "bevyistr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
- "box_select",
- "camera",
- "fem_core",
- "gmsh",
- "hecmw",
- "interaction",
- "picking",
- "selection",
- "ui",
- "visualization",
+ "bevyistr-box-select",
+ "bevyistr-camera",
+ "bevyistr-fem-core",
+ "bevyistr-gmsh",
+ "bevyistr-hecmw",
+ "bevyistr-interaction",
+ "bevyistr-picking",
+ "bevyistr-selection",
+ "bevyistr-ui",
+ "bevyistr-visualization",
+ "find-msvc-tools",
+ "image",
+ "winit",
+]
+
+[[package]]
+name = "bevyistr-box-select"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-camera",
+ "bevyistr-fem-core",
+ "bevyistr-interaction",
+ "bevyistr-selection",
+]
+
+[[package]]
+name = "bevyistr-camera"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+ "bevyistr-interaction",
+]
+
+[[package]]
+name = "bevyistr-fem-core"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
+name = "bevyistr-gmsh"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+ "bevyistr-hecmw",
+]
+
+[[package]]
+name = "bevyistr-hecmw"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+]
+
+[[package]]
+name = "bevyistr-interaction"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+]
+
+[[package]]
+name = "bevyistr-picking"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+ "bevyistr-interaction",
+ "bevyistr-selection",
+]
+
+[[package]]
+name = "bevyistr-selection"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+ "bevyistr-interaction",
+]
+
+[[package]]
+name = "bevyistr-ui"
+version = "0.2.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevyistr-camera",
+ "bevyistr-fem-core",
+ "bevyistr-gmsh",
+ "bevyistr-hecmw",
+ "bevyistr-interaction",
+ "bevyistr-picking",
+ "bevyistr-selection",
+ "bevyistr-visualization",
+ "libc",
+ "rfd",
+ "tempfile",
+ "toml_edit",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "bevyistr-visualization"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevyistr-fem-core",
+ "bevyistr-interaction",
+ "bevyistr-selection",
 ]
 
 [[package]]
@@ -2086,17 +2191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "box_select"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "camera",
- "fem_core",
- "interaction",
- "selection",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2164,15 +2258,6 @@ dependencies = [
  "rustix 0.38.44",
  "wayland-backend",
  "wayland-client",
-]
-
-[[package]]
-name = "camera"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
- "interaction",
 ]
 
 [[package]]
@@ -2855,13 +2940,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fem_core"
-version = "0.1.0"
-dependencies = [
- "bevy",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3200,15 +3278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gmsh"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
- "hecmw",
-]
-
-[[package]]
 name = "gpu-allocator"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3350,14 +3419,6 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
-name = "hecmw"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
-]
 
 [[package]]
 name = "hermit-abi"
@@ -3591,14 +3652,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "interaction"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
 ]
 
 [[package]]
@@ -4743,16 +4796,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "picking"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
- "interaction",
- "selection",
-]
-
-[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5380,15 +5423,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "selection"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
- "interaction",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5603,9 +5637,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 dependencies = [
  "portable-atomic",
 ]
@@ -6050,27 +6084,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ui"
-version = "0.1.0"
-dependencies = [
- "avian3d",
- "bevy",
- "camera",
- "fem_core",
- "gmsh",
- "hecmw",
- "interaction",
- "libc",
- "picking",
- "rfd",
- "selection",
- "tempfile",
- "toml_edit",
- "visualization",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6159,16 +6172,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "visualization"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "fem_core",
- "interaction",
- "selection",
-]
 
 [[package]]
 name = "voracious_radix_sort"

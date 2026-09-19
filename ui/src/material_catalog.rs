@@ -9,6 +9,18 @@ use std::{
 
 const MAX_BYTES: u64 = 1_048_576;
 
+/// Fallback for installed binaries. Existing, invalid files never fall back
+/// silently: users must see and correct their own catalogue errors.
+pub(crate) fn read_standard(path: &Path) -> Result<(Catalog, bool), String> {
+    match std::fs::metadata(path) {
+        Ok(_) => Catalog::read(path).map(|catalog| (catalog, false)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Catalog::parse(include_str!("../assets/materials.toml")).map(|catalog| (catalog, true))
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Catalog {
     schema_version: u32,

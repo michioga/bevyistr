@@ -1,10 +1,18 @@
 [package]
-name = "fem_core"
+name = "bevyistr-fem-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Finite-element model and analysis data for bevyistr"
+readme = "README.md"
+keywords = ["fem", "frontistr", "bevy", "visualization"]
+categories = ["science", "visualization"]
+include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+
+[lib]
+name = "fem_core"
 
 [dependencies]
 bevy = "0.19"

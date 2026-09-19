@@ -1,25 +1,33 @@
 [package]
-name = "ui"
+name = "bevyistr-ui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Native user interface and workflows for bevyistr"
+readme = "README.md"
+keywords = ["fem", "frontistr", "bevy", "visualization"]
+categories = ["science", "visualization"]
+include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+
+[lib]
+name = "ui"
 
 [dependencies]
 avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32"] }
 bevy = "0.19"
-camera = { path = "../camera" }
-fem_core = { path = "../fem_core" }
-gmsh = { path = "../gmsh" }
-hecmw = { path = "../hecmw" }
-interaction = { path = "../interaction" }
-picking = { path = "../picking" }
+camera.workspace = true
+fem_core.workspace = true
+gmsh.workspace = true
+hecmw.workspace = true
+interaction.workspace = true
+picking.workspace = true
 rfd = "0.15"
 toml_edit = { version = "=0.25.11", default-features = false, features = ["parse", "display"] }
 tempfile = "3.27"
-selection = { path = "../selection" }
-visualization = { path = "../visualization" }
+selection.workspace = true
+visualization.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -15,8 +15,21 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Michio Ogawa (michioga)"]
 license = "MIT"
 repository = "https://github.com/michioga/bevyistr"
+
+# Keep source-level crate names stable while publishing uniquely named packages.
+[workspace.dependencies]
+fem_core = { package = "bevyistr-fem-core", path = "fem_core", version = "=0.2.0" }
+interaction = { package = "bevyistr-interaction", path = "interaction", version = "=0.2.0" }
+selection = { package = "bevyistr-selection", path = "selection", version = "=0.2.0" }
+visualization = { package = "bevyistr-visualization", path = "visualization", version = "=0.2.0" }
+ui = { package = "bevyistr-ui", path = "ui", version = "=0.2.0" }
+gmsh = { package = "bevyistr-gmsh", path = "gmsh", version = "=0.2.0" }
+hecmw = { package = "bevyistr-hecmw", path = "hecmw", version = "=0.2.0" }
+camera = { package = "bevyistr-camera", path = "camera", version = "=0.2.0" }
+picking = { package = "bevyistr-picking", path = "picking", version = "=0.2.0" }
+box_select = { package = "bevyistr-box-select", path = "box_select", version = "=0.2.0" }

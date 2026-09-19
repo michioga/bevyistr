@@ -31,6 +31,23 @@ fn external_catalogue_has_sourced_records_and_explicit_units() {
 const CUSTOM: &str = "schema_version = 1\n[[materials]]\nname = 'MY_ALLOY'\nlabel = '試験材'\nyoung_pa = 70e9\npoisson = 0.3\n";
 
 #[test]
+fn installed_defaults_allow_external_override_without_hiding_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("materials.toml");
+    let (catalog, bundled) = read_standard(&path).unwrap();
+    assert!(bundled);
+    assert_eq!(catalog.materials.len(), 4);
+    assert!(!path.exists()); // No implicit filesystem writes at startup.
+    std::fs::write(&path, CUSTOM).unwrap();
+    let (catalog, bundled) = read_standard(&path).unwrap();
+    assert!(!bundled);
+    assert_eq!(catalog.materials[0].name, "MY_ALLOY");
+    std::fs::write(&path, "[broken").unwrap();
+    assert!(read_standard(&path).is_err());
+    assert!(read_standard(dir.path()).is_err());
+}
+
+#[test]
 fn custom_comments_unicode_bom_and_optional_density_are_supported() {
     let catalog = Catalog::parse(&format!("\u{feff}# user library\n{CUSTOM}")).unwrap();
     assert_eq!(catalog.materials[0].label, "試験材");
