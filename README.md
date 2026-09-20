@@ -4,15 +4,28 @@ A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
-Version **0.2.0** is being prepared for release. See [release preparation](docs/releasing.md)
-for package checks and remaining publication gates. This does not imply that the
-version is already available on crates.io.
+Version **0.2.0** is [available on crates.io](https://crates.io/crates/bevyistr/0.2.0).
+See the [release record and maintainer procedures](docs/releasing.md) for verification
+results and the exact source commit.
 
 The project combines direct 3-D interaction with the numerical precision required by finite-element analysis:
 
 > **Operate intuitively in the viewport; confirm engineering data exactly.**
 
 bevyistr is under active development. It can currently assemble meshes, author and review a useful subset of FrontISTR input, export a complete FrontISTR project, launch FrontISTR directly or through MPI, and inspect common result formats. It does **not** yet expose every FrontISTR keyword.
+
+## Install from crates.io
+
+```sh
+cargo install bevyistr --version 0.2.0 --locked
+bevyistr
+```
+
+Cargo builds the application from source. A Rust toolchain, native build tools,
+and a Bevy-compatible graphics environment are required; see [Build & run](#build--run).
+FrontISTR, MPI, and Gmsh are separate installations for the features that use them.
+Existing result files can be viewed without installing the solver. The application
+icon and default material library are embedded.
 
 ## Manual (日本語)
 
@@ -333,10 +346,23 @@ The long-term goal is to make the full FrontISTR workflow accessible without ret
 Prerequisites:
 
 - A Rust toolchain supporting edition 2024
+- Native build tools: Windows MSVC requires the C++ build tools and Windows SDK
+  (including `rc.exe` for the embedded icon); Linux requires Bevy's native development libraries
 - A graphics adapter/backend supported by Bevy/wgpu
 - Optional: `gmsh` on `PATH` for `.geo` meshing
 - FrontISTR installed separately to solve exported projects (`fistr1` on `PATH`, selected in Solve, or named by `FRONTISTR_EXECUTABLE`)
 - For parallel execution: `hecmw_part1` with PMETIS support and an MPI launcher compatible with the installed FrontISTR
+
+The Ubuntu 24.04 CI installs these build dependencies:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+```
+
+Windows and Ubuntu package builds/tests pass in CI. Installation, startup, version
+display, and the icon have also been checked on Windows; Linux GUI operation has
+not yet been verified on a desktop.
 
 Development run:
 

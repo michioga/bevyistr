@@ -1,8 +1,50 @@
-# 0.2.0 公開準備（メンテナー向け）
+# 0.2.0 公開記録とリリース手順（メンテナー向け）
 
 コミット・push・マージ・タグ作成・crates.io公開はメンテナーが行います。
-`publish_crates_io`で準備し、mainへマージするリリースを0.2.0とします。
-この文書やCargoのバージョン変更だけでは、公開済みを意味しません。
+`publish_crates_io`で準備し、mainへマージしたv0.2.0を2026-09-20に公開しました。
+
+## 公開結果
+
+- [bevyistr v0.2.0](https://crates.io/crates/bevyistr/0.2.0)と内部10クレートを公開済みです。
+- 公開ソース: [`70db85dcc704600666f9eda3841ec02e17fd3965`](https://github.com/michioga/bevyistr/commit/70db85dcc704600666f9eda3841ec02e17fd3965)。
+  crates.ioから取得した全11アーカイブのSHA256をレジストリのチェックサムと照合し、
+  `.cargo_vcs_info.json`のGit SHAがこのコミットに一致することを確認しました。
+  確認時点で全11クレートの0.2.0はyankされていません。
+- [mainのRelease checks](https://github.com/michioga/bevyistr/actions/runs/35498571963)は
+  Windows / Ubuntuとも成功。展開後ビルド・テスト・UI単体チェックと、最初のクレートの
+  通常のpublish dry-runを確認しています。一括native package検証はスキップされています。
+- メンテナーが依存順に各クレートのdry-runと公開を実行し、成功を報告しました。
+- メンテナーのWindows環境で`cargo install bevyistr --version 0.2.0 --locked`による
+  インストール後の起動・バージョン表示・アイコンを確認済みです。
+  クリーンな新規環境やLinux GUIでの実機確認を意味するものではありません。
+- Linux GUIの実機操作確認と、網羅的な依存ライセンス・脆弱性監査は、この公開記録では
+  完了を保証しません。今後の確認事項として区別します。
+
+この文書の更新は公開後の整備です。公開済み0.2.0のパッケージやcrates.io上のREADMEを
+差し替えるものではなく、Cargoのバージョンも変更しません。
+
+## v0.2.0タグの作成（メンテナーが実行）
+
+タグはこのドキュメント更新後のHEADではなく、上記の公開ソースへ付けます。
+まず同名タグの有無を確認してください。
+
+```powershell
+git tag --list v0.2.0
+git ls-remote --tags origin refs/tags/v0.2.0 'refs/tags/v0.2.0^{}'
+```
+
+同名タグが存在しないことを確認してから、次を実行します。
+
+```powershell
+git tag -a v0.2.0 70db85dcc704600666f9eda3841ec02e17fd3965 -m "bevyistr v0.2.0"
+git show --no-patch v0.2.0
+git push origin refs/tags/v0.2.0
+```
+
+既存タグがある場合は上書きせず、`git rev-list -n 1 v0.2.0`等で対象を確認します。
+GitHub Releaseを作る場合もこのタグを使い、crates.io公開とWindowsでの起動確認、
+LinuxはCI検証済みであること、対応範囲の制限を明記します。
+これらのコマンドは手順の記載であり、自動実行はしていません。
 
 ## 構成と順序
 
@@ -92,7 +134,7 @@ WindowsとLinuxでビルド・起動、アイコン、材料の外部上書き�
 PVTU/RES読み込み・フィールド選択・全フレーム再生・プローブ履歴を確認します。
 Windows ExplorerのアイコンはOSキャッシュにより更新が遅れる場合があります。
 
-## 公開前のゲート
+## 今後の公開前の確認項目
 
 - 全パッケージ名の空き／所有権確認、ソースとアイコンの公開権限確認。
 - 依存ライブラリのライセンス・yank・脆弱性の確認。
@@ -114,22 +156,17 @@ Windowsで`./scripts/check-release.ps1 -ArchiveBuild -Offline -AllowDirty`が完
 - 展開後の`bevyistr-ui`単体チェックに成功。
 - `mdbook build docs`と`git diff --check`に成功。
 
-この記録は未コミットの変更を含むローカル補助検証です。Windows/LinuxのCIはpush後に
-別途確認します。通常のCargo package／publish dry-run、Linuxでの実機操作確認、
-crates.io公開・公開後のインストール確認は完了していません。
-
-コミット`d7cdd16`の[Release checks](https://github.com/michioga/bevyistr/actions/runs/35496999693)では、
-Ubuntuのパッケージ展開後ビルド・テストが成功しました。Windows側は確認時点で実行中です。
-この実行には後から追加した最初のクレートのpublish dry-runは含まれません。
-ローカルでの同dry-runは、offlineではHTTP要求が必要として停止し、onlineでは下記の
-Schannelエラーで停止しました。追加したCIステップの結果は次回push後に確認します。
+この補助検証は当時の未コミット変更を含んでいました。その後のmainのCI・個別公開・
+インストール確認は冒頭の公開結果に記録しています。
 
 ### この環境での検証上の問題
 
 2026-09-19時点で、crates.io APIに対する読み取りで11個の公開予定名すべてについて
 404（未登録）を確認しました。名前の予約ではないため公開直前にも再確認します。
-WindowsのCargo/PowerShellのHTTPSはSchannelの`SEC_E_NO_CREDENTIALS`で失敗しましたが、
+エージェントのWindows実行環境ではCargo/PowerShellのHTTPSがSchannelの`SEC_E_NO_CREDENTIALS`で失敗しましたが、
 Node.jsの通常の証明書検証付きHTTPSで名前を確認できました。証明書検証は無効化していません。
+メンテナー自身のPowerShellとGitHub Actionsでは通常のdry-runに成功しており、
+PC全体で公開できない問題ではありませんでした。
 
 Cargo 1.98.1のオフラインworkspaceパッケージ作成は完了しますが、展開後検証で
 `no hash listed for bevyistr-fem-core v0.2.0`というCargo内部エラーが発生します。
@@ -137,11 +174,15 @@ Cargo 1.98.1のオフラインworkspaceパッケージ作成は完了します�
 2クレートだけの再現例でも同じエラーでした。bevyistr固有の画像や依存構成が原因ではありません。
 同じ症状は[Cargo #14396](https://github.com/rust-lang/cargo/issues/14396)でも報告されています。
 
-通常のworkspace検証は未解決として保持します。補助検証で同梱ソースを確認し、
-公開時には通常のdry-runも別途確認します。依存順の個別公開を選ぶ場合は、まず
+この一括workspace検証の問題は未解決として記録します。v0.2.0では補助検証に加え、
+依存順の通常の個別dry-run・公開で確認しました。今後も個別公開を選ぶ場合は、まず
 `cargo publish -p bevyistr-fem-core --dry-run --locked`を確認し、メンテナーが公開した
 依存がレジストリへ反映されてから、次のクレートのdry-run・公開へ進みます。
 補助検証の成功だけを根拠に、全クレートを自動公開しないでください。
+
+今回の新規クレート連続公開ではHTTP 429も発生しました。ビルド不良ではなく公開頻度の
+制限であり、サーバーが指定した時刻まで待って同じバージョンを再試行し、成功しました。
+429の回避目的でバージョンやアカウントを変えたり、連続リトライしたりしないでください。
 
 参考: [Cargo publishing](https://doc.rust-lang.org/cargo/reference/publishing.html)、
 [cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html)。
