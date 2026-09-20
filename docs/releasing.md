@@ -74,6 +74,11 @@ Cargo設定は書き換えません。第三者の依存バージョン・チェ
 
 GitHub Actionsの**Release checks**はWindows / Ubuntuでこの補助検証を行います。
 対象ブランチへのpushまたはmain宛てPRで起動し、公開・タグ作成・Pages配信はしません。
+さらに、未公開の内部依存を持たない`bevyistr-fem-core`について、通常の
+`cargo publish --dry-run --package bevyistr-fem-core --locked --target-dir target --jobs 2`
+を実行します。これは実際のレジストリへ接続する検証ですが、アップロードは行いません。
+CIへ公開用トークンを設定する必要はありません。この成功は最初の1クレートの確認であり、
+残り10クレートのdry-run成功を意味しません。
 手動実行で`native_package`を有効にすると、通常のCargo package検証も実行します。
 CI成功はビルド・自動テストの確認であり、LinuxのGPU表示・ダイアログ等の実機確認とは別です。
 
@@ -112,6 +117,12 @@ Windowsで`./scripts/check-release.ps1 -ArchiveBuild -Offline -AllowDirty`が完
 この記録は未コミットの変更を含むローカル補助検証です。Windows/LinuxのCIはpush後に
 別途確認します。通常のCargo package／publish dry-run、Linuxでの実機操作確認、
 crates.io公開・公開後のインストール確認は完了していません。
+
+コミット`d7cdd16`の[Release checks](https://github.com/michioga/bevyistr/actions/runs/35496999693)では、
+Ubuntuのパッケージ展開後ビルド・テストが成功しました。Windows側は確認時点で実行中です。
+この実行には後から追加した最初のクレートのpublish dry-runは含まれません。
+ローカルでの同dry-runは、offlineではHTTP要求が必要として停止し、onlineでは下記の
+Schannelエラーで停止しました。追加したCIステップの結果は次回push後に確認します。
 
 ### この環境での検証上の問題
 

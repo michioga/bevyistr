@@ -29,7 +29,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
@@ -56,6 +56,10 @@ jobs:
           rustc --version
       - name: Build and test packaged sources (not publication)
         run: ./scripts/check-release.ps1 -ArchiveBuild
+      # This crate has no unpublished workspace dependencies. Keep --dry-run:
+      # this workflow must never upload packages or receive a registry token.
+      - name: Dry-run first crate against crates.io (no upload)
+        run: cargo publish --dry-run --package bevyistr-fem-core --locked --target-dir target --jobs 2
       - name: Native Cargo package verification
         if: github.event_name == 'workflow_dispatch' && inputs.native_package
         run: ./scripts/check-release.ps1
