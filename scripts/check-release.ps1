@@ -1,4 +1,4 @@
-param([switch]$Offline, [switch]$AllowDirty)
+param([switch]$Offline, [switch]$AllowDirty, [switch]$ArchiveBuild)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $repoRoot
@@ -38,9 +38,15 @@ try {
     $packageArgs = @('package', '--workspace', '--locked')
     if ($Offline) { $packageArgs += '--offline' }
     if ($AllowDirty) { $packageArgs += '--allow-dirty' }
+    if ($ArchiveBuild) { $packageArgs += '--no-verify' }
     & cargo @packageArgs
-    if ($LASTEXITCODE -ne 0) { throw 'Package verification failed' }
-    Write-Host 'Packages verified locally; nothing has been published.'
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo package failed' }
+    if ($ArchiveBuild) {
+        & (Join-Path $PSScriptRoot 'verify-release-archives.ps1') -Metadata $metadata -Offline:$Offline
+        Write-Host 'Archive build/tests passed with local internal patches. Native package/dry-run remains a separate gate. Nothing published.'
+    } else {
+        Write-Host 'Cargo package verification passed; nothing has been published.'
+    }
 } finally {
     Pop-Location
 }

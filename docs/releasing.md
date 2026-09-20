@@ -35,6 +35,7 @@
   原本を更新したらこちらも同期します。起動時に読み込む外部画像ではありません。
 - WindowsのICOはビルド時に16/24/32/48/64/128/256pxで生成し、実行ファイルに埋め込みます。
   元画像の背景・余白は除去しません。ウィンドウとタスクバーにも埋め込みPNGを設定します。
+  原本PNGの背景にはアルファ透明度があり、その透明度を保持します。
 - Windows MSVCはWindows SDKの`rc.exe`を自動探索します。`RC`で明示できます。
   Windows GNUは`windres`（`WINDRES`で指定可）が必要です。
   LinuxターゲットではWindows用のリソース処理は実行しません。
@@ -58,6 +59,24 @@ PowerShell（Windowsまたはpwshを導入したLinux）:
 Offlineはキャッシュのみを使います。通常のネット接続でも検証してください。
 ワークスペース一括パッケージ検証に対応したCargoを使用します。
 
+Cargo #14396で通常の検証が停止する環境には、明示的な補助検証があります。
+
+```powershell
+./scripts/check-release.ps1 -ArchiveBuild -Offline -AllowDirty
+```
+
+このモードは`.crate`を作成後、`target/release-archives/<一意なID>/`へ展開します。
+展開した11パッケージだけでアプリをビルドし、全テストとUI単体チェックを実行します。
+内部依存だけを展開先への`[patch.crates-io]`で解決し、公開用Cargo.tomlやユーザーの
+Cargo設定は書き換えません。第三者の依存バージョン・チェックサムは元のCargo.lockで固定します。
+生成物は調査用に残します。これは通常のpackage検証やcrates.ioからのインストール成功とは
+別の確認であり、`--no-verify`だけで成功扱いにはしません。
+
+GitHub Actionsの**Release checks**はWindows / Ubuntuでこの補助検証を行います。
+対象ブランチへのpushまたはmain宛てPRで起動し、公開・タグ作成・Pages配信はしません。
+手動実行で`native_package`を有効にすると、通常のCargo package検証も実行します。
+CI成功はビルド・自動テストの確認であり、LinuxのGPU表示・ダイアログ等の実機確認とは別です。
+
 ```text
 cargo test --workspace --locked
 cargo build --package bevyistr --release --locked
@@ -80,14 +99,38 @@ Windows ExplorerのアイコンはOSキャッシュにより更新が遅れる�
   APIトークンをソースやチャットへ貼り付けないでください。
 - 公開後にクリーンな環境で`cargo install bevyistr --version 0.2.0 --locked`を検証。
 
+### ローカル検証記録（2026-09-20）
+
+Windowsで`./scripts/check-release.ps1 -ArchiveBuild -Offline -AllowDirty`が完了しました。
+
+- 全11パッケージの作成、メタデータ・ライセンス・同梱アイコン／材料の整合性確認。
+- 展開したパッケージのソースだけでアプリのビルドに成功。
+- 展開後のworkspaceテスト: 333成功、0失敗、6無視。
+- 展開後の`bevyistr-ui`単体チェックに成功。
+- `mdbook build docs`と`git diff --check`に成功。
+
+この記録は未コミットの変更を含むローカル補助検証です。Windows/LinuxのCIはpush後に
+別途確認します。通常のCargo package／publish dry-run、Linuxでの実機操作確認、
+crates.io公開・公開後のインストール確認は完了していません。
+
 ### この環境での検証上の問題
 
-2026-09-19時点ではネット接続がSchannelの`SEC_E_NO_CREDENTIALS`で失敗し、
-公開名の確認は未完了です。証明書検証を無効にして回避しないでください。
-Cargo 1.98.1ではオフラインのworkspaceパッケージ作成は完了しましたが、展開後検証で
-一時レジストリの`no hash listed for bevyistr-fem-core v0.2.0`というCargo内部エラーが
-発生しました。`--no-verify`での作成成功だけを、公開可能の根拠にしないでください。
-ネット接続・Cargo検証環境を確認し、通常のpackage/dry-runが通ってから公開します。
+2026-09-19時点で、crates.io APIに対する読み取りで11個の公開予定名すべてについて
+404（未登録）を確認しました。名前の予約ではないため公開直前にも再確認します。
+WindowsのCargo/PowerShellのHTTPSはSchannelの`SEC_E_NO_CREDENTIALS`で失敗しましたが、
+Node.jsの通常の証明書検証付きHTTPSで名前を確認できました。証明書検証は無効化していません。
+
+Cargo 1.98.1のオフラインworkspaceパッケージ作成は完了しますが、展開後検証で
+`no hash listed for bevyistr-fem-core v0.2.0`というCargo内部エラーが発生します。
+生成したインデックス・Cargo.lock・アーカイブのSHA256は一致し、外部依存のない
+2クレートだけの再現例でも同じエラーでした。bevyistr固有の画像や依存構成が原因ではありません。
+同じ症状は[Cargo #14396](https://github.com/rust-lang/cargo/issues/14396)でも報告されています。
+
+通常のworkspace検証は未解決として保持します。補助検証で同梱ソースを確認し、
+公開時には通常のdry-runも別途確認します。依存順の個別公開を選ぶ場合は、まず
+`cargo publish -p bevyistr-fem-core --dry-run --locked`を確認し、メンテナーが公開した
+依存がレジストリへ反映されてから、次のクレートのdry-run・公開へ進みます。
+補助検証の成功だけを根拠に、全クレートを自動公開しないでください。
 
 参考: [Cargo publishing](https://doc.rust-lang.org/cargo/reference/publishing.html)、
 [cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html)。
