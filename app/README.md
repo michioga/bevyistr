@@ -6,10 +6,12 @@ Select geometry in the viewport; confirm engineering data numerically. Includes
 mesh assembly, contact and boundary-condition setup, material assignment, solver
 execution, and RES / VTU / PVTU result visualization with animation and probes.
 
-## Installation (after the release is published)
+Version **0.2.0** is [available on crates.io](https://crates.io/crates/bevyistr/0.2.0).
+
+## Installation
 
 ```sh
-cargo install bevyistr --locked
+cargo install bevyistr --version 0.2.0 --locked
 bevyistr
 ```
 
