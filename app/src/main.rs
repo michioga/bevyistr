@@ -14,6 +14,8 @@ use selection::SelectionPlugin;
 use ui::UiPlugin;
 use visualization::VisualizationPlugin;
 
+mod icon;
+
 fn main() {
     let arg_path = std::env::args_os().nth(1).map(PathBuf::from);
 
@@ -86,12 +88,13 @@ fn main() {
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "bevyistr — FrontISTR Pre/Post".into(),
+                title: format!("bevyistr v{} — FrontISTR Pre/Post", env!("CARGO_PKG_VERSION")),
                 ..default()
             }),
             ..default()
         }))
         .add_plugins(WireframePlugin::default())
+        .add_systems(Update, icon::set_window_icon)
         .insert_resource(WireframeConfig {
             global: false,
             default_color: Color::srgb(0.55, 0.82, 0.95),

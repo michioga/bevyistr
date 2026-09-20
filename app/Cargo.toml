@@ -5,16 +5,27 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Viewport-first FrontISTR finite-element pre/post processor built with Bevy"
+readme = "README.md"
+keywords = ["fem", "frontistr", "bevy", "visualization"]
+categories = ["science", "visualization"]
+include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [dependencies]
 bevy = { version = "0.19", features = ["bevy_dev_tools", "debug"] }
-fem_core = { path = "../fem_core" }
-hecmw = { path = "../hecmw" }
-gmsh = { path = "../gmsh" }
-interaction = { path = "../interaction" }
-selection = { path = "../selection" }
-visualization = { path = "../visualization" }
-ui = { path = "../ui" }
-camera = {path = "../camera"}
-picking = {path = "../picking"}
-box_select = {path = "../box_select"}
+fem_core.workspace = true
+hecmw.workspace = true
+gmsh.workspace = true
+interaction.workspace = true
+selection.workspace = true
+visualization.workspace = true
+ui.workspace = true
+camera.workspace = true
+picking.workspace = true
+box_select.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+winit = { version = "0.30.13", default-features = false }
+
+[build-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "ico"] }
+find-msvc-tools = "0.1.9"

@@ -1,14 +1,22 @@
 [package]
-name = "gmsh"
+name = "bevyistr-gmsh"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Gmsh mesh import support for bevyistr"
+readme = "README.md"
+keywords = ["fem", "frontistr", "bevy", "visualization"]
+categories = ["science", "visualization"]
+include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+
+[lib]
+name = "gmsh"
 
 [dependencies]
 bevy = "0.19"
-fem_core = { path = "../fem_core" }
+fem_core.workspace = true
 
 [dev-dependencies]
-hecmw = { path = "../hecmw" }
+hecmw.workspace = true

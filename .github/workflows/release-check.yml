@@ -1,0 +1,65 @@
+name: Release checks
+
+on:
+  push:
+    branches: [main, publish_crates_io]
+    paths-ignore: ['docs/**']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['docs/**']
+  workflow_dispatch:
+    inputs:
+      native_package:
+        description: 'Also run native cargo package verification (may fail with Cargo #14396)'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+      - name: Select stable Rust
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version
+          rustc --version
+      - name: Build and test packaged sources (not publication)
+        run: ./scripts/check-release.ps1 -ArchiveBuild
+      # This crate has no unpublished workspace dependencies. Keep --dry-run:
+      # this workflow must never upload packages or receive a registry token.
+      - name: Dry-run first crate against crates.io (no upload)
+        run: cargo publish --dry-run --package bevyistr-fem-core --locked --target-dir target --jobs 2
+      - name: Native Cargo package verification
+        if: github.event_name == 'workflow_dispatch' && inputs.native_package
+        run: ./scripts/check-release.ps1

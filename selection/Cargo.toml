@@ -1,12 +1,20 @@
 [package]
-name = "selection"
+name = "bevyistr-selection"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Finite-element topology selection for bevyistr"
+readme = "README.md"
+keywords = ["fem", "frontistr", "bevy", "visualization"]
+categories = ["science", "visualization"]
+include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+
+[lib]
+name = "selection"
 
 [dependencies]
 bevy = "0.19"
-fem_core = { path = "../fem_core" }
-interaction = { path = "../interaction" }
+fem_core.workspace = true
+interaction.workspace = true
