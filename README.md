@@ -1,5 +1,7 @@
 # bevyistr
 
+<img src="assets/bevyistr.png" alt="bevyistr — rainbow finite-element mesh duck" width="160" height="160">
+
 A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR-Commons/FrontISTR), built with Rust, Bevy 0.19, and `bevy_ui`.
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).

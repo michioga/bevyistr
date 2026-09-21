@@ -31,6 +31,20 @@ mdbook serve docs --open
 
 ## スクリーンショットと動画
 
+### アプリアイコン
+
+原本はリポジトリの`assets/bevyistr.png`です。ルートREADMEは原本を参照し、
+マニュアルの「はじめに」は同一コピーの`src/assets/images/bevyistr.png`を参照します。
+画像は加工せず、HTMLの幅・高さで160pxに表示します。mdBookの生成物にも画像を含めるため、
+マニュアルの表示時にGitHubへの画像取得は不要です。
+
+原本の更新時は、アプリ用の`app/assets/bevyistr.png`とマニュアル用コピーも同期してください。
+Documentation CIは原本とマニュアル用コピーの一致を検査します。
+`app/README.md`はcrates.ioでの相対パス解決に依存しないよう、GitHub上の原本の絶対URLを
+参照します。このREADMEの変更がcrates.ioへ反映されるのは次回のバージョン公開時です。
+
+### 操作説明用の素材
+
 必要な場面ごとに、[撮影依頼](media-requests.md)へファイル名・操作・掲載先を記録します。受け渡し用の`docs/media-inbox/`に保存し、内容確認後に公開用素材を`src/assets/images/`または`src/assets/videos/`へ配置します。元動画や不要なファイルを`src/`へまとめて置かないでください。mdBookの生成物に含まれます。
 
 - 画像はPNG、動画はブラウザで再生できるMP4（H.264）を基本とします。

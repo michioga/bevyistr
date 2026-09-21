@@ -1,5 +1,7 @@
 # bevyistr
 
+<img src="https://raw.githubusercontent.com/michioga/bevyistr/main/assets/bevyistr.png" alt="bevyistr — rainbow finite-element mesh duck" width="160" height="160">
+
 Viewport-first FrontISTR finite-element pre/post processor, built with Rust and Bevy.
 
 Select geometry in the viewport; confirm engineering data numerically. Includes

@@ -1,5 +1,7 @@
 # はじめに
 
+<img src="assets/images/bevyistr.png" alt="bevyistrのアイコン：虹色の有限要素メッシュで描かれたアヒル" width="160" height="160">
+
 **bevyistr**は、FrontISTRの解析準備と結果表示を行うプリポストです。読み方は**Bevy Aistar（ベビーアイスター）**です。
 
 > 操作はビューポートで直観的に、数値と対応関係の確認は厳密に。

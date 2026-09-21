@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - 'docs/**'
+      - 'assets/bevyistr.png'
       - '.github/workflows/docs.yml'
   pull_request:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'assets/bevyistr.png'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
     inputs:
@@ -26,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Check manual icon matches the original
+        run: cmp assets/bevyistr.png docs/src/assets/images/bevyistr.png
       - name: Install mdBook
         run: cargo install mdbook --version 0.5.4 --locked --no-default-features --features search --root "$RUNNER_TEMP/mdbook"
       - name: Build manual
