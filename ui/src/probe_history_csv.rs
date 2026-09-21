@@ -243,7 +243,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         ))
         .observe(activate)
         .with_child((
-            Text::new("Export history CSV..."),
+            Text::new("Export pinned history CSV..."),
             Pickable::IGNORE,
             TextFont {
                 font_size: FontSize::Px(11.0),

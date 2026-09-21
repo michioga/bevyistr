@@ -37,11 +37,13 @@ Build locally with `mdbook build docs`, or preview with `mdbook serve docs --ope
 
 ## Current capabilities
 
-Development toward **0.3.0** adds **Export history CSV...** below the pinned probe's
+Development toward **0.3.0** adds **Export pinned history CSV...** below the pinned probe's
 history plot. It saves all loaded frames of the selected part-local node/element
 and field, with separate Frame / Step / Time columns and explicit missing-value
 status. Exported values are independent of deformation scale and contour colors.
-This addition is **not included in the published 0.2.0 package**. See the
+It also adds explicit comparison of up to four part-local probes in one history
+plot with shared axes, stable colors, and individual removal. CSV export still
+saves only the current pinned probe. These additions are **not included in the published 0.2.0 package**. See the
 [probe and CSV guide (日本語)](docs/src/results/probe.md).
 
 ### Model import and assembly

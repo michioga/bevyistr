@@ -34,11 +34,13 @@
 - データ: 円柱など、複数フレームで値が変わる公開可能な結果。
 - 操作: 停止中に表面をクリックして固定し、`>`で途中のフレームへ進めます。
 - 写してほしいもの: PINNED欄の部品・対象ID・物理量、HISTORYグラフの黄色い目印、モデル。
-- 0.3.0向け開発版ではCSV保存の動作確認後に撮影し、**Export history CSV...**と**Saved:**も含めてください。保存先は個人名・機密情報を含まないパスを使ってください。
+- 0.3.0向け開発版ではCSV保存の動作確認後に撮影し、**Export pinned history CSV...**と**Saved:**も含めてください。保存先は個人名・機密情報を含まないパスを使ってください。
 - 保存先: `D:\Work\bevyistr\docs\media-inbox\results-probe-history.png`
 - 公開用配置予定: `src/assets/images/results-probe-history.png`
 
 ## 後で依頼する候補（今回は不要）
+
+- 複数プローブ比較：動作確認後に`results-probe-comparison.png`を依頼予定。円柱などの同じ物理量について2〜3対象を追加し、色付きID一覧・HISTORY・途中フレームの黄色線・モデルを写してください。保存先は`D:\Work\bevyistr\docs\media-inbox\results-probe-comparison.png`です。
 
 - 左→右／右→左ドラッグによる選択の違い。
 - オブジェクト→材料→決定と、材料色の確認。

@@ -1,4 +1,4 @@
-//! Cached, read-only history for a single pinned part-local result identity.
+//! Cached histories with one shared range, for the pin or explicit comparison.
 use crate::{
     layout::SidebarPage,
     result_probe_pin::{ProbePin, Target},
@@ -245,6 +245,109 @@ mod tests {
         }
         assert!(marker_position(&Marker::Point, &history, 2).is_none());
     }
+
+    #[test]
+    fn comparison_uses_shared_range_stable_colors_and_cached_curves_without_a_pin() {
+        use crate::probe_comparison::{COLORS, Comparison, Entry};
+        let mut comparison = Comparison::default();
+        comparison.entries = vec![
+            Entry {
+                slot: 1,
+                part: 0,
+                target: target(),
+            },
+            Entry {
+                slot: 3,
+                part: 1,
+                target: target(),
+            },
+        ];
+        let mut app = App::new();
+        app.insert_resource(SidebarPage::Results)
+            .init_resource::<ProbePin>() // clearing the current pin must not hide comparison
+            .insert_resource(comparison)
+            .insert_resource(FemResultSet {
+                by_mesh: vec![
+                    vec![step(0., Some(-10.)), step(1., Some(0.)), step(2., Some(5.))],
+                    vec![step(0., Some(20.)), step(1., None), step(2., Some(40.))],
+                ],
+                ..default()
+            })
+            .insert_resource(VisualizationSettings {
+                contour: Some(visualization::ContourSettings {
+                    mesh_index: 0,
+                    step_index: 0,
+                    field_name: "P".into(),
+                    show_deformation: true,
+                    displacement_field: "U".into(),
+                    deformation_scale: 1.,
+                }),
+                ..default()
+            })
+            .init_resource::<HistoryCache>()
+            .init_resource::<Assets<Image>>()
+            .add_systems(Startup, |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(spawn);
+            })
+            .add_systems(Update, update);
+        app.update();
+        let cache = app.world().resource::<HistoryCache>();
+        let first = cache.history.as_ref().unwrap();
+        assert_eq!(first.range, Some((-10., 40.)));
+        assert_eq!(cache.others[0].range, first.range);
+        assert_eq!(cache.others[0].values, vec![Some(20.), None, Some(40.)]);
+        let image = cache.image.clone().unwrap();
+        let pixels = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(&image)
+            .unwrap()
+            .data
+            .as_ref()
+            .unwrap();
+        for color in [COLORS[1], COLORS[3]] {
+            assert!(pixels.chunks_exact(4).any(|p| p == color));
+        }
+        assert!(!pixels.chunks_exact(4).any(|p| p == COLORS[0]));
+        for frame in [1, 2, 0] {
+            app.world_mut()
+                .resource_mut::<VisualizationSettings>()
+                .contour
+                .as_mut()
+                .unwrap()
+                .step_index = frame;
+            app.world_mut().resource_mut::<FemResultSet>().active = Some(fem_core::ActiveResult {
+                mesh_index: 0,
+                step_index: frame,
+                field_name: "P".into(),
+            });
+            app.insert_resource(ProbePin::for_test(0, target()));
+            app.update();
+            assert_eq!(app.world().resource::<HistoryCache>().builds, 1);
+        }
+        // Comparison uses the vertical current-frame marker, not one misleading point.
+        let mut marker_nodes = app.world_mut().query::<(&Marker, &Node)>();
+        assert!(
+            marker_nodes
+                .iter(app.world())
+                .any(|(kind, node)| matches!(kind, Marker::Point) && node.display == Display::None)
+        );
+        app.world_mut()
+            .resource_mut::<Comparison>()
+            .entries
+            .remove(0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<HistoryCache>()
+                .history
+                .as_ref()
+                .unwrap()
+                .range,
+            Some((20., 40.))
+        );
+        assert_eq!(app.world().resource::<Assets<Image>>().len(), 1);
+    }
 }
 
 impl History {
@@ -313,26 +416,30 @@ impl History {
                 [45, 60, 69, 255],
             );
         }
+        self.draw(&mut pixels, CURVE);
+        pixels
+    }
+
+    fn draw(&self, pixels: &mut [u8], color: [u8; 4]) {
         for i in 0..self.values.len() {
             let Some(point) = self.point(i) else { continue };
             if i > 0 {
                 if let Some(previous) = self.point(i - 1) {
-                    line(&mut pixels, previous, point, CURVE);
+                    line(pixels, previous, point, color);
                 }
             }
             // Also show isolated and single-frame samples; never bridge gaps.
             for dx in -2..=2 {
                 for dy in -2..=2 {
                     pixel(
-                        &mut pixels,
+                        pixels,
                         point.x.round() as i32 + dx,
                         point.y.round() as i32 + dy,
-                        CURVE,
+                        color,
                     );
                 }
             }
         }
-        pixels
     }
 }
 
@@ -355,12 +462,14 @@ fn line(pixels: &mut [u8], start: Vec2, end: Vec2, color: [u8; 4]) {
 struct Key {
     selection: (u64, usize, Target),
     field: String,
+    comparison: Vec<crate::probe_comparison::Entry>,
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct HistoryCache {
     key: Option<Key>,
     history: Option<History>,
+    others: Vec<History>,
     image: Option<Handle<Image>>,
     #[cfg(test)]
     builds: usize,
@@ -477,6 +586,7 @@ pub(crate) fn update(
     pin: Res<ProbePin>,
     results: Res<FemResultSet>,
     settings: Res<VisualizationSettings>,
+    comparison: Option<Res<crate::probe_comparison::Comparison>>,
     mut cache: ResMut<HistoryCache>,
     mut images: ResMut<Assets<Image>>,
     mut roots: Query<&mut Node, (With<HistoryRoot>, Without<Marker>)>,
@@ -484,7 +594,15 @@ pub(crate) fn update(
     mut labels: Query<(&Label, &mut Text)>,
     mut markers: Query<(&Marker, &mut Node), Without<HistoryRoot>>,
 ) {
-    let selection = pin.selection().filter(|_| *page == SidebarPage::Results);
+    let entries = comparison
+        .as_ref()
+        .map(|c| c.entries.as_slice())
+        .unwrap_or(&[]);
+    let selection = entries
+        .first()
+        .map(|e| (comparison.as_ref().unwrap().revision, e.part, e.target))
+        .or_else(|| pin.selection())
+        .filter(|_| *page == SidebarPage::Results);
     let contour = settings.contour.as_ref();
     let visible = selection.is_some() && contour.is_some();
     for mut root in &mut roots {
@@ -500,18 +618,48 @@ pub(crate) fn update(
     let (Some(selection), Some(contour)) = (selection, contour) else {
         cache.key = None;
         cache.history = None;
+        cache.others.clear();
         return;
     };
     let key = Key {
         selection,
         field: contour.field_name.clone(),
+        comparison: entries.to_vec(),
     };
     if cache.key.as_ref() != Some(&key) {
         let steps = results
             .by_mesh
             .get(selection.1)
             .map_or(&[][..], Vec::as_slice);
-        let history = History::build(steps, selection.2, &key.field);
+        let mut history = History::build(steps, selection.2, &key.field);
+        let mut others: Vec<_> = entries
+            .iter()
+            .skip(1)
+            .map(|e| {
+                History::build(
+                    results.by_mesh.get(e.part).map_or(&[][..], Vec::as_slice),
+                    e.target,
+                    &key.field,
+                )
+            })
+            .collect();
+        let range = others
+            .iter()
+            .filter_map(|h| h.range)
+            .fold(history.range, |range, (lo, hi)| {
+                Some(range.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))))
+            });
+        history.range = range;
+        for other in &mut others {
+            other.range = range;
+        }
+        let mut pixels = history.pixels();
+        if let Some(first) = entries.first() {
+            history.draw(&mut pixels, crate::probe_comparison::COLORS[first.slot]);
+        }
+        for (other, entry) in others.iter().zip(entries.iter().skip(1)) {
+            other.draw(&mut pixels, crate::probe_comparison::COLORS[entry.slot]);
+        }
         let image = Image::new(
             Extent3d {
                 width: WIDTH as u32,
@@ -519,7 +667,7 @@ pub(crate) fn update(
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
-            history.pixels(),
+            pixels,
             TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::default(),
         );
@@ -528,7 +676,12 @@ pub(crate) fn update(
         } else {
             cache.image = Some(images.add(image));
         }
-        let count = history.values.iter().flatten().count();
+        let count = history.values.iter().flatten().count()
+            + others
+                .iter()
+                .map(|h| h.values.iter().flatten().count())
+                .sum::<usize>();
+        let samples = steps.len() * (others.len() + 1);
         for (kind, mut text) in &mut labels {
             let value = match kind {
                 Label::Top => match history.range {
@@ -537,11 +690,10 @@ pub(crate) fn update(
                     None => "HISTORY | No finite values for this target/field".into(),
                 },
                 Label::Bottom => match history.range {
-                    Some((lo, _)) => format!(
-                        "Min: {lo:.6e} | {count}/{} samples | model units",
-                        steps.len()
-                    ),
-                    None => format!("0/{} samples; missing values are not zero", steps.len()),
+                    Some((lo, _)) => {
+                        format!("Min: {lo:.6e} | {count}/{} samples | model units", samples)
+                    }
+                    None => format!("0/{samples} samples; missing values are not zero"),
                 },
                 Label::Axis => {
                     let lo = history.x.first().copied().unwrap_or(0.0);
@@ -562,6 +714,7 @@ pub(crate) fn update(
             text.set_if_neq(Text::new(value));
         }
         cache.history = Some(history);
+        cache.others = others;
         cache.key = Some(key);
         #[cfg(test)]
         {
@@ -577,7 +730,11 @@ pub(crate) fn update(
     }
     let history = cache.history.as_ref().unwrap();
     for (kind, mut node) in &mut markers {
-        let point = marker_position(kind, history, contour.step_index);
+        let point = if !entries.is_empty() && matches!(kind, Marker::Point) {
+            None
+        } else {
+            marker_position(kind, history, contour.step_index)
+        };
         let mut next = node.clone();
         next.display = if point.is_some() {
             Display::Flex

@@ -53,7 +53,7 @@ impl Target {
         value.is_finite().then_some(value)
     }
 
-    fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         match self {
             Self::Node { id, .. } => format!("Node {}", id.0),
             Self::Element { id, .. } => format!("Element {}", id.0),
@@ -164,6 +164,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             },
             TextColor(Color::WHITE),
         ));
+    crate::probe_comparison::spawn(parent);
     crate::probe_history::spawn(parent);
     crate::probe_history_csv::spawn(parent);
 }
