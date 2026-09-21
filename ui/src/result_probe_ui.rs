@@ -26,6 +26,7 @@ pub(crate) fn register(app: &mut App) {
     app.init_resource::<crate::result_probe_pin::ProbePin>()
         .init_resource::<Assets<Image>>()
         .init_resource::<crate::probe_history::HistoryCache>()
+        .init_resource::<crate::probe_history_csv::ExportState>()
         .add_systems(Startup, spawn)
         .add_systems(
             PostUpdate,
@@ -33,6 +34,7 @@ pub(crate) fn register(app: &mut App) {
                 update,
                 crate::result_probe_pin::update,
                 crate::probe_history::update,
+                crate::probe_history_csv::update,
             )
                 .chain()
                 .after(bevy::transform::TransformSystems::Propagate),

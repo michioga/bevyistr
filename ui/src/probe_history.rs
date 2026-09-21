@@ -260,9 +260,9 @@ impl History {
             .enumerate()
             .map(|(i, s)| if timed { s.time as f64 } else { (i + 1) as f64 })
             .collect();
-        let values: Vec<_> = steps
-            .iter()
-            .map(|s| target.value(s.field_by_name(field)))
+        let values: Vec<_> = crate::probe_history_data::samples(steps, target, field)
+            .into_iter()
+            .map(|sample| sample.value)
             .collect();
         let range = values.iter().flatten().fold(None, |range, &v| {
             let v = v as f64;

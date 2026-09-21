@@ -34,6 +34,7 @@
 - データ: 円柱など、複数フレームで値が変わる公開可能な結果。
 - 操作: 停止中に表面をクリックして固定し、`>`で途中のフレームへ進めます。
 - 写してほしいもの: PINNED欄の部品・対象ID・物理量、HISTORYグラフの黄色い目印、モデル。
+- 0.3.0向け開発版ではCSV保存の動作確認後に撮影し、**Export history CSV...**と**Saved:**も含めてください。保存先は個人名・機密情報を含まないパスを使ってください。
 - 保存先: `D:\Work\bevyistr\docs\media-inbox\results-probe-history.png`
 - 公開用配置予定: `src/assets/images/results-probe-history.png`
 

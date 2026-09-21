@@ -165,6 +165,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             TextColor(Color::WHITE),
         ));
     crate::probe_history::spawn(parent);
+    crate::probe_history_csv::spawn(parent);
 }
 
 fn describe(
