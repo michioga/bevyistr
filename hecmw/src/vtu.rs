@@ -309,6 +309,44 @@ mod tests {
         )
     }
     #[test]
+    fn eigenvalue_is_not_mistaken_for_physical_time_or_nodal_data() {
+        let source = file("<DataArray Name=\"DISPLACEMENT\" NumberOfComponents=\"3\">1 2 3 -4 5 6</DataArray>")
+            .replace("<UnstructuredGrid>", "<UnstructuredGrid><FieldData><DataArray Name=\"EIGENVALUE\">7830692</DataArray></FieldData>");
+        let vtk = parse_vtu(&source, &[NodeId(1), NodeId(2)]).unwrap();
+        let native = crate::native_result::NativeResult::parse(
+            "*fstrresult 2.0\n*comment\neigen_result\n*global\n1\n1\nEIGENVALUE\n7830692\n*data\n2 0\n1 0\n3\nDISPLACEMENT\n1\n1 2 3\n2\n-4 5 6\n"
+        )
+        .unwrap()
+        .nodal_step(&[NodeId(1), NodeId(2)], 3)
+        .unwrap();
+        assert_eq!(vtk.time, 0.);
+        assert_eq!(native.time, 0.);
+        assert_eq!(
+            native.field_by_name("Displacement"),
+            vtk.field_by_name("Displacement")
+        );
+        // EIGENVALUE is global metadata, not a spatial contour or a timestamp.
+        assert!(vtk.field_by_name("EIGENVALUE").is_none());
+    }
+
+    #[test]
+    fn temperature_only_results_preserve_node_order_without_inventing_displacement() {
+        let vtk = parse_vtu(
+            &file("<DataArray Name=\"TEMPERATURE\">28.5 46</DataArray>"),
+            &[NodeId(2), NodeId(4)],
+        )
+        .unwrap();
+        let native = crate::native_result::NativeResult::parse(
+            "*fstrresult 2.0\n*comment\nnonsteady_heat_result\n*global\n1\n1\nTOTALTIME\n0\n*data\n2 0\n1 0\n1\nTEMPERATURE\n4\n46\n2\n28.5\n"
+        )
+        .unwrap()
+        .nodal_step(&[NodeId(2), NodeId(4)], 1)
+        .unwrap();
+        assert_eq!(native.fields, vtk.fields);
+        assert_eq!(vtk.fields.len(), 1);
+        assert!(vtk.field_by_name("Displacement").is_none());
+    }
+    #[test]
     fn tensor_and_unknown_components_are_preserved_in_order() {
         let src = file(
             "<DataArray Name=\"NodalSTRESS\" NumberOfComponents=\"6\" format=\"ascii\">1 2 3 4 5 6 11 12 13 14 15 16</DataArray><DataArray Name=\"CustomPair\" NumberOfComponents=\"2\">7 8 9 10</DataArray>",

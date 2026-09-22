@@ -38,9 +38,14 @@
 - 保存先: `D:\Work\bevyistr\docs\media-inbox\results-probe-history.png`
 - 公開用配置予定: `src/assets/images/results-probe-history.png`
 
-## 後で依頼する候補（今回は不要）
+## 4. 複数プローブ比較（受領・掲載済み）
 
-- 複数プローブ比較：動作確認後に`results-probe-comparison.png`を依頼予定。円柱などの同じ物理量について2〜3対象を追加し、色付きID一覧・HISTORY・途中フレームの黄色線・モデルを写してください。保存先は`D:\Work\bevyistr\docs\media-inbox\results-probe-comparison.png`です。
+- 2026-09-22受領：`media-inbox/results-probe-comparison.png`。
+- 公開用に変更せずコピー：`src/assets/images/results-probe-comparison.png`。
+- 掲載先：[複数対象の比較](src/results/probe.md)。Part 1のNode 103／949、NodalMISES、最終フレームの表示例。
+- 静止画で確認した範囲は2曲線・色付きID・値の対応です。再生追従やRemove操作の証明とは区別します。
+
+## 後で依頼する候補（今回は不要）
 
 - 左→右／右→左ドラッグによる選択の違い。
 - オブジェクト→材料→決定と、材料色の確認。
