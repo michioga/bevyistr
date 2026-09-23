@@ -10,17 +10,43 @@
 
 2026-09-23、`feat/eigen-result-metadata`で通常テスト354成功・0失敗・8スキップ。
 別途チュートリアル7テストを実行し、springの全5モードをRES／VTKで数値照合しました。
-以下の実画面確認は未実施です。
+提供画像`results-eigen-mode.png`でFrame 3/5、Mode 3、Eigenvalue 3.260034e7、
+時刻ではない旨の説明、変位コンター（All frames、Deformation ON、倍率4.50）を確認しました。
+続いて提供されたRESの画面でNode 8254のPINNEDとモード順のHISTORYを確認しました。
+別の固定対象Node 30138のCSVは元のRES全5ファイルと照合済みです。
+静止画で分からない連続操作は未確認のまま残します。
 
 - [ ] `15_eigen_spring/spring_vis_psf.0001.pvtu`を開き、Frame 1/5、Mode 1、Eigenvalue約7.830692e6と表示される。Time 0とは表示しない。
 - [ ] `>`／`>|`でMode 2〜5へ移動し、固有値も変わる。Playはモード切替であり、振動波形と誤解しない説明が出る。
 - [ ] コンター成分・変形ON/OFF・倍率を切り替えても、Mode／Eigenvalueが変わらない。
-- [ ] 表面ホバー・クリック固定でもMode／Eigenvalueが出る。HISTORYはMode/frame sequence (not time)となる。
-- [ ] 履歴CSVの全5行で`frame_kind=mode`、`mode=1..5`、固有値が記録され、時刻欄は空欄・`time_status=not_applicable_for_mode`になる。
+- [x] RESの固定プローブにMode／Eigenvalueが出る。Node 8254のHISTORYはMode/frame sequence (not time)、5/5 samplesで、3番目に黄色い目印を表示する（提供画像）。
+- [ ] ホバーでもMode／Eigenvalueが出る。フレーム切替で固定対象を維持し、値・黄色の目印が追従する。
+- [x] Node 30138の履歴CSV全5行で`frame_kind=mode`、`mode=1..5`、固有値が記録され、時刻欄は空欄・`time_status=not_applicable_for_mode`になる。固有値・変位の大きさを元のRESと照合済み。
 - [ ] `spring.res.0.1`と対応する`spring.msh`を開いても同じ導線で表示できる。VTKとRESの記録桁数の違いをエラーにしない。
 - [ ] 熱・流体・通常の時間系列では従来のStep／Time表示とCSV値が維持され、モードと誤判定しない。
 
 固有値をHzへ換算しません。画面は表示桁に丸めますが、CSVは保持した`f64`値を保存します。
+
+## 次の実機確認：熱解析
+
+既存の`16_heat_block`出力を使用し、ソルバーの再実行や入力ファイルの変更は不要です。
+読み込みの自動検証では37,386節点・32,160要素、1フレーム、TEMPERATUREの値域20〜100を確認済みです。
+単位を推測して℃などとは表示しません。
+
+1. ResultsのOpen Resultsから`16_heat_block/block_vis_psf.0001.pvtu`を直接開く。
+2. Display fieldで`TEMPERATURE`を選択し、凡例とMin／Maxが20〜100であることを確認する。
+3. 表面をクリックして固定し、温度値と1サンプルのHISTORYを確認する。
+4. Deformationがunavailableで、1フレームのPlay・前後移動が無効であることを確認する。
+5. CSVを保存する。1行、`frame_kind=step`、`mode`／`eigenvalue`は空欄、Timeはこのデータでは0となる。
+
+- [ ] PVTUを直接開いてTEMPERATUREコンター・凡例20〜100を表示できる。
+- [ ] 固定プローブが温度値・1サンプルの履歴を表示する。固有値のMode表示にならない。
+- [ ] 変位なし・1フレームの操作制限が分かる。
+- [ ] 保存CSVの対象ID・温度・ステップ情報を元の結果と照合する。
+- [ ] 任意の追加確認：`block.res.0.1`と`block.msh`でも温度を表示できる。
+
+独立したPVTUとRESでは節点IDの体系が異なる場合があるため、同じ番号だけで対象を同一視しません。
+CSV照合時は、どちらの結果を開いたかも記録します。撮影手順は[media-requests.md](media-requests.md)を参照してください。
 
 ## 0.3.0向け：プローブ比較
 

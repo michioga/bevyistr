@@ -45,14 +45,22 @@
 - 掲載先：[複数対象の比較](src/results/probe.md)。Part 1のNode 103／949、NodalMISES、最終フレームの表示例。
 - 静止画で確認した範囲は2曲線・色付きID・値の対応です。再生追従やRemove操作の証明とは区別します。
 
-## 5. 固有値解析のモード表示（動作確認後）
+## 5. 固有値解析のモード表示（受領・掲載済み）
 
 - 保存先: `D:\Work\bevyistr\docs\media-inbox\results-eigen-mode.png`
 - データ: `15_eigen_spring/spring_vis_psf.0001.pvtu`の系列。
-- 操作: Mode 2〜5のいずれかで停止し、表面をクリックして固定します。
-- 写してほしいもの: springのモデル、Mode／Eigenvalue、PINNEDとHISTORYのMode/frame sequence (not time)。必要ならウィンドウを縦に広げてください。
-- 掲載先: [連番とアニメーション](src/results/animation.md)。公開用配置は`src/assets/images/results-eigen-mode.png`を予定しています。
-- 撮影は動作確認後で構いません。現在は未受領・未掲載です。
+- 2026-09-23受領。変更せず`src/assets/images/results-eigen-mode.png`へコピーし、[連番とアニメーション](src/results/animation.md)に掲載しました。
+- 確認範囲: Frame 3/5、Mode 3、Eigenvalue 3.260034e7、モード列の説明、変位コンター、All frames、変形倍率4.50。
+- プローブは未固定です。HISTORY・CSV・連続操作の確認とは区別します。掲載画像の撮り直しは不要です。
+
+## 6. 熱解析の温度・固定プローブ（次の確認）
+
+- 保存先: `D:\Work\bevyistr\docs\media-inbox\results-heat-probe.png`
+- データ: `16_heat_block/block_vis_psf.0001.pvtu`を直接開き、`TEMPERATURE`を選びます。
+- 操作: 表面をクリックして固定します。
+- 写してほしいもの: 温度コンター・凡例、PINNEDの部品／節点IDと温度、HISTORYの1サンプル、Deformation unavailable。スクロールが必要なら固定プローブ周辺を優先してください。
+- CSVも保存し、そのパスを教えてください。スクリーンショットと同じ固定対象のまま保存すると照合しやすくなります。
+- 未受領・未掲載です。温度の単位を推測して画像へ追記しないでください。
 
 ## 後で依頼する候補（今回は不要）
 
