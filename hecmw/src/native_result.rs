@@ -14,6 +14,7 @@ struct Block {
 #[derive(Clone, Debug)]
 pub struct NativeResult {
     time: Option<f32>,
+    eigenvalue: Option<f64>,
     nodes: Block,
     elements: Block,
 }
@@ -94,6 +95,7 @@ impl NativeResult {
             );
         }
         let mut time = None;
+        let mut eigenvalue = None;
         let remainder = lines.collect::<Vec<_>>().join("\n");
         let data = if header.split_whitespace().nth(1).is_some() {
             if header.split_whitespace().nth(1) != Some("2.0") {
@@ -116,6 +118,17 @@ impl NativeResult {
             let count = tokens.count()?;
             let layout = tokens.layout(count)?;
             for (name, width) in layout {
+                if name.eq_ignore_ascii_case("EIGENVALUE") {
+                    if width != 1 || eigenvalue.is_some() {
+                        return Err("EIGENVALUE must be a unique scalar".into());
+                    }
+                    let token = tokens.next()?;
+                    let value: f64 = token.replace(['D', 'd'], "E").parse()
+                        .map_err(|_| "Invalid EIGENVALUE")?;
+                    if !value.is_finite() { return Err("Non-finite EIGENVALUE".into()); }
+                    eigenvalue = Some(value);
+                    continue;
+                }
                 for component in 0..width {
                     let value = tokens.number()?;
                     if name.eq_ignore_ascii_case("TOTALTIME") && component == 0 {
@@ -145,12 +158,16 @@ impl NativeResult {
         }
         Ok(Self {
             time,
+            eigenvalue,
             nodes,
             elements,
         })
     }
 
     pub fn merge(&mut self, other: Self) -> Result<(), String> {
+        let a = StepResult { eigenvalue: self.eigenvalue, ..Default::default() };
+        let b = StepResult { eigenvalue: other.eigenvalue, ..Default::default() };
+        if !a.same_eigenmode(&b) { return Err("MPI result eigenvalues disagree".into()); }
         fn close(a: f32, b: f32) -> bool {
             (a - b).abs() <= 1e-7 + 1e-5 * a.abs().max(b.abs())
         }
@@ -394,6 +411,7 @@ impl NativeResult {
         Ok(StepResult {
             step,
             time: self.time.unwrap_or(0.0),
+            eigenvalue: self.eigenvalue,
             fields,
         })
     }
@@ -403,6 +421,20 @@ impl NativeResult {
 mod tests {
     use super::*;
     const A: &str = "*fstrresult 2.0\n*comment\nstatic\n*global\n1\n1\nTOTALTIME\n1.25D+0\n*data\n2 1\n2 1\n3 1\nDISPLACEMENT\nMISES\n10\n1 2 3 9\n20\n4 5 6 10\n1\nElementMISES\n50\n8\n";
+    #[test]
+    fn eigen_metadata_precision_and_mpi_consistency() {
+        let source = A.replace("TOTALTIME\n1.25D+0", "EIGENVALUE\n7.8306921036862833D+006");
+        let raw = NativeResult::parse(&source).unwrap();
+        assert_eq!(raw.eigenvalue,Some(7.8306921036862833e6));
+        raw.clone().merge(raw.clone()).unwrap();
+        assert!(raw.clone().merge(NativeResult::parse(A).unwrap()).is_err());
+        assert!(raw.clone().merge(NativeResult::parse(&source.replace("7.8306921036862833D+006", "42")).unwrap()).is_err());
+        for value in ["NaN", "inf", "bad"] {
+            assert!(NativeResult::parse(&source.replace("7.8306921036862833D+006",value)).is_err());
+        }
+        assert!(NativeResult::parse(&source.replace("1\n1\nEIGENVALUE", "1\n2\nEIGENVALUE")).is_err());
+        assert!(NativeResult::parse(&source.replace("1\n1\nEIGENVALUE\n7.8306921036862833D+006", "2\n1 1\nEIGENVALUE EIGENVALUE\n1 1")).is_err());
+    }
     #[test]
     fn element_fields_keep_ids_components_and_owner_values() {
         let raw = NativeResult::parse(A).unwrap();

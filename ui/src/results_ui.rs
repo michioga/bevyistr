@@ -93,7 +93,8 @@ pub(crate) fn update_result_stats_text(
     if let Some(active) = &results.active {
         if let Some(steps) = results.by_mesh.get(active.mesh_index) {
             if let Some(step) = steps.get(active.step_index) {
-                text.push_str(&format!("\nFrame {}/{} | Step {} | Time {:.6e}", active.step_index+1, steps.len(), step.step, step.time));
+                text.push_str(&format!("\nFrame {}/{} | {}", active.step_index+1, steps.len(), step.frame_description()));
+                if step.eigenvalue.is_some() { text.push_str("\nMode sequence; not a time animation"); }
             }
         }
     }
@@ -281,8 +282,8 @@ mod tests {
         let mut app=App::new();
         let mut results=FemResultSet::default();
         results.by_mesh=vec![vec![
-            fem_core::StepResult {step:0,time:0.,fields:vec![fem_core::ResultField::NodeScalar{name:"S".into(),values:vec![0.],min:0.,max:0.}]},
-            fem_core::StepResult {step:5000,time:0.005,fields:vec![fem_core::ResultField::NodeScalar{name:"S".into(),values:vec![10.],min:10.,max:10.}]},
+            fem_core::StepResult {step:0,time:0.,fields:vec![fem_core::ResultField::NodeScalar{name:"S".into(),values:vec![0.],min:0.,max:0.}],..default()},
+            fem_core::StepResult {step:5000,time:0.005,fields:vec![fem_core::ResultField::NodeScalar{name:"S".into(),values:vec![10.],min:10.,max:10.}],..default()},
         ]];
         results.activate_first();
         let mut settings=visualization::VisualizationSettings::default();
@@ -298,5 +299,11 @@ mod tests {
         app.world_mut().get_mut::<SliderState>(slider).unwrap().value=0.;
         app.update();
         assert!(app.world().get::<Text>(label).unwrap().contains("Frame 1/2 | Step 0"));
+        app.world_mut().resource_mut::<FemResultSet>().by_mesh[0][0].eigenvalue=Some(7830692.);
+        app.update();
+        let text=app.world().get::<Text>(label).unwrap();
+        assert!(text.contains("Mode 0 | Eigenvalue"));
+        assert!(text.contains("not a time animation"));
+        assert!(!text.contains("Time 0"));
     }
 }

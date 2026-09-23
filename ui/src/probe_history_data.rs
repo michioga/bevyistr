@@ -6,6 +6,7 @@ use fem_core::{ResultField, StepResult};
 pub(crate) struct Sample {
     pub step: u32,
     pub time: Option<f32>,
+    pub eigenvalue: Option<f64>,
     pub value: Option<f32>,
     pub quantity: &'static str,
 }
@@ -19,7 +20,8 @@ pub(crate) fn samples(steps: &[StepResult], target: Target, field: &str) -> Vec<
                 step: step.step,
                 // The reader uses zero for missing time. Preserve that zero,
                 // without claiming that it is a measured time in seconds.
-                time: step.time.is_finite().then_some(step.time),
+                time: (step.eigenvalue.is_none() && step.time.is_finite()).then_some(step.time),
+                eigenvalue: step.eigenvalue,
                 value: target.value(field),
                 quantity: match field {
                     Some(ResultField::NodeVector { .. }) => "magnitude",

@@ -191,6 +191,7 @@ mod tests {
         results.by_mesh = vec![
             (0..count)
                 .map(|i| fem_core::StepResult {
+                    eigenvalue: None,
                     step: (i * 5000) as u32,
                     time: i as f32 * 0.25,
                     fields: vec![fem_core::ResultField::NodeScalar {

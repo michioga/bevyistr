@@ -6,6 +6,22 @@
 [高度なモデルの検証記録](advanced-results-verification.md)を参照してください。
 自動数値照合と実画面の確認を区別して記録しています。
 
+## 0.3.0向け：固有値メタデータ
+
+2026-09-23、`feat/eigen-result-metadata`で通常テスト354成功・0失敗・8スキップ。
+別途チュートリアル7テストを実行し、springの全5モードをRES／VTKで数値照合しました。
+以下の実画面確認は未実施です。
+
+- [ ] `15_eigen_spring/spring_vis_psf.0001.pvtu`を開き、Frame 1/5、Mode 1、Eigenvalue約7.830692e6と表示される。Time 0とは表示しない。
+- [ ] `>`／`>|`でMode 2〜5へ移動し、固有値も変わる。Playはモード切替であり、振動波形と誤解しない説明が出る。
+- [ ] コンター成分・変形ON/OFF・倍率を切り替えても、Mode／Eigenvalueが変わらない。
+- [ ] 表面ホバー・クリック固定でもMode／Eigenvalueが出る。HISTORYはMode/frame sequence (not time)となる。
+- [ ] 履歴CSVの全5行で`frame_kind=mode`、`mode=1..5`、固有値が記録され、時刻欄は空欄・`time_status=not_applicable_for_mode`になる。
+- [ ] `spring.res.0.1`と対応する`spring.msh`を開いても同じ導線で表示できる。VTKとRESの記録桁数の違いをエラーにしない。
+- [ ] 熱・流体・通常の時間系列では従来のStep／Time表示とCSV値が維持され、モードと誤判定しない。
+
+固有値をHzへ換算しません。画面は表示桁に丸めますが、CSVは保持した`f64`値を保存します。
+
 ## 0.3.0向け：プローブ比較
 
 2026-09-21、Windowsの`feat/probe-comparison`作業ツリーで

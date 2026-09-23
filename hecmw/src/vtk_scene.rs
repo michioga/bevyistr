@@ -184,6 +184,7 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
         }
         let mut seen = std::collections::HashSet::new();
         let wrapper_time = vtk_time(&source)?;
+        let wrapper_eigen = crate::vtu::eigenvalue(&source).map_err(|e| e.to_string())?;
         pieces
             .iter()
             .map(|s| {
@@ -197,6 +198,7 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
                 let text = std::fs::read_to_string(&file)
                     .map_err(|e| format!("{}: {e}", file.display()))?;
                 let (mesh, mut step) = parse_scene_piece(&text).map_err(|e| format!("{s}: {e}"))?;
+                crate::vtu::apply_wrapper_eigenvalue(wrapper_eigen, &mut step).map_err(|e| format!("{s}: {e}"))?;
                 if let Some(time) = wrapper_time {
                     if vtk_time(&text)?
                         .is_some_and(|t| (t - time).abs() > 1e-6 * time.abs().max(1.0))
@@ -214,14 +216,7 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
 }
 
 fn vtk_time(source: &str) -> Result<Option<f32>, String> {
-    let Some(block) = section(source, "FieldData").map_err(|e| e.to_string())? else {
-        return Ok(None);
-    };
-    Ok(arrays(block)
-        .map_err(|e| e.to_string())?
-        .iter()
-        .find(|a| matches!(a.name.as_str(), "TimeValue" | "TOTALTIME") && a.values.len() == 1)
-        .map(|a| a.values[0]))
+    crate::vtu::metadata_time(source).map_err(|e| e.to_string())
 }
 
 pub fn load_scene(path: &Path) -> Result<ResultScene, String> {

@@ -109,10 +109,9 @@ fn describe(part: usize, step: &fem_core::StepResult, field: &str, hit: &ProbeHi
         "Value"
     };
     format!(
-        "Part {} | Element {element}\n{target}\n{field}\n{quantity}: {value}\nStep {} | Time {:.6e}\nResult/model units",
+        "Part {} | Element {element}\n{target}\n{field}\n{quantity}: {value}\n{}\nResult/model units",
         part + 1,
-        step.step,
-        step.time
+        step.frame_description()
     )
 }
 
@@ -419,6 +418,7 @@ mod tests {
         app.world_mut().resource_mut::<UiPointerState>().over_ui = true;
         app.world_mut().resource_mut::<PlaybackState>().playing = true;
         app.world_mut().resource_mut::<FemResultSet>().by_mesh[0].push(StepResult {
+            eigenvalue: None,
             step: 1,
             time: 0.25,
             fields: vec![ResultField::ElementScalar {

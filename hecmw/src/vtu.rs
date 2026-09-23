@@ -29,7 +29,60 @@ impl From<io::Error> for VtuError {
 /// PointData must follow the input mesh's node order. Unsupported multi-piece
 /// data is rejected instead of silently assigning values to different nodes.
 pub fn load_vtu_file(path: impl AsRef<Path>, node_ids: &[NodeId]) -> Result<StepResult, VtuError> {
-    parse_vtu(&read_piece(path.as_ref())?, node_ids)
+    let mut step = parse_vtu(&read_piece(path.as_ref())?, node_ids)?;
+    wrapper_eigenvalue(path.as_ref(), &mut step)?;
+    Ok(step)
+}
+
+/// Parse global metadata separately so Float64 eigenvalues retain their precision.
+pub(crate) fn eigenvalue(source: &str) -> Result<Option<f64>, VtuError> {
+    global_scalar(source, &["EIGENVALUE"])
+}
+
+pub(crate) fn metadata_time(source: &str) -> Result<Option<f32>, VtuError> {
+    let value = global_scalar(source, &["TimeValue", "TOTALTIME"])?;
+    if value.is_some_and(|v| !(v as f32).is_finite()) {
+        return Err(VtuError::Parse("TimeValue exceeds supported range".into()));
+    }
+    Ok(value.map(|v| v as f32))
+}
+
+fn global_scalar(source: &str, names: &[&str]) -> Result<Option<f64>, VtuError> {
+    let Some(block) = section(source, "FieldData")? else { return Ok(None) };
+    let mut result = None;
+    for tail in block.split("<DataArray").skip(1) {
+        let (head, body) = tail.split_once('>').ok_or_else(|| VtuError::Parse("Invalid FieldData".into()))?;
+        if !attr_value(head, "Name").is_some_and(|n| names.iter().any(|name| n.eq_ignore_ascii_case(name))) { continue; }
+        if attr_value(head,"format").is_some_and(|f| f != "ascii") {
+            return Err(VtuError::UnsupportedFormat("Only ASCII scalar metadata is supported".into()));
+        }
+        let tokens: Vec<_> = body.split("</DataArray>").next().unwrap_or("").split_whitespace().collect();
+        if result.is_some() || tokens.len() != 1 || attr_value(head,"NumberOfComponents").is_some_and(|c| c != "1")
+            || attr_value(head,"NumberOfTuples").is_some_and(|c| c != "1") {
+            return Err(VtuError::Parse(format!("{} must be a unique scalar", names[0])));
+        }
+        let value: f64 = tokens[0].replace(['D','d'],"E").parse().map_err(|_| VtuError::Parse(format!("Invalid {}", names[0])))?;
+        if !value.is_finite() { return Err(VtuError::Parse(format!("Non-finite {}", names[0]))); }
+        result = Some(value);
+    }
+    Ok(result)
+}
+
+pub(crate) fn apply_wrapper_eigenvalue(value: Option<f64>, step: &mut StepResult) -> Result<(), VtuError> {
+    if let Some(value) = value {
+        if step.eigenvalue.is_some() && !step.same_eigenmode(&StepResult { eigenvalue: Some(value), ..Default::default() }) {
+            return Err(VtuError::Parse("EIGENVALUE disagrees with PVTU".into()));
+        }
+        if step.eigenvalue.is_none() { step.eigenvalue = Some(value); }
+    }
+    Ok(())
+}
+
+fn wrapper_eigenvalue(path: &Path, step: &mut StepResult) -> Result<(), VtuError> {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pvtu")) {
+        apply_wrapper_eigenvalue(eigenvalue(&std::fs::read_to_string(path)?)?, step)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn read_piece(path: &Path) -> Result<String, VtuError> {
@@ -61,7 +114,9 @@ pub fn load_vtu_for_mesh(
     mesh: &fem_core::FemMesh,
 ) -> Result<StepResult, VtuError> {
     let source = read_piece(path.as_ref())?;
-    parse_vtu_for_mesh(&source, mesh)
+    let mut step = parse_vtu_for_mesh(&source, mesh)?;
+    wrapper_eigenvalue(path.as_ref(), &mut step)?;
+    Ok(step)
 }
 
 fn parse_vtu_for_mesh(source: &str, mesh: &fem_core::FemMesh) -> Result<StepResult, VtuError> {
@@ -279,17 +334,11 @@ pub(crate) fn parse_vtu(source: &str, nodes: &[NodeId]) -> Result<StepResult, Vt
             fields.push(ResultField::node_scalar(name, nodes, &values));
         }
     }
-    let mut time = 0.0;
-    if let Some(block) = section(source, "FieldData")? {
-        for raw in arrays(block)? {
-            if matches!(raw.name.as_str(), "TimeValue" | "TOTALTIME") && raw.values.len() == 1 {
-                time = raw.values[0];
-            }
-        }
-    }
+    let time = metadata_time(source)?.unwrap_or(0.0);
     Ok(StepResult {
         step: 1,
         time,
+        eigenvalue: eigenvalue(source)?,
         fields,
     })
 }
@@ -321,12 +370,33 @@ mod tests {
         .unwrap();
         assert_eq!(vtk.time, 0.);
         assert_eq!(native.time, 0.);
+        assert_eq!(native.eigenvalue, Some(7830692.));
+        assert_eq!(vtk.eigenvalue, native.eigenvalue);
         assert_eq!(
             native.field_by_name("Displacement"),
             vtk.field_by_name("Displacement")
         );
         // EIGENVALUE is global metadata, not a spatial contour or a timestamp.
         assert!(vtk.field_by_name("EIGENVALUE").is_none());
+    }
+
+    #[test]
+    fn eigen_metadata_retains_f64_and_rejects_invalid_scalars() {
+        let source = |data: &str| file("<DataArray Name=\"P\">1 2</DataArray>")
+            .replace("<UnstructuredGrid>", &format!("<UnstructuredGrid><FieldData>{data}</FieldData>"));
+        for value in ["7.8306921036862833E+006", "1.234567890123456e100", "0", "-2"] {
+            let text = source(&format!("<DataArray Name=\"EIGENVALUE\" type=\"Float64\">{value}</DataArray>"));
+            let step = parse_vtu(&text, &[NodeId(1),NodeId(2)]).unwrap();
+            assert_eq!(step.eigenvalue, Some(value.parse().unwrap()));
+            assert_eq!(step.time,0.);
+        }
+        for data in [
+            "<DataArray Name=\"EIGENVALUE\">NaN</DataArray>",
+            "<DataArray Name=\"EIGENVALUE\">1 2</DataArray>",
+            "<DataArray Name=\"EIGENVALUE\" NumberOfComponents=\"2\">1</DataArray>",
+            "<DataArray Name=\"EIGENVALUE\" format=\"binary\">1</DataArray>",
+            "<DataArray Name=\"EIGENVALUE\">1</DataArray><DataArray Name=\"EIGENVALUE\">1</DataArray>",
+        ] { assert!(parse_vtu(&source(data), &[NodeId(1),NodeId(2)]).is_err()); }
     }
 
     #[test]

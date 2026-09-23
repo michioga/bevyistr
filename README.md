@@ -43,7 +43,10 @@ and field, with separate Frame / Step / Time columns and explicit missing-value
 status. Exported values are independent of deformation scale and contour colors.
 It also adds explicit comparison of up to four part-local probes in one history
 plot with shared axes, stable colors, and individual removal. CSV export still
-saves only the current pinned probe. These additions are **not included in the published 0.2.0 package**. See the
+saves only the current pinned probe. Eigenvalue results retain global `EIGENVALUE`
+metadata from RES/VTU/PVTU and show Mode / Eigenvalue instead of Time; CSV keeps
+mode metadata in separate columns without inventing a physical timeline or frequency.
+These additions are **not included in the published 0.2.0 package**. See the
 [probe and CSV guide (日本語)](docs/src/results/probe.md).
 
 ### Model import and assembly

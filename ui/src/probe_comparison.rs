@@ -37,7 +37,11 @@ fn aligned(a: &[StepResult], b: &[StepResult]) -> bool {
     !a.is_empty()
         && a.len() == b.len()
         && a.iter().zip(b).all(|(a, b)| {
-            a.step == b.step && (a.time == b.time || (a.time.is_nan() && b.time.is_nan()))
+            a.step == b.step
+                && a.same_eigenmode(b)
+                && (a.eigenvalue.is_some()
+                    || a.time == b.time
+                    || (a.time.is_nan() && b.time.is_nan()))
         })
 }
 
@@ -77,7 +81,7 @@ impl Comparison {
                 .get(first.part)
                 .ok_or("Result part unavailable")?;
             if !aligned(reference, steps) {
-                return Err("Cannot compare different Step / Time sequences");
+                return Err("Cannot compare different Step / Time / Mode sequences");
             }
             if quantity(reference, first.target, field) != Some(kind) {
                 return Err("Cannot mix node / element or scalar / magnitude values");
@@ -387,6 +391,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, time)| StepResult {
+                eigenvalue: None,
                 step: i as u32,
                 time,
                 fields: vec![ResultField::NodeScalar {
@@ -511,6 +516,17 @@ mod tests {
             samples.iter().map(|s| s.value).collect::<Vec<_>>(),
             vec![Some(0.), None, None]
         );
+    }
+
+    #[test]
+    fn different_eigenvalues_or_modal_and_transient_results_cannot_be_compared() {
+        let mut results = data();
+        results.by_mesh[0][0].eigenvalue = Some(123.);
+        assert!(!aligned(&results.by_mesh[0], &results.by_mesh[1]));
+        results.by_mesh[1][0].eigenvalue = Some(456.);
+        assert!(!aligned(&results.by_mesh[0], &results.by_mesh[1]));
+        results.by_mesh[1][0].eigenvalue = Some(123.);
+        assert!(aligned(&results.by_mesh[0], &results.by_mesh[1]));
     }
 
     fn app() -> App {

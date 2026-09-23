@@ -244,5 +244,5 @@ pub fn parse_result_str(
         fields.push(ResultField::node_scalar("|U|", node_ids, &mag_map));
     }
 
-    Ok(StepResult { step, time, fields })
+    Ok(StepResult { step, time, fields, ..Default::default() })
 }

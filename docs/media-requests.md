@@ -45,6 +45,15 @@
 - 掲載先：[複数対象の比較](src/results/probe.md)。Part 1のNode 103／949、NodalMISES、最終フレームの表示例。
 - 静止画で確認した範囲は2曲線・色付きID・値の対応です。再生追従やRemove操作の証明とは区別します。
 
+## 5. 固有値解析のモード表示（動作確認後）
+
+- 保存先: `D:\Work\bevyistr\docs\media-inbox\results-eigen-mode.png`
+- データ: `15_eigen_spring/spring_vis_psf.0001.pvtu`の系列。
+- 操作: Mode 2〜5のいずれかで停止し、表面をクリックして固定します。
+- 写してほしいもの: springのモデル、Mode／Eigenvalue、PINNEDとHISTORYのMode/frame sequence (not time)。必要ならウィンドウを縦に広げてください。
+- 掲載先: [連番とアニメーション](src/results/animation.md)。公開用配置は`src/assets/images/results-eigen-mode.png`を予定しています。
+- 撮影は動作確認後で構いません。現在は未受領・未掲載です。
+
 ## 後で依頼する候補（今回は不要）
 
 - 左→右／右→左ドラッグによる選択の違い。

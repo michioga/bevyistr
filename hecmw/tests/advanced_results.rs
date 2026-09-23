@@ -16,6 +16,7 @@ fn close(a: f32, b: f32) -> bool {
 
 fn compare(a: &StepResult, b: &StepResult) {
     assert_eq!(a.step, b.step);
+    assert!(a.same_eigenmode(b));
     assert!(close(a.time, b.time));
     for field in &a.fields {
         let other = b.field_by_name(field.name()).expect(field.name());
@@ -72,6 +73,18 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
             assert_eq!(a.step, i as u32 + 1);
             assert_eq!(a.time, 0.); // No physical timeline may be invented from mode numbers.
             compare(a, b);
+            assert!(a.same_eigenmode(&scene.steps[0][i]));
+            if stem == "spring" {
+                assert!(a.eigenvalue.is_some());
+                println!(
+                    "mode {}: RES eigenvalue={:.15e}, VTK eigenvalue={:.15e}",
+                    a.step,
+                    a.eigenvalue.unwrap(),
+                    b.eigenvalue.unwrap()
+                );
+            } else {
+                assert!(a.eigenvalue.is_none());
+            }
             assert!(scene.steps[0][i].field_by_name(field).is_some());
             let (min, max) = match a.field_by_name(field).unwrap() {
                 ResultField::NodeScalar { min, max, .. } => (*min, *max),
@@ -98,6 +111,7 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
             };
             assert!(close(values[index], 28.502_321));
         } else {
+            assert_eq!(native[0].eigenvalue, Some(7.8306921036862833e6));
             let index = mesh.nodes.iter().position(|n| n.id.0 == 1).unwrap();
             let ResultField::NodeVector { values, .. } =
                 native[0].field_by_name("Displacement").unwrap()

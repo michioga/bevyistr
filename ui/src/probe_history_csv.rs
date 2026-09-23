@@ -52,7 +52,7 @@ impl Snapshot {
     }
 
     fn write(&self, out: &mut impl Write) -> std::io::Result<()> {
-        out.write_all(b"part,target_kind,target_id,field,quantity,frame,step,time_or_load_factor,time_status,value,value_status,units\r\n")?;
+        out.write_all(b"part,target_kind,target_id,field,quantity,frame,step,time_or_load_factor,time_status,value,value_status,units,frame_kind,mode,eigenvalue\r\n")?;
         for (frame, sample) in self.samples.iter().enumerate() {
             let fields = [
                 self.part.to_string(),
@@ -63,7 +63,9 @@ impl Snapshot {
                 (frame + 1).to_string(),
                 sample.step.to_string(),
                 sample.time.map_or_else(String::new, |v| v.to_string()),
-                if sample.time.is_some() {
+                if sample.eigenvalue.is_some() {
+                    "not_applicable_for_mode"
+                } else if sample.time.is_some() {
                     "recorded_or_default"
                 } else {
                     "unavailable"
@@ -77,6 +79,19 @@ impl Snapshot {
                 }
                 .into(),
                 "result/model units".into(),
+                if sample.eigenvalue.is_some() {
+                    "mode"
+                } else {
+                    "step"
+                }
+                .into(),
+                sample
+                    .eigenvalue
+                    .map_or_else(String::new, |_| sample.step.to_string()),
+                sample
+                    .eigenvalue
+                    .filter(|v| v.is_finite())
+                    .map_or_else(String::new, |v| v.to_string()),
             ];
             for (i, field) in fields.iter().enumerate() {
                 if i != 0 {
@@ -349,6 +364,7 @@ mod tests {
     }
     fn step(step: u32, time: f32, field: &str, value: f32) -> StepResult {
         StepResult {
+            eigenvalue: None,
             step,
             time,
             fields: vec![ResultField::NodeScalar {
@@ -388,7 +404,7 @@ mod tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(
             lines[1],
-            "\"2\",\"node\",\"71\",\"P\",\"scalar_or_component\",\"1\",\"10\",\"0\",\"recorded_or_default\",\"1.2345678\",\"available\",\"result/model units\""
+            "\"2\",\"node\",\"71\",\"P\",\"scalar_or_component\",\"1\",\"10\",\"0\",\"recorded_or_default\",\"1.2345678\",\"available\",\"result/model units\",\"step\",\"\",\"\""
         );
         assert!(lines[2].contains("\"2\",\"50\",\"0.25\""));
         assert!(
@@ -424,6 +440,32 @@ mod tests {
         assert!(text.contains("\"1\",\"7\",\"2\""));
         assert!(text.contains("\"2\",\"1\",\"-1\""));
         assert!(text.contains("\"3\",\"9\",\"\",\"unavailable\",\"\",\"unavailable\""));
+    }
+
+    #[test]
+    fn modal_csv_has_separate_mode_and_precise_eigenvalue_without_fake_time() {
+        let mut results = results();
+        results.by_mesh[1][0].eigenvalue = Some(7.8306921036862833e6);
+        let snapshot = Snapshot::capture(&results, 1, target(), "P").unwrap();
+        results.by_mesh[1][0].eigenvalue = Some(42.);
+        let text = csv(&snapshot);
+        assert!(
+            text.lines()
+                .next()
+                .unwrap()
+                .ends_with(",frame_kind,mode,eigenvalue")
+        );
+        let values: Vec<_> = text
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .map(|s| s.trim_matches('"'))
+            .collect();
+        assert_eq!(values[7], "");
+        assert_eq!(values[8], "not_applicable_for_mode");
+        assert_eq!(&values[12..14], &["mode", "10"]);
+        assert_eq!(values[14].parse::<f64>().unwrap(), 7.8306921036862833e6);
     }
 
     #[test]

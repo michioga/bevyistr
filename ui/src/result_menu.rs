@@ -179,6 +179,7 @@ mod tests {
         assert!(app.world().get::<InteractionDisabled>(button).is_some());
         app.world_mut().resource_mut::<FemResultSet>().by_mesh = vec![vec![fem_core::StepResult {
             step: 7,
+            eigenvalue: None,
             time: 1.5,
             fields: vec![
                 ResultField::NodeVector {
@@ -309,6 +310,7 @@ mod tests {
         results.by_mesh = vec![vec![
             fem_core::StepResult {
                 step: 0,
+                eigenvalue: None,
                 time: 0.0,
                 fields: vec![
                     scalar("CUSTOM[2]"),
@@ -318,6 +320,7 @@ mod tests {
             },
             fem_core::StepResult {
                 step: 1,
+                eigenvalue: None,
                 time: 1.0,
                 fields: vec![scalar("Temperature")],
             },
@@ -370,6 +373,7 @@ mod tests {
         let mut results = FemResultSet::default();
         results.by_mesh = vec![vec![fem_core::StepResult {
             step: 0,
+            eigenvalue: None,
             time: 0.0,
             fields: vec![
                 ResultField::NodeVector {

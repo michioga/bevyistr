@@ -60,6 +60,28 @@ fn scalar(step: &StepResult, name: &str) -> (Vec<f32>, f32, f32) {
 }
 
 #[test]
+fn wrapper_eigenvalues_reach_all_pieces_and_conflicts_are_rejected() {
+    let f = Fixture::new();
+    f.file("a.vtu", &piece(1.));
+    f.file("b.vtu", &piece(2.));
+    let modal = wrapper(&["a.vtu","b.vtu"],0.).replace("Name=\"TimeValue\">0", "Name=\"EIGENVALUE\">7.8306921036862833e6");
+    let path = f.file("mode.0003.pvtu", &modal);
+    let scene = load_scene(&path).unwrap();
+    for steps in &scene.steps {
+        assert_eq!(steps[0].eigenvalue,Some(7.8306921036862833e6));
+        assert_eq!(steps[0].step,3);
+        assert_eq!(steps[0].time,0.);
+    }
+    let single = f.file("single.pvtu", &modal.replace("<Piece Source=\"b.vtu\"/>",""));
+    let ids = [NodeId(0),NodeId(1),NodeId(2),NodeId(3)];
+    assert_eq!(crate::load_vtu_file(&single,&ids).unwrap().eigenvalue,Some(7.8306921036862833e6));
+    f.file("b.vtu", &piece(2.).replace("<UnstructuredGrid>", "<UnstructuredGrid><FieldData><DataArray Name=\"EIGENVALUE\">42</DataArray></FieldData>"));
+    assert!(load_scene(&path).err().unwrap().contains("EIGENVALUE"));
+    f.file("mode.0003.pvtu", &wrapper(&["a.vtu","b.vtu"],0.));
+    assert!(load_scene(&path).is_err()); // Metadata in one piece only is not silently shared.
+}
+
+#[test]
 fn partitions_preserve_local_values_and_share_ranges_across_sparse_frames() {
     let f = Fixture::new();
     f.file("job.0002/job.0002.0.vtu", &piece(2.0));

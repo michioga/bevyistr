@@ -127,6 +127,9 @@ pub(crate) fn validate_and_share_ranges(parts: &mut [(FemMesh, StepResult)]) -> 
     let time = first.time;
     let mut ranges: HashMap<(String, u8), (f32, f32)> = HashMap::new();
     for (i, (_, step)) in parts.iter().enumerate() {
+        if !first.same_eigenmode(step) {
+            return Err(format!("VTK piece {i} has a different EIGENVALUE"));
+        }
         let actual: HashSet<_> = step
             .fields
             .iter()

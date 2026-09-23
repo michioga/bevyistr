@@ -321,6 +321,7 @@ mod tests {
             model: FemModel::single_mesh("Result", result_mesh),
             steps: vec![vec![fem_core::StepResult {
                 step: 5,
+                eigenvalue: None,
                 time: 1.,
                 fields: vec![fem_core::ResultField::NodeScalar {
                     name: "NodalMISES".into(),

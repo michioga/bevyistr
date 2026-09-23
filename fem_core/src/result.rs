@@ -192,10 +192,30 @@ pub struct StepResult {
     /// Physical time or load factor associated with this step.
     pub time: f32,
 
+    /// Global eigenvalue, not a spatial contour or a timestamp. No unit conversion.
+    pub eigenvalue: Option<f64>,
+
     pub fields: Vec<ResultField>,
 }
 
 impl StepResult {
+    pub fn frame_description(&self) -> String {
+        match self.eigenvalue {
+            Some(value) => format!("Mode {} | Eigenvalue {value:.9e}", self.step),
+            None => format!("Step {} | Time {:.6e}", self.step, self.time),
+        }
+    }
+
+    /// Partition/comparison identity, allowing ASCII output precision differences.
+    pub fn same_eigenmode(&self, other: &Self) -> bool {
+        match (self.eigenvalue, other.eigenvalue) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.is_finite() && b.is_finite()
+                && (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.),
+            _ => false,
+        }
+    }
+
     pub fn field_names(&self) -> Vec<&str> {
         self.fields.iter().map(|f| f.name()).collect()
     }

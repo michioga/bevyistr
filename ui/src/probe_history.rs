@@ -20,6 +20,7 @@ const CURVE: [u8; 4] = [65, 200, 235, 255];
 enum Axis {
     Time,
     Frame,
+    Mode,
 }
 
 struct History {
@@ -71,6 +72,19 @@ mod tests {
             assert_eq!(history.axis, Axis::Frame);
             assert_eq!(history.x, vec![1., 2., 3.]);
         }
+    }
+
+    #[test]
+    fn modal_history_uses_frame_order_even_when_time_increases() {
+        let mut steps = vec![step(0., Some(2.)), step(9., Some(3.)), step(10., None)];
+        for (i, s) in steps.iter_mut().enumerate() {
+            s.eigenvalue = Some(100. + i as f64);
+            s.step = (i * 2 + 1) as u32;
+        }
+        let history = History::build(&steps, target(), "P");
+        assert_eq!(history.axis, Axis::Mode);
+        assert_eq!(history.x, vec![1., 2., 3.]);
+        assert_eq!(history.values, vec![Some(2.), Some(3.), None]);
     }
 
     #[test]
@@ -354,10 +368,18 @@ impl History {
     fn build(steps: &[StepResult], target: Target, field: &str) -> Self {
         // Time=0 is also the reader's missing-time default. Never invent times,
         // sort eigenmodes, or reorder frames when times repeat or run backwards.
-        let timed = steps.len() > 1
+        let modal = steps.iter().any(|s| s.eigenvalue.is_some());
+        let timed = !modal
+            && steps.len() > 1
             && steps.iter().all(|s| s.time.is_finite())
             && steps.windows(2).all(|s| s[1].time > s[0].time);
-        let axis = if timed { Axis::Time } else { Axis::Frame };
+        let axis = if modal {
+            Axis::Mode
+        } else if timed {
+            Axis::Time
+        } else {
+            Axis::Frame
+        };
         let x = steps
             .iter()
             .enumerate()
@@ -699,6 +721,9 @@ pub(crate) fn update(
                     let lo = history.x.first().copied().unwrap_or(0.0);
                     let hi = history.x.last().copied().unwrap_or(0.0);
                     match history.axis {
+                        Axis::Mode => format!(
+                            "Mode/frame sequence: {lo:.0} to {hi:.0} (not time)\nYellow: current frame | gaps: unavailable"
+                        ),
                         Axis::Time => format!(
                             "Time / load factor: {lo:.4e} to {hi:.4e}\nYellow: current frame | gaps: unavailable"
                         ),

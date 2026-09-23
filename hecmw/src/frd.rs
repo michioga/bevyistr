@@ -326,6 +326,7 @@ fn parse_result_block(
         step: block_index,
         time: step_time,
         fields,
+        ..Default::default()
     };
 
     (Some(step), cursor)

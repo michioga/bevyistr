@@ -185,7 +185,7 @@ fn describe(
         .map_or_else(|| "unavailable".into(), |v| format!("{v:.6e}"));
     let time = step.map_or_else(
         || "Frame unavailable".into(),
-        |s| format!("Step {} | Time {:.6e}", s.step, s.time),
+        |s| s.frame_description(),
     );
     let quantity = if matches!(field, Some(ResultField::NodeVector { .. })) {
         "Magnitude"
@@ -354,6 +354,7 @@ mod tests {
     #[test]
     fn same_local_id_in_other_piece_is_never_sampled_and_frames_follow() {
         let scalar = |value| fem_core::StepResult {
+            eigenvalue: None,
             step: value as u32,
             time: value,
             fields: vec![ResultField::ElementScalar {
