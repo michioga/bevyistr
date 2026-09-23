@@ -66,6 +66,24 @@ VTKに書かれていない桁を補いません。非有限・複数成分・�
 元のCSV・RESは変更していません。今回の確認は1対象の保存結果であり、
 キャンセル・上書き・保存中の表示切替などのGUI操作まで確認したものではありません。
 
+## 熱解析の提供画像・CSV照合（2026-09-23）
+
+`results-heat-probe.png`でTEMPERATUREの値域20〜100、Frame 1/1、Step 1／Time 0、
+Deformation unavailableを確認しました。PINNEDはPart 1／Node 5845、値100。
+比較欄はNode 92（20）とNode 5845（100）で、HISTORYはFrame 1 (single sample)、2/2 samplesです。
+画像は[プローブのマニュアル](src/results/probe.md)へ変更せず掲載しました。
+
+`16_heat_block/probe_part1_node_5845.csv`は15列・1データ行です。
+PVTUが参照する`block_vis_psf.0001/block_vis_psf.0001.0.vtu`のPointDataから
+TEMPERATURE全37,386値を読み、次を照合しました。
+
+- 独立VTK表示のNode IDは0始まりの点配列インデックス。元MSHの節点番号とは混同しません。
+- 点5845の値100が画面・CSVと完全一致。比較対象の点92も20で一致。全体の値域は20〜100。
+- CSVはPINNEDのみを出力し、比較一覧のNode 92は含まない。
+- Frame／Stepは1、TimeはPVTUのTimeValueと同じ0、time_statusはrecorded_or_default。
+- frame_kindはstep、mode／eigenvalueは空欄。value_statusはavailable、単位はresult/model units。
+- 元のCSV・VTKに変更なし。Play・前後移動の無効化や比較解除の操作は静止画からは判定しません。
+
 ## 再実行
 
 ローカルデータを使うテストは通常のCIではスキップします。
@@ -95,5 +113,5 @@ dynamic_beamの連番検出・時刻順、単独VTK形状、流体8ピースの�
 - 続いて提供されたRESの画面ではPart 1／Node 8254を固定し、Mode 3、Eigenvalue約3.260034264e7、変位の大きさ1.048088、HISTORYの5/5 samples、Mode/frame sequence (not time)、3番目の黄色い目印を確認しました。
 - 別途Node 30138のCSVは上記のとおり照合済み。残る実画面の操作確認は次のチェック項目です。
 - 固有値：全5フレームの連続切替、変形・成分切替、ホバーと固定対象の追従。静止画から連続操作の成功は判断しません。
-- 熱：TEMPERATUREのコンター・プローブ、変位なし、1フレームの再生無効。
+- 熱：コンター・2点比較・固定プローブ・変位なしは提供画像で確認、CSVは元VTKと照合済み。残る確認は1フレームの再生・前後移動の無効化。
 - 流体：VELOCITYの成分切替、ゼロ成分のConstant表示、ピースをまたぐIDの区別。

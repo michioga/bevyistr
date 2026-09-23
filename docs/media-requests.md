@@ -53,14 +53,14 @@
 - 確認範囲: Frame 3/5、Mode 3、Eigenvalue 3.260034e7、モード列の説明、変位コンター、All frames、変形倍率4.50。
 - プローブは未固定です。HISTORY・CSV・連続操作の確認とは区別します。掲載画像の撮り直しは不要です。
 
-## 6. 熱解析の温度・固定プローブ（次の確認）
+## 6. 熱解析の温度・固定プローブ（受領・掲載済み）
 
 - 保存先: `D:\Work\bevyistr\docs\media-inbox\results-heat-probe.png`
 - データ: `16_heat_block/block_vis_psf.0001.pvtu`を直接開き、`TEMPERATURE`を選びます。
-- 操作: 表面をクリックして固定します。
-- 写してほしいもの: 温度コンター・凡例、PINNEDの部品／節点IDと温度、HISTORYの1サンプル、Deformation unavailable。スクロールが必要なら固定プローブ周辺を優先してください。
-- CSVも保存し、そのパスを教えてください。スクリーンショットと同じ固定対象のまま保存すると照合しやすくなります。
-- 未受領・未掲載です。温度の単位を推測して画像へ追記しないでください。
+- 2026-09-23受領。変更せず`src/assets/images/results-heat-probe.png`へコピーし、[プローブ](src/results/probe.md)に掲載しました。
+- 確認範囲: 温度コンター20〜100、PINNED Node 5845の100、Node 92の20との比較、Frame 1の2対象分の履歴、Deformation unavailable。
+- 同時に受領した`probe_part1_node_5845.csv`は1行で、固定対象の温度・時刻・通常ステップ種別を元VTKと照合済み。
+- 再生ボタンの無効化や比較解除の操作は静止画では未確認です。撮り直しは不要です。
 
 ## 後で依頼する候補（今回は不要）
 
