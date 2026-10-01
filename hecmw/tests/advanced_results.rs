@@ -145,14 +145,19 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
 fn tutorial_flow_components_and_constant_fields() {
     let scene = load_scene(&root().join("18_cavity_flow/cavityflow_vis_psf.0000.pvtu")).unwrap();
     assert_eq!(scene.model.meshes.len(), 8);
-    for (mesh, steps) in scene.model.meshes.iter().zip(&scene.steps) {
+    let mut first_local_values = std::collections::HashMap::new();
+    let mut different_value_for_shared_id = None;
+    for (part, (mesh, steps)) in scene.model.meshes.iter().zip(&scene.steps).enumerate() {
         assert_eq!(steps.len(), 1);
         let step = &steps[0];
         assert_eq!(step.step, 0);
         assert_eq!(step.time, 0.);
+        assert!(step.eigenvalue.is_none());
+        assert_eq!(step.frame_description(), "Step 0 | Time 0.000000e0");
         assert_eq!(step.fields.len(), 13);
         assert!(step.field_by_name("Displacement").is_none());
         for name in ["VELOCITY[2]", "VELOCITY[3]", "PRESSURE"] {
+            assert_eq!(step.field_by_name(name).unwrap().constant_value(), Some(0.));
             let ResultField::NodeScalar {
                 values, min, max, ..
             } = step.field_by_name(name).unwrap()
@@ -163,12 +168,44 @@ fn tutorial_flow_components_and_constant_fields() {
             assert!(values.iter().all(|v| *v == 0.));
             assert_eq!((*min, *max), (0., 0.));
         }
-        let ResultField::NodeScalar { min, max, .. } = step.field_by_name("VELOCITY[1]").unwrap()
+        let ResultField::NodeScalar {
+            values: vx,
+            min,
+            max,
+            ..
+        } = step.field_by_name("VELOCITY[1]").unwrap()
         else {
             panic!()
         };
         assert_eq!(*min, 0.);
-        assert!(close(*max, 0.001));
+        assert_eq!(*max, 0.001_f32);
+        assert_eq!(
+            step.field_by_name("VELOCITY[1]").unwrap().constant_value(),
+            None
+        );
+        let ResultField::NodeVector {
+            values: velocity,
+            min_mag,
+            max_mag,
+            ..
+        } = step.field_by_name("VELOCITY").unwrap()
+        else {
+            panic!("VELOCITY must remain a vector alongside its scalar components");
+        };
+        assert_eq!((*min_mag, *max_mag), (0., 0.001_f32));
+        for (index, ((node, vector), x)) in mesh.nodes.iter().zip(velocity).zip(vx).enumerate() {
+            assert_eq!(node.id.0, index as u32); // Local VTK point index, not a global mesh ID.
+            assert_eq!(vector.to_array(), [*x, 0., 0.]);
+            assert!((vector.length() - x.abs()).abs() <= 1e-9);
+            if let Some(&(other_part, other_value)) = first_local_values.get(&node.id.0) {
+                if *x != other_value && different_value_for_shared_id.is_none() {
+                    different_value_for_shared_id =
+                        Some((node.id.0, other_part, other_value, part + 1, *x));
+                }
+            } else {
+                first_local_values.insert(node.id.0, (part + 1, *x));
+            }
+        }
         for field in &step.fields {
             match field {
                 ResultField::NodeScalar { values, .. } => {
@@ -183,6 +220,11 @@ fn tutorial_flow_components_and_constant_fields() {
             }
         }
     }
+    let (id, a, av, b, bv) = different_value_for_shared_id
+        .expect("Fixture must exercise equal local IDs with distinct part values");
+    println!(
+        "Local node {id}: Part {a} VX={av}, Part {b} VX={bv}; values must not be merged by node ID"
+    );
     println!(
         "18_cavity_flow: 8 parts, 1 frame, 13 fields; VX range=[0,0.001], VY/VZ/P=0; no displacement"
     );

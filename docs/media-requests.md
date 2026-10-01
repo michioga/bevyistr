@@ -62,6 +62,19 @@
 - 同時に受領した`probe_part1_node_5845.csv`は1行で、固定対象の温度・時刻・通常ステップ種別を元VTKと照合済み。
 - 再生ボタンの無効化や比較解除の操作は静止画では未確認です。撮り直しは不要です。
 
+## 7. 流体8ピースのフィールド・プローブ（画像受領・掲載保留）
+
+2026-10-01、FrontISTRサポートへの問い合わせ中につき追加依頼を保留します。
+以下は再開時の参考手順です。現時点では追加撮影・CSV提出は不要です。
+
+- データ: `18_cavity_flow/cavityflow_vis_psf.0000.pvtu`。ソルバーの再実行は不要です。
+- 保存先: `D:\Work\bevyistr\docs\media-inbox\results-flow-probe.png`
+- 操作: `VELOCITY[1]`を選び、表面をクリックして固定。可能なら異なるPartからもう1対象を比較へ追加します。
+- 写してほしいもの: モデル、8ピースの説明、選択成分、凡例0〜0.001、PINNED／COMPARISONのPartとNode。
+- 固定対象を変えずに`VELOCITY[2]`へ切り替えた画面も`results-flow-constant.png`として同じフォルダに保存してください。Constant 0とPart／Nodeが分かる範囲で構いません。
+- 各画面の状態でCSVを別名保存し、そのパスを教えてください。例: `flow_vx_partN_nodeM.csv`、`flow_vy_partN_nodeM.csv`。同じ既定名で上書きしないよう注意してください。
+- `results-flow-probe.png`と`results-flow-constant.png`は受領済み・未掲載です。時刻0の表示を解析成功例として公開しません。比較解除・再生の操作確認も保留します。
+
 ## 後で依頼する候補（今回は不要）
 
 - 左→右／右→左ドラッグによる選択の違い。

@@ -7,6 +7,10 @@
 
 ## 今回の結果
 
+> 2026-10-01追記：流体例題はFrontISTRサポートへの問い合わせ中のため保留です。
+> 以下の流体の記録は既存の時刻0出力の読み込み確認であり、解析成功・収束の確認ではありません。
+> 手動MPI RES読み込みのbevyistr側の制限とは区別し、追加調査は再開の指示を待ちます。
+
 | チュートリアル | PVTUの節点／要素数 | ピース／フレーム | 確認内容 |
 |---|---:|---:|---|
 | `15_eigen_spring` | 78,771／46,454 | 1／5 | 全5モードのRESとVTKをMSHの節点順で照合。変位ベクトル・3成分が許容差内で一致。単独PVTUでも全フレームを読める。 |
@@ -83,6 +87,19 @@ TEMPERATURE全37,386値を読み、次を照合しました。
 - Frame／Stepは1、TimeはPVTUのTimeValueと同じ0、time_statusはrecorded_or_default。
 - frame_kindはstep、mode／eigenvalueは空欄。value_statusはavailable、単位はresult/model units。
 - 元のCSV・VTKに変更なし。Play・前後移動の無効化や比較解除の操作は静止画からは判定しません。
+
+## 流体のピース・成分整合の追加検証（2026-09-23）
+
+既存の`tutorial_flow_components_and_constant_fields`を強化し、実データで再実行して成功しました。
+今回の変更はテストと確認手順のみで、結果の読み込み・描画処理は変更していません。
+
+- 全8ピースでVELOCITYの各ベクトルが`[VELOCITY[1], 0, 0]`と一致し、大きさも成分からの計算と一致。
+- 共通値域は厳密に`0..0.001_f32`。第2・第3成分とPRESSUREは`constant_value() == Some(0)`。
+- 固有値メタデータはなく、Step 0／Time 0として扱う。
+- 各ピースのNode IDは0始まりの点配列インデックス。実例として、同じNode 3465でもPart 1のVXは0、Part 2は0.001。
+  PartとNodeの組み合わせをキーとし、同じNode番号という理由だけで値を統合してはいけません。
+
+実画面の固定・比較・成分切替・CSV照合は[流体チェックリスト](verification.md)で別途確認します。
 
 ## 再実行
 

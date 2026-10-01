@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish the manual to GitHub Pages (main only)'
+        description: 'Publish the manual from the selected branch to GitHub Pages'
         required: true
         type: boolean
         default: false
@@ -35,13 +35,13 @@ jobs:
       - name: Build manual
         run: '"$RUNNER_TEMP/mdbook/bin/mdbook" build docs'
       - name: Upload Pages artifact
-        if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         uses: actions/upload-pages-artifact@v4
         with:
           path: docs/book
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     needs: build
     runs-on: ubuntu-latest
     permissions:

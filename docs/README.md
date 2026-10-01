@@ -69,12 +69,15 @@ Documentation CIは原本とマニュアル用コピーの一致を検査しま�
 
 `.github/workflows/docs.yml`は、ドキュメント変更のpush／pull requestでHTMLをビルドします。公開は次の手動手順に限定します。
 
-1. 内容を確認してmainへマージします。
+1. 公開する開発ブランチの内容を確認し、コミット・pushします。mainへのマージは不要です。
 2. GitHubのSettings → Pages → Build and deploymentでSourceを**GitHub Actions**に設定します。
-3. Actions → Documentation → Run workflowで**main**を選び、`publish`を有効にして実行します。
-4. 実行完了後に公開ページの目次・画像・動画・検索を確認します。
+3. Settings → Environments → `github-pages`にブランチ制限がある場合は、公開するブランチを許可します。既存の保護ルールは一律に解除しません。
+4. Actions → Documentation → Run workflowで**公開するブランチ**を選び、`publish`を有効にして実行します。初回は`feat/eigen-result-metadata`の開発版を対象とします。
+5. deployジョブの成功後に公開ページの「0.3.0向け開発版」表示、目次・画像・検索を確認します。buildだけの成功は公開完了ではありません。
 
-main以外、または`publish`が無効の場合はビルドだけです。Pagesの設定や環境保護ルールによっては管理者による許可が必要です。手順は[GitHub公式のカスタムPagesワークフロー](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)に基づきます。
+push／pull request、または`publish`が無効の場合はビルドだけです。公開すると、このURLのマニュアル全体が選択したブランチの内容に置き換わります。ブランチ別サイトは作りません。実行履歴のブランチとコミットSHAで公開元を確認できます。Pagesの設定や環境保護ルールによっては管理者による許可が必要です。手順は[GitHub公式のカスタムPagesワークフロー](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)に基づきます。
+
+開発版には`book.toml`のタイトルと「はじめに」で対象版を明記し、公開済み0.2.0との違いを残します。0.3.0のリリース時に、実際の公開内容と合わせて表示を見直します。
 
 `site-url`はプロジェクトサイト用の`/bevyistr/`です。公開先の変更時は`book.toml`も更新してください。[mdBook公式ガイド](https://rust-lang.github.io/mdBook/continuous-integration.html)も参照できます。
 

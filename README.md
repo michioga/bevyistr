@@ -33,7 +33,7 @@ icon and default material library are embedded.
 
 The [Japanese user manual](docs/src/introduction.md) is organized as an mdBook; see its [table of contents](docs/src/SUMMARY.md). It covers viewport operation, setup, execution, and result viewing, with current limitations kept explicit.
 
-Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. Pages deployment is manual from main; adding these files does not publish the site.
+Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. The manual targets **0.3.0 development**, not just the published **0.2.0** release. Pages deployment is manual from the selected branch; pushing changes alone does not publish the site. The publication target is [GitHub Pages](https://michioga.github.io/bevyistr/).
 
 ## Current capabilities
 
