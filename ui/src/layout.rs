@@ -431,6 +431,19 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             id: SliderId::ResultStep,
                                         },
                                     );
+                                    crate::playback_controls::spawn(sliders);
+                                    crate::result_seek::spawn_details(sliders);
+                                    spawn_slider(
+                                        sliders,
+                                        SliderConfig {
+                                            width: 270.0,
+                                            min: 0.5,
+                                            max: 10.0,
+                                            value: 2.0,
+                                            label: "Speed (frames/sec)",
+                                            id: SliderId::PlaybackSpeed,
+                                        },
+                                    );
                                     sliders.spawn((
                                         crate::result_menu::DeformationScaleSection,
                                         Node { flex_direction: FlexDirection::Column, ..default() },
@@ -447,21 +460,6 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             },
                                         );
                                     });
-                                    hint_text(sliders, "Left / Right: step through results");
-
-                                    crate::playback_controls::spawn(sliders);
-
-                                    spawn_slider(
-                                        sliders,
-                                        SliderConfig {
-                                            width: 270.0,
-                                            min: 0.5,
-                                            max: 10.0,
-                                            value: 2.0,
-                                            label: "Speed (steps/sec)",
-                                            id: SliderId::PlaybackSpeed,
-                                        },
-                                    );
                                 });
                             });
                         },
@@ -899,17 +897,6 @@ fn section(
             ));
             children_fn(sec);
         });
-}
-
-fn hint_text(parent: &mut ChildSpawnerCommands, text: &'static str) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(10.0),
-            ..default()
-        },
-        TextColor(Color::srgba(0.45, 0.54, 0.60, 0.80)),
-    ));
 }
 
 fn segment_style(is_first: bool, is_last: bool) -> (BorderRadius, UiRect) {

@@ -3,7 +3,7 @@ use super::*;
 fn slider_app() -> (App, Entity, Entity, Entity) {
     let mut app = App::new();
     app.init_resource::<ButtonInput<MouseButton>>();
-    app.add_systems(Update, update_sliders);
+    app.add_systems(Update, (update_sliders, sync_slider_visuals).chain());
     let track = app
         .world_mut()
         .spawn((

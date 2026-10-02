@@ -65,7 +65,7 @@ Documentation CIは原本とマニュアル用コピーの一致を検査しま�
 
 ## GitHub Pages
 
-公開予定URLは[bevyistrマニュアル](https://michioga.github.io/bevyistr/)です。これは公開先の予定であり、この構成を追加するだけでは公開しません。
+公開URLは[bevyistrマニュアル](https://michioga.github.io/bevyistr/)です。2026-10-01、メンテナーが0.3.0向け開発版の公開を確認しました。以降の更新も、pushだけでは公開されません。
 
 `.github/workflows/docs.yml`は、ドキュメント変更のpush／pull requestでHTMLをビルドします。公開は次の手動手順に限定します。
 

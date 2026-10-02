@@ -89,6 +89,9 @@ pub struct SliderConfig {
 pub(crate) struct SliderValueText(pub SliderId);
 
 #[derive(Component)]
+pub(crate) struct SliderLabelText(pub SliderId);
+
+#[derive(Component)]
 pub(crate) struct SliderFill(pub SliderId);
 
 const THUMB_W: f32 = 12.0;
@@ -125,6 +128,7 @@ pub fn spawn_slider(parent: &mut ChildSpawnerCommands, config: SliderConfig) -> 
         .with_children(|row| {
             row.spawn((
                 Text::new(config.label),
+                SliderLabelText(config.id),
                 TextFont {
                     font_size: FontSize::Px(11.0),
                     ..default()
@@ -220,17 +224,8 @@ pub fn spawn_slider(parent: &mut ChildSpawnerCommands, config: SliderConfig) -> 
 
 // ─── system ──────────────────────────────────────────────────────────────────
 
-/// Handles mouse-drag input on slider tracks and, separately, syncs the
-/// thumb position / fill width / value text of every slider whose
-/// [`SliderState`] changed this frame — whether that change came from a
-/// drag gesture here or from another system writing `state.value` directly
-/// (e.g. keyboard step navigation).
-///
-/// These two responsibilities are split into separate loops over
-/// `track_query` because a drag only *sometimes* changes the state (only
-/// while `dragging`), but the visual sync must run for *any* change
-/// regardless of source — including changes made by completely different
-/// systems earlier in the frame.
+/// Handles mouse-drag input. Visuals are synchronized separately after all
+/// value writers, including automatic playback and result-range updates.
 ///
 /// UI `Node` entities carry [`UiGlobalTransform`] (2D, physical pixels),
 /// not the 3D-world [`GlobalTransform`] — there is no `GlobalTransform` on
@@ -247,6 +242,7 @@ pub fn spawn_slider(parent: &mut ChildSpawnerCommands, config: SliderConfig) -> 
 pub(crate) fn update_sliders(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
+    popups: Query<(), With<bevy::ui_widgets::MenuPopup>>,
     mut track_query: Query<
         (
             Entity,
@@ -256,25 +252,28 @@ pub(crate) fn update_sliders(
         ),
         With<SliderTrack>,
     >,
-    mut thumb_query: Query<(&SliderThumb, &mut Node), Without<SliderTrack>>,
-    mut fill_query: Query<(&SliderFill, &mut Node), (Without<SliderTrack>, Without<SliderThumb>)>,
-    mut text_query: Query<(&SliderValueText, &mut Text)>,
 ) {
+    // Release also ends a drag if the cursor has left the window.
+    if buttons.just_released(MouseButton::Left) {
+        for (_, mut state, _, _) in &mut track_query {
+            state.dragging = false;
+        }
+    }
     if let Ok(window) = windows.single() {
         if let Some(cursor) = window.cursor_position() {
-            if buttons.just_released(MouseButton::Left) {
-                for (_, mut state, _, _) in &mut track_query {
-                    state.dragging = false;
-                }
-            }
-
             if buttons.just_pressed(MouseButton::Left) {
                 for (_, mut state, track_node, track_gt) in &mut track_query {
+                    if state.id == SliderId::ResultStep && !popups.is_empty() {
+                        continue;
+                    }
                     if track_node.is_empty() {
                         continue;
                     }
                     let scale = track_node.inverse_scale_factor;
-                    let size = track_node.size() * scale;
+                    let mut size = track_node.size() * scale;
+                    if state.id == SliderId::ResultStep {
+                        size.y = size.y.max(THUMB_H);
+                    }
                     let center = track_gt.transform_point2(Vec2::ZERO) * scale;
                     let origin = center - size * 0.5;
                     if cursor.x >= origin.x
@@ -292,7 +291,8 @@ pub(crate) fn update_sliders(
                 if !state.dragging {
                     continue;
                 }
-                if track_node.is_empty() {
+                if track_node.is_empty() || (state.id == SliderId::ResultStep && !popups.is_empty())
+                {
                     state.dragging = false;
                     continue;
                 }
@@ -304,20 +304,23 @@ pub(crate) fn update_sliders(
                 let t = ((cursor.x - track_x0 - THUMB_W * 0.5) / usable_w).clamp(0.0, 1.0);
 
                 state.set_normalized(t);
+                if state.id == SliderId::ResultStep {
+                    state.value = state.value.round();
+                }
             }
         }
     }
+}
 
-    // Visual sync: runs for any SliderState or computed layout change, from a drag above or
-    // from another system (e.g. keyboard step navigation) writing
-    // `state.value` directly. Revealing a hidden panel must also restore the
-    // thumb/fill using the newly computed width, even if its value is unchanged.
-    //
-    // Must iterate `&mut track_query` (not `&track_query`): only `Mut<T>`
-    // implements `DetectChanges`/`is_changed()`. Borrowing the query
-    // immutably here would yield a plain `&SliderState` with no change
-    // metadata, even though the field type itself is `&mut SliderState`.
-    for (track_entity, state, track_node, _track_gt) in &mut track_query {
+/// Runs after input/playback/result updates, so the thumb and displayed frame
+/// cannot lag behind the contour. Layout changes also restore hidden sliders.
+pub(crate) fn sync_slider_visuals(
+    tracks: Query<(Entity, Ref<SliderState>, Ref<ComputedNode>), With<SliderTrack>>,
+    mut thumb_query: Query<(&SliderThumb, &mut Node), Without<SliderTrack>>,
+    mut fill_query: Query<(&SliderFill, &mut Node), (Without<SliderTrack>, Without<SliderThumb>)>,
+    mut text_query: Query<(&SliderValueText, &mut Text)>,
+) {
+    for (track_entity, state, track_node) in &tracks {
         if track_node.is_empty() || (!state.is_changed() && !track_node.is_changed()) {
             continue;
         }
@@ -339,12 +342,9 @@ pub(crate) fn update_sliders(
             }
         }
         for (tag, mut text) in &mut text_query {
-            if tag.0 == id {
-                **text = if id == SliderId::ResultStep {
-                    format!("{}", value as u32 + 1)
-                } else {
-                    format!("{:.2}", value)
-                };
+            // The result seek bar owns its position/total and modal labels.
+            if tag.0 == id && id != SliderId::ResultStep {
+                **text = format!("{:.2}", value);
             }
         }
     }

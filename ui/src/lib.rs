@@ -25,6 +25,7 @@ mod probe_comparison;
 mod probe_history_data;
 mod probe_history_csv;
 mod playback_controls;
+mod result_seek;
 #[cfg(test)]
 mod widget_test_input;
 mod output_ui;
@@ -156,6 +157,19 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (
+                result_seek::pause_while_seeking
+                    .after(slider::update_sliders)
+                    .before(playback_advance_system),
+                result_seek::sync.after(apply_slider_to_results),
+            ),
+        );
+        app.add_systems(
+            PostUpdate,
+            slider::sync_slider_visuals.before(bevy::ui::UiSystems::Layout),
+        );
         if !app.is_plugin_added::<bevy::input_focus::tab_navigation::TabNavigationPlugin>() {
             app.add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin);
         }
@@ -550,7 +564,10 @@ impl Plugin for UiPlugin {
                 update_constraint_button_labels,
                 update_apply_load_label,
                 update_apply_dload_label,
-                step_keyboard_navigation.after(update_ui_keyboard_state),
+                step_keyboard_navigation
+                    .after(update_ui_keyboard_state)
+                    .after(sidebar_page_button_system)
+                    .before(playback_advance_system),
                 slider::update_sliders.after(step_keyboard_navigation),
                 update_contact_review_settings
                     .after(sidebar_page_button_system)

@@ -16,6 +16,10 @@ const HEIGHT: usize = 256;
 const PAD: f64 = 12.0;
 const CURVE: [u8; 4] = [65, 200, 235, 255];
 
+#[cfg(test)]
+#[path = "probe_playback_tests.rs"]
+mod playback_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Axis {
     Time,

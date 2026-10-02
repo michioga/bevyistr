@@ -84,7 +84,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         });
     parent.spawn((
         Text::new(
-            "|< First   < Previous   > Next   >| Last\nPrevious / Next: pause and move one frame",
+            "|< First   < Previous   > Next   >| Last\nPrevious / Next / Left / Right: pause and move one frame",
         ),
         Pickable::IGNORE,
         TextFont {
@@ -120,6 +120,17 @@ fn activate(
     let Some(mut slider) = sliders.iter_mut().find(|s| s.id == SliderId::ResultStep) else {
         return;
     };
+    apply_action(action, count, &mut playback, &mut slider);
+}
+
+/// Shared by pointer buttons and keyboard stepping. Always use the loaded
+/// timeline, not the slider limits left over from the previous result.
+pub(crate) fn apply_action(
+    action: Action,
+    count: usize,
+    playback: &mut PlaybackState,
+    slider: &mut SliderState,
+) {
     let frame = (slider.value.round() as usize).min(count.saturating_sub(1));
     if !enabled(action, count, frame, playback.playing) {
         return;
@@ -319,6 +330,120 @@ mod tests {
             click(&mut app, Action::Last);
             assert!(!app.world().resource::<PlaybackState>().playing);
             assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 0.);
+        }
+    }
+
+    fn keyboard_app(count: usize) -> (App, Entity) {
+        let (mut app, slider) = setup(count);
+        app.insert_resource(crate::layout::SidebarPage::Results)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<fem_core::UiKeyboardState>()
+            .init_resource::<Time>()
+            .add_systems(
+                Update,
+                (
+                    crate::results_ui::step_keyboard_navigation,
+                    crate::results_ui::playback_advance_system,
+                )
+                    .chain()
+                    .before(apply_slider_to_results),
+            );
+        (app, slider)
+    }
+
+    fn arrow(app: &mut App, key: KeyCode) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+    }
+
+    #[test]
+    fn arrow_keys_pause_before_the_due_playback_tick_and_use_loaded_frame_limits() {
+        let (mut app, slider) = keyboard_app(6);
+        // A playback tick is due in the same update as the user's key press.
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(1));
+        {
+            let mut playback = app.world_mut().resource_mut::<PlaybackState>();
+            playback.playing = true;
+            playback.elapsed = 0.4;
+        }
+        app.world_mut()
+            .get_mut::<SliderState>(slider)
+            .unwrap()
+            .value = 3.;
+        app.world_mut().get_mut::<SliderState>(slider).unwrap().max = 1.;
+        arrow(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 4.);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().max, 5.);
+        assert!(!app.world().resource::<PlaybackState>().playing);
+        assert_eq!(app.world().resource::<PlaybackState>().elapsed, 0.);
+        assert_eq!(
+            app.world()
+                .resource::<FemResultSet>()
+                .active
+                .as_ref()
+                .unwrap()
+                .step_index,
+            4
+        );
+        arrow(&mut app, KeyCode::ArrowLeft);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 3.);
+        app.world_mut()
+            .get_mut::<SliderState>(slider)
+            .unwrap()
+            .value = 5.;
+        app.world_mut().resource_mut::<PlaybackState>().playing = true;
+        arrow(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 5.);
+        assert!(!app.world().resource::<PlaybackState>().playing);
+    }
+
+    #[test]
+    fn arrows_do_not_step_hidden_results_or_interfere_with_text_and_popups() {
+        let (mut app, slider) = keyboard_app(6);
+        app.insert_resource(crate::layout::SidebarPage::Model);
+        arrow(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 0.);
+        app.insert_resource(crate::layout::SidebarPage::Results);
+        app.world_mut()
+            .resource_mut::<fem_core::UiKeyboardState>()
+            .text_editing = true;
+        arrow(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 0.);
+        app.world_mut()
+            .resource_mut::<fem_core::UiKeyboardState>()
+            .text_editing = false;
+        let popup = app
+            .world_mut()
+            .spawn(bevy::ui_widgets::MenuPopup::default())
+            .id();
+        arrow(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 0.);
+        app.world_mut().despawn(popup);
+        arrow(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 1.);
+    }
+
+    #[test]
+    fn arrow_keys_do_not_wrap_or_activate_empty_and_single_frame_results() {
+        for count in [0, 1, 6] {
+            let (mut app, slider) = keyboard_app(count);
+            arrow(&mut app, KeyCode::ArrowLeft);
+            assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 0.);
+            for _ in 0..8 {
+                arrow(&mut app, KeyCode::ArrowRight);
+            }
+            assert_eq!(
+                app.world().get::<SliderState>(slider).unwrap().value,
+                count.saturating_sub(1) as f32
+            );
+            assert!(!app.world().resource::<PlaybackState>().playing);
         }
     }
 }

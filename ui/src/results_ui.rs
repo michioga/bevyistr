@@ -157,22 +157,29 @@ pub(crate) fn playback_advance_system(
     }
 }
 
-/// Moves the active result one step with the Left/Right arrow keys.
+/// Pauses and moves one frame, just like the Previous/Next buttons.
 
 pub(crate) fn step_keyboard_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     keyboard_state: Res<fem_core::UiKeyboardState>,
+    page: Res<crate::layout::SidebarPage>,
+    popups: Query<(), With<bevy::ui_widgets::MenuPopup>>,
     results: Res<FemResultSet>,
+    mut playback: ResMut<PlaybackState>,
     mut slider_query: Query<&mut SliderState, With<SliderTrack>>,
 ) {
-    if keyboard_state.text_editing || !results.has_results() {
+    if *page != crate::layout::SidebarPage::Results
+        || keyboard_state.text_editing
+        || !popups.is_empty()
+        || !results.has_results()
+    {
         return;
     }
 
-    let delta = if keyboard.just_pressed(KeyCode::ArrowRight) {
-        1.0
+    let action = if keyboard.just_pressed(KeyCode::ArrowRight) {
+        crate::playback_controls::Action::Next
     } else if keyboard.just_pressed(KeyCode::ArrowLeft) {
-        -1.0
+        crate::playback_controls::Action::Previous
     } else {
         return;
     };
@@ -182,11 +189,12 @@ pub(crate) fn step_keyboard_navigation(
             continue;
         }
 
-        let new_value = (state.value + delta).clamp(state.min, state.max);
-
-        if (new_value - state.value).abs() > f32::EPSILON {
-            state.value = new_value;
-        }
+        crate::playback_controls::apply_action(
+            action,
+            result_frame_count(&results),
+            &mut playback,
+            &mut state,
+        );
     }
 }
 
