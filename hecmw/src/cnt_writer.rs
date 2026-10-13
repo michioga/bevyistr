@@ -258,6 +258,8 @@ fn write_material(o: &mut String, mat: &FemMaterial) {
 }
 
 fn write_bc(o: &mut String, bc: &BoundaryCondition) {
+    // As with material properties, preserve the stored f32 precision,
+    // including values smaller than a fixed six-decimal representation.
     // If the original source used a NGRP name, write it back as-is
     // (e.g. "BND0, 1, 3, 0.0") rather than expanding to individual node IDs.
     // This preserves the compact FrontISTR convention and avoids bloating
@@ -265,7 +267,7 @@ fn write_bc(o: &mut String, bc: &BoundaryCondition) {
     if let Some(ref grp) = bc.ngrp_name {
         writeln!(
             o,
-            "  {},{},{},{:.6}",
+            "  {},{},{},{:.8e}",
             grp, bc.dof_start, bc.dof_end, bc.value
         )
         .unwrap();
@@ -273,7 +275,7 @@ fn write_bc(o: &mut String, bc: &BoundaryCondition) {
         for node in &bc.nodes {
             writeln!(
                 o,
-                "  {},{},{},{:.6}",
+                "  {},{},{},{:.8e}",
                 node.0, bc.dof_start, bc.dof_end, bc.value
             )
             .unwrap();
@@ -283,9 +285,9 @@ fn write_bc(o: &mut String, bc: &BoundaryCondition) {
 
 fn write_cload(o: &mut String, load: &NodalLoad) {
     if let Some(ref grp) = load.ngrp_name {
-        writeln!(o, "  {},{},{:.6}", grp, load.dof, load.value).unwrap();
+        writeln!(o, "  {},{},{:.8e}", grp, load.dof, load.value).unwrap();
     } else {
-        writeln!(o, "  {},{},{:.6}", load.node.0, load.dof, load.value).unwrap();
+        writeln!(o, "  {},{},{:.8e}", load.node.0, load.dof, load.value).unwrap();
     }
 }
 fn write_dload(o: &mut String, dl: &DistributedLoad) {
@@ -298,7 +300,7 @@ fn write_dload(o: &mut String, dl: &DistributedLoad) {
             for face in faces {
                 writeln!(
                     o,
-                    " {},P{},{:.6}",
+                    " {},P{},{:.8e}",
                     face.element.0, face.local_face.0, dl.value
                 )
                 .unwrap();
@@ -309,7 +311,7 @@ fn write_dload(o: &mut String, dl: &DistributedLoad) {
         // rather than emitting FrontISTR's invalid/nonexistent "P0".
         (DistributedLoadKind::Pressure, DistributedLoadTarget::Elements(elements)) => {
             for el in elements {
-                writeln!(o, " {},P1,{:.6}", el.0, dl.value).unwrap();
+                writeln!(o, " {},P1,{:.8e}", el.0, dl.value).unwrap();
             }
         }
         (DistributedLoadKind::Gravity, target) => {
@@ -321,7 +323,7 @@ fn write_dload(o: &mut String, dl: &DistributedLoad) {
             for el in target.element_ids() {
                 writeln!(
                     o,
-                    " {},GRAV,{:.6},{:.6},{:.6},{:.6}",
+                    " {},GRAV,{:.8e},{:.8e},{:.8e},{:.8e}",
                     el.0, dl.value, direction.x, direction.y, direction.z,
                 )
                 .unwrap();
@@ -446,7 +448,10 @@ mod tests {
 
         let text = build_cnt(&setup, &[]);
 
-        assert!(text.contains("!DLOAD, GRPID=1\n 7,GRAV,9.810000,0.000000,0.000000,-1.000000\n"));
+        assert!(text.contains(&format!(
+            "!DLOAD, GRPID=1\n 7,GRAV,{:.8e},0.00000000e0,0.00000000e0,-1.00000000e0\n",
+            9.81_f32
+        )));
     }
 
     #[test]
@@ -474,8 +479,8 @@ mod tests {
 
         let text = build_cnt(&setup, &[]);
 
-        assert!(text.contains("!BOUNDARY, GRPID=1\n  42,4,4,0.125000\n"));
-        assert!(text.contains("!CLOAD, GRPID=1\n  42,6,-12.500000\n"));
+        assert!(text.contains("!BOUNDARY, GRPID=1\n  42,4,4,1.25000000e-1\n"));
+        assert!(text.contains("!CLOAD, GRPID=1\n  42,6,-1.25000000e1\n"));
     }
 
     #[test]
@@ -504,8 +509,8 @@ mod tests {
 
         let text = build_cnt(&setup, &[]);
 
-        assert!(text.contains("!BOUNDARY, GRPID=1, ROT_CENTER=7\n  42,1,1,0.125000\n"));
-        assert!(text.contains("!CLOAD, GRPID=1, ROT_CENTER=7\n  42,3,-12.500000\n"));
+        assert!(text.contains("!BOUNDARY, GRPID=1, ROT_CENTER=7\n  42,1,1,1.25000000e-1\n"));
+        assert!(text.contains("!CLOAD, GRPID=1, ROT_CENTER=7\n  42,3,-1.25000000e1\n"));
     }
 
     #[test]
@@ -525,6 +530,6 @@ mod tests {
 
         let text = build_cnt(&setup, &[]);
 
-        assert_eq!(text.matches("  LOADED_NODES,1,25.000000\n").count(), 1);
+        assert_eq!(text.matches("  LOADED_NODES,1,2.50000000e1\n").count(), 1);
     }
 }

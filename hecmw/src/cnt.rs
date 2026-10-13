@@ -216,6 +216,9 @@ fn parse_keyword_header(line: &str) -> KeywordHeader {
             let value = part[eq + 1..].trim().to_string();
 
             params.insert(key, value);
+        } else if !part.is_empty() {
+            // Flags such as NONLINEAR have no '=' but still carry meaning.
+            params.insert(part.to_uppercase(), String::new());
         }
     }
 
@@ -306,6 +309,9 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
                 if let Some(solution_type) = header.params.get("TYPE") {
                     solver.analysis_type = match solution_type.to_ascii_uppercase().as_str() {
+                        "STATIC" if header.params.contains_key("NONLINEAR") => {
+                            AnalysisType::NlStatic
+                        }
                         "NLSTATIC" => AnalysisType::NlStatic,
                         "DYNAMIC" => AnalysisType::Dynamic,
                         "EIGEN" | "EIGENVALUE" => AnalysisType::Eigen,
@@ -902,6 +908,74 @@ mod tests {
 
         assert_eq!(setup.materials.len(), 1);
         assert_eq!(setup.materials[0].young_modulus, Some(210_000.0));
+    }
+
+    #[test]
+    fn nonlinear_solution_flags_survive_export_and_reload() {
+        let mesh = fem_core::FemMesh::demo_hex8();
+        for (header, expected) in [
+            ("!SOLUTION, TYPE=STATIC, NONLINEAR", AnalysisType::NlStatic),
+            ("!solution, nonlinear, type=static", AnalysisType::NlStatic),
+            ("!SOLUTION, TYPE=NLSTATIC", AnalysisType::NlStatic),
+            ("!SOLUTION, TYPE=STATIC", AnalysisType::Static),
+            ("!SOLUTION, TYPE=EIGEN", AnalysisType::Eigen),
+            ("!SOLUTION, TYPE=DYNAMIC", AnalysisType::Dynamic),
+        ] {
+            let mut setup = AnalysisSetup::default();
+            parse_cnt(header, &mesh, 0).merge_into(&mut setup);
+            assert_eq!(setup.solver.analysis_type, expected, "{header}");
+            let exported = crate::cnt_writer::build_cnt(&setup, &[]);
+            let loaded = parse_cnt(&exported, &mesh, 0);
+            assert_eq!(loaded.solver.unwrap().analysis_type, expected, "{header}");
+        }
+    }
+
+    #[test]
+    fn boundary_and_load_values_round_trip_at_stored_precision() {
+        let mesh = fem_core::FemMesh::demo_hex8();
+        for value in [
+            0.0_f32,
+            5.0e-8,
+            -1.2345679e-28,
+            123456.79,
+            f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            f32::MAX,
+        ] {
+            // Both compact node groups and individual node IDs; rotation,
+            // moment, face pressure and body force use the same stored precision.
+            let input = format!(
+                "!NGROUP, NGRP=TEST\n1\n\
+                 !BOUNDARY\n1,1,1,{value:.8e}\nTEST,4,4,{value:.8e}\n\
+                 !CLOAD\n1,1,{value:.8e}\nTEST,6,{value:.8e}\n\
+                 !DLOAD\n1,P1,{value:.8e}\n1,GRAV,{value:.8e},1.0e-8,1.0,0.0\n"
+            );
+            let mut setup = AnalysisSetup::default();
+            parse_cnt(&input, &mesh, 0).merge_into(&mut setup);
+            let exported = crate::cnt_writer::build_cnt(&setup, &[]);
+            // Inline groups are input metadata, so supply the same group on reload.
+            let loaded = parse_cnt(&format!("!NGROUP, NGRP=TEST\n1\n{exported}"), &mesh, 0);
+            assert_eq!(loaded.boundary_conditions.len(), 2);
+            assert_eq!(loaded.nodal_loads.len(), 2);
+            assert_eq!(loaded.distributed_loads.len(), 2);
+            for bc in &loaded.boundary_conditions {
+                assert_eq!(bc.value.to_bits(), value.to_bits());
+            }
+            for load in &loaded.nodal_loads {
+                assert_eq!(load.value.to_bits(), value.to_bits());
+            }
+            for load in &loaded.distributed_loads {
+                assert_eq!(load.value.to_bits(), value.to_bits());
+            }
+            assert_eq!(
+                loaded.boundary_conditions[1].ngrp_name.as_deref(),
+                Some("TEST")
+            );
+            assert_eq!(loaded.nodal_loads[1].ngrp_name.as_deref(), Some("TEST"));
+            let direction = loaded.distributed_loads[1].direction.unwrap();
+            assert_eq!(direction.x, 1.0e-8);
+            assert_eq!(direction.y, 1.0);
+        }
     }
 
     #[test]
