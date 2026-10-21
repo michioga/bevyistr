@@ -12,6 +12,48 @@ const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 #[derive(Component)]
 pub(crate) struct AnalysisSetupStatsText;
 
+#[derive(Component)]
+pub(crate) struct SetupImportWarningText;
+
+/// Fixed, cross-page notice: opening a project must not hide import blockers
+/// until the user happens to visit Solve or tries to run it.
+pub(crate) fn spawn_import_warning(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(10.5),
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.72, 0.35)),
+        Node {
+            display: Display::None,
+            margin: UiRect::axes(px(10.0), px(4.0)),
+            ..default()
+        },
+        SetupImportWarningText,
+    ));
+}
+
+pub(crate) fn update_import_warning(
+    setup: Res<fem_core::AnalysisSetup>,
+    mut query: Query<(&mut Text, &mut Node), With<SetupImportWarningText>>,
+) {
+    if !setup.is_changed() {
+        return;
+    }
+    for (mut text, mut node) in &mut query {
+        node.display = if setup.import_issues.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        **text = format!(
+            "Setup incomplete: {} unsupported setting(s).\nExport / Run blocked. Viewing is available.\nSee Solve for details.",
+            setup.import_issues.len()
+        );
+    }
+}
+
 pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
@@ -168,4 +210,80 @@ pub(crate) fn update_analysis_setup_stats_text(
             setup.sections.len(),
         )
     };
+    if !setup.import_issues.is_empty() {
+        text.0.push_str("\n\nIMPORTED SETUP INCOMPLETE\nSolver controls show only the supported subset, not the full imported analysis.\n");
+        for issue in &setup.import_issues {
+            text.0.push_str(&format!("\n{issue}\n"));
+        }
+        text.0.push_str("\nExport / Run blocked to prevent data loss. Existing results remain viewable. Keep the original input; changing a dropdown does not resolve omitted settings.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_warning_is_visible_and_details_survive_solver_edits() {
+        let mut app = App::new();
+        app.init_resource::<fem_core::AnalysisSetup>();
+        app.add_systems(
+            Update,
+            (update_import_warning, update_analysis_setup_stats_text),
+        );
+        let notice = app
+            .world_mut()
+            .spawn((Text::new(""), Node::default(), SetupImportWarningText))
+            .id();
+        let details = app
+            .world_mut()
+            .spawn((Text::new(""), AnalysisSetupStatsText))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(notice).unwrap().display,
+            Display::None
+        );
+        app.world_mut()
+            .resource_mut::<fem_core::AnalysisSetup>()
+            .import_issues
+            .push(fem_core::SetupImportIssue {
+                source: "heat.cnt".into(),
+                line: 4,
+                keyword: "!SOLUTION, TYPE=HEAT".into(),
+                message: "Unsupported analysis".into(),
+            });
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(notice).unwrap().display,
+            Display::Flex
+        );
+        assert!(
+            app.world()
+                .get::<Text>(details)
+                .unwrap()
+                .0
+                .contains("heat.cnt:4")
+        );
+        app.world_mut()
+            .resource_mut::<fem_core::AnalysisSetup>()
+            .solver
+            .analysis_type = fem_core::AnalysisType::Eigen;
+        app.update();
+        assert!(
+            app.world()
+                .get::<Text>(details)
+                .unwrap()
+                .0
+                .contains("TYPE=HEAT")
+        );
+        app.world_mut()
+            .resource_mut::<fem_core::AnalysisSetup>()
+            .clear();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(notice).unwrap().display,
+            Display::None
+        );
+    }
 }

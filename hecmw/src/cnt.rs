@@ -11,8 +11,9 @@
 //! `!SECTION` formulation card is not interpreted. Solver/step settings are
 //! partially supported. `!OUTPUT_RES` / `!OUTPUT_VIS` cards are retained for
 //! output-field editing and export, including unrecognized items and header
-//! parameters. Other unrecognized keywords are currently skipped; this is
-//! not a lossless general CNT editor.
+//! parameters. Unsupported settings are reported in `import_issues` and block
+//! regeneration, without preventing mesh/result inspection. This is not a
+//! lossless general CNT editor.
 //!
 //! # Node group resolution
 //!
@@ -29,6 +30,8 @@ use std::io;
 use std::path::Path;
 
 use bevy::prelude::Vec3;
+#[path = "cnt_compatibility.rs"]
+mod compatibility;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
@@ -79,6 +82,7 @@ pub struct CntData {
 
     pub solver: Option<SolverSettings>,
     pub output: fem_core::OutputSettings,
+    pub import_issues: Vec<fem_core::SetupImportIssue>,
 }
 
 impl Default for CntData {
@@ -92,6 +96,7 @@ impl Default for CntData {
             contact_settings: vec![],
             solver: None,
             output: fem_core::OutputSettings::inherited(),
+            import_issues: vec![],
         }
     }
 }
@@ -147,6 +152,13 @@ impl CntData {
             setup.solver = solver;
         }
         setup.output = self.output;
+        // Open Setup is additive: loading another CNT must not acknowledge or
+        // erase blockers belonging to settings already merged into this model.
+        for issue in self.import_issues {
+            if !setup.import_issues.contains(&issue) {
+                setup.import_issues.push(issue);
+            }
+        }
     }
 
     /// Applies `.cnt` interaction types and coefficients to contact pairs
@@ -183,7 +195,11 @@ pub fn load_cnt_file(
 ) -> Result<CntData, CntError> {
     let text = std::fs::read_to_string(path.as_ref())?;
 
-    Ok(parse_cnt(&text, mesh, mesh_index))
+    let mut data = parse_cnt(&text, mesh, mesh_index);
+    for issue in &mut data.import_issues {
+        issue.source = path.as_ref().display().to_string();
+    }
+    Ok(data)
 }
 
 // Writing a `.cnt` file back out is handled by [`crate::cnt_writer::write_cnt_file`],
@@ -202,7 +218,7 @@ struct KeywordHeader {
 }
 
 fn parse_keyword_header(line: &str) -> KeywordHeader {
-    let body = line.trim_start_matches('!');
+    let body = strip_comment(line).trim_start_matches('!');
     let mut parts = body.split(',');
 
     let name = parts.next().unwrap_or("").trim().to_uppercase();
@@ -227,7 +243,20 @@ fn parse_keyword_header(line: &str) -> KeywordHeader {
 
 /// Strips a trailing `# comment` from a `.cnt` data line, if present.
 fn strip_comment(line: &str) -> &str {
+    if line.trim_start().starts_with("!!") {
+        return "";
+    }
     line.find('#').map(|i| &line[..i]).unwrap_or(line).trim()
+}
+
+fn is_keyword(line: &str) -> bool {
+    strip_comment(line).starts_with('!')
+}
+
+fn skip_comment_lines(lines: &[&str], i: &mut usize) {
+    while *i < lines.len() && strip_comment(lines[*i]).is_empty() {
+        *i += 1;
+    }
 }
 
 fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
@@ -243,14 +272,16 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
     while i < lines.len() {
         let trimmed = lines[i].trim();
 
-        if trimmed.starts_with("!NGROUP") || trimmed.starts_with("!NGRP") {
+        if trimmed.to_ascii_uppercase().starts_with("!NGROUP")
+            || trimmed.to_ascii_uppercase().starts_with("!NGRP")
+        {
             let header = parse_keyword_header(trimmed);
             let name = header.params.get("NGRP").cloned().unwrap_or_default();
             i += 1;
 
             let mut nodes = Vec::new();
 
-            while i < lines.len() && !lines[i].trim_start().starts_with('!') {
+            while i < lines.len() && !is_keyword(lines[i]) {
                 let line = strip_comment(lines[i]);
 
                 nodes.extend(
@@ -376,7 +407,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 };
                 i += 1;
 
-                while i < lines.len() && !lines[i].trim_start().starts_with('!') {
+                while i < lines.len() && !is_keyword(lines[i]) {
                     let line = strip_comment(lines[i]);
                     i += 1;
                     if line.is_empty() {
@@ -406,7 +437,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     .map(|token| parse_rotation_center(token, &ngroups, mesh, mesh_index));
                 i += 1;
 
-                while i < lines.len() && !lines[i].trim_start().starts_with('!') {
+                while i < lines.len() && !is_keyword(lines[i]) {
                     let line = strip_comment(lines[i]);
                     i += 1;
 
@@ -454,7 +485,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     .map(|token| parse_rotation_center(token, &ngroups, mesh, mesh_index));
                 i += 1;
 
-                while i < lines.len() && !lines[i].trim_start().starts_with('!') {
+                while i < lines.len() && !is_keyword(lines[i]) {
                     let line = strip_comment(lines[i]);
                     i += 1;
 
@@ -494,7 +525,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             "DLOAD" => {
                 i += 1;
 
-                while i < lines.len() && !lines[i].trim_start().starts_with('!') {
+                while i < lines.len() && !is_keyword(lines[i]) {
                     let line = strip_comment(lines[i]);
                     i += 1;
 
@@ -587,9 +618,15 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 // Sub-blocks: !ITEM=1 (Young's modulus, Poisson ratio),
                 // !ITEM=2 (density), !ITEM=3 (thermal expansion — ignored).
                 while i < lines.len() {
-                    let sub_trimmed = lines[i].trim();
+                    let sub_line = lines[i].trim().to_ascii_uppercase();
+                    let sub_trimmed = sub_line.as_str();
 
-                    if sub_trimmed.starts_with("!ITEM") {
+                    if sub_trimmed.starts_with("!!")
+                        || sub_trimmed.starts_with('#')
+                        || sub_trimmed.is_empty()
+                    {
+                        i += 1;
+                    } else if sub_trimmed.starts_with("!ITEM") {
                         let sub_header = parse_keyword_header(sub_trimmed);
                         let item_num = sub_header
                             .params
@@ -609,6 +646,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
 
                         i += 1;
 
+                        skip_comment_lines(&lines, &mut i);
                         let Some(data_line) = lines.get(i).map(|l| strip_comment(l)) else {
                             break;
                         };
@@ -639,6 +677,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         // Older/simpler files use a standalone !DENSITY
                         // block instead of !MATERIAL's !ITEM=2.
                         i += 1;
+                        skip_comment_lines(&lines, &mut i);
                         if let Some(&density) = lines
                             .get(i)
                             .map(|l| strip_comment(l))
@@ -651,6 +690,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         i += 1;
                     } else if sub_trimmed.starts_with("!ELASTIC") {
                         i += 1;
+                        skip_comment_lines(&lines, &mut i);
                         if let Some(line) = lines.get(i).map(|l| strip_comment(l)) {
                             let values: Vec<f32> = line
                                 .split(',')
@@ -729,6 +769,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
         }
     }
 
+    data.import_issues = compatibility::audit(text, &data);
     data
 }
 

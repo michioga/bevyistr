@@ -24,6 +24,13 @@ pub fn write_cnt_file_with_contacts(
     setup: &AnalysisSetup,
     contacts: &[ContactPair],
 ) -> io::Result<(usize, usize, usize, usize, usize)> {
+    let blockers = export_blockers(setup);
+    if !blockers.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            blockers.join("\n"),
+        ));
+    }
     std::fs::write(path, build_cnt(setup, contacts).as_bytes())?;
     let loads = setup.nodal_loads.len() + setup.distributed_loads.len();
     Ok((
@@ -33,6 +40,18 @@ pub fn write_cnt_file_with_contacts(
         setup.sections.len(),
         contacts.len(),
     ))
+}
+
+pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
+    let mut blockers: Vec<_> = setup
+        .import_issues
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    if setup.solver.analysis_type == AnalysisType::Dynamic {
+        blockers.push("Dynamic setup is incomplete: integration/time settings are not supported for export or Run. Existing results can still be viewed.".into());
+    }
+    blockers
 }
 
 pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {

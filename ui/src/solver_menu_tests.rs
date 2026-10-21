@@ -86,7 +86,14 @@ fn key(app: &mut App, code: KeyCode, logical_key: Key) {
 fn assert_export(app: &App, choice: Choice) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("model.cnt");
-    hecmw::cnt_writer::write_cnt_file(&path, app.world().resource::<AnalysisSetup>()).unwrap();
+    let setup = app.world().resource::<AnalysisSetup>();
+    let result = hecmw::cnt_writer::write_cnt_file(&path, setup);
+    if setup.solver.analysis_type == fem_core::AnalysisType::Dynamic {
+        assert!(result.unwrap_err().to_string().contains("Dynamic setup is incomplete"));
+        assert!(!path.exists(), "must not emit header-only dynamic input");
+        return;
+    }
+    result.unwrap();
     let cnt = std::fs::read_to_string(path).unwrap();
     assert!(
         cnt.contains(&choice.keyword()),

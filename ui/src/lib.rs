@@ -593,6 +593,8 @@ impl Plugin for UiPlugin {
         app.add_systems(Update, material_assignment_click.in_set(InteractionSystems::Selection));
         app.add_systems(Update, draw_material_target.after(InteractionSystems::Selection));
 
+        app.add_systems(Update, solve_ui::update_import_warning);
+
         // Group 6: assembly part selection and pose editing.
         app.add_systems(
             Update,

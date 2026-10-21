@@ -495,6 +495,26 @@ impl LinearSolverMethod {
     }
 }
 
+/// A CNT setting that cannot yet be regenerated without changing its meaning.
+/// Keep this with the setup (including undo/assembly clones), not just in a log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupImportIssue {
+    pub source: String,
+    pub line: usize,
+    pub keyword: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for SetupImportIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{} {}: {}",
+            self.source, self.line, self.keyword, self.message
+        )
+    }
+}
+
 #[derive(Resource, Debug, Clone)]
 pub struct AnalysisSetup {
     pub boundary_conditions: Vec<BoundaryCondition>,
@@ -515,6 +535,9 @@ pub struct AnalysisSetup {
     /// `!SOLVER` etc. in the exported `.cnt` file.
     pub solver: SolverSettings,
     pub output: crate::OutputSettings,
+    /// Import blockers are not cleared by editing a solver dropdown. The
+    /// omitted source settings must not silently disappear on export/run.
+    pub import_issues: Vec<SetupImportIssue>,
 }
 
 impl Default for AnalysisSetup {
@@ -528,6 +551,7 @@ impl Default for AnalysisSetup {
             mpc_equations: Vec::new(),
             solver: SolverSettings::default(),
             output: crate::OutputSettings::default(),
+            import_issues: Vec::new(),
         }
     }
 }
@@ -540,6 +564,7 @@ impl AnalysisSetup {
             && self.materials.is_empty()
             && self.sections.is_empty()
             && self.mpc_equations.is_empty()
+            && self.import_issues.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -549,6 +574,7 @@ impl AnalysisSetup {
         self.materials.clear();
         self.sections.clear();
         self.mpc_equations.clear();
+        self.import_issues.clear();
     }
 
     pub fn material_by_name(&self, name: &str) -> Option<&FemMaterial> {

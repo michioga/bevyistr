@@ -37,6 +37,28 @@ Dynamic詳細、複数ステップ、自動増分、非線形材料、熱解析�
 `mdbook build docs`と変更Rustファイルのrustfmt検査も成功しました。
 全体のfmt検査には既存の未整形箇所が残っています。GUI・FrontISTR実行の再検証は未実施です。
 
+### 2026-10-21: CNT互換性ガードと旧ブランチ整理
+
+- 読込で保持できないCNTキーワード・パラメータ・主要制御データを、元ファイル／行番号付きで記録する。
+  全ページの警告とSolveの詳細表示を追加し、Export・Run・CNT単体書込で不完全な再出力を阻止する。
+- 読込自体や結果表示は止めない。警告は設定の追加読込・複製・部品統合で保持し、
+  ドロップダウンを変えるだけでは解除しない。Dynamic新規作成も未完成入力の出力を禁止する。
+- 保守的な制限: STEP／CONTACT、非既定のEIGEN、保持できないSOLVER詳細、非線形・温度依存材料、
+  出力間隔など。次工程で線形／非線形設定を分離し、往復テストとともに対応範囲を広げる。
+  今回だけで全CNT構文・MSH設定の完全保存を保証するものではない。
+- コメント行や小文字の材料サブカードによる部分読込の欠落も回帰テストに追加する。
+- main (`856b3e2`) への包含を検査して、ローカルの `docs/release-0.2.0` (`a94e3be`)、
+  `feat/multipart-pvtu-results` (`6ff9c47`)、`feat/solver-selection-popup` (`716d4ab`)、
+  `publish_crates_io` (`e2d226b`) を削除。コミットはmainに残り、復元可能。
+  リモートでは中2本は削除済み。残る `docs/release-0.2.0` と `publish_crates_io` は
+  エージェントのGit認証失敗により削除未完了。0.3.0向けの未統合枝・公開元枝・タグは保持する。
+
+検証: `cargo test -p bevyistr-hecmw --locked --offline` は85件成功・失敗0・実データ依存7件スキップ。
+`cargo test -p bevyistr-ui --lib --locked --offline` は203件成功・失敗0・実機MPI依存1件スキップ。
+UIテストはサンドボックスの既定一時フォルダでatomic保存が拒否されたため、
+プロセス内のTEMP/TMPを `target/compat-test-temp` に指定して再実行した。
+mdBookビルド、変更対象Rustの整形検査、diffの空白検査も成功。実機GUIとFrontISTR解析は未実施。
+
 ### 1. 単一固定プローブの履歴CSV保存
 
 想定ブランチ: `feat/probe-history-csv`。

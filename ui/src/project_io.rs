@@ -561,6 +561,9 @@ pub(crate) fn apply_pending_cnt_system(
 
     match hecmw::load_cnt_file(&path, mesh, mesh_index) {
         Ok(data) => {
+            for issue in &data.import_issues {
+                bevy::log::warn!("Setup import: {issue}; Export/Run blocked (viewing is available)");
+            }
             let counts = (
                 data.boundary_conditions.len(),
                 data.boundary_conditions
@@ -711,6 +714,9 @@ pub(crate) fn open_setup_button_system(
 
         match hecmw::load_cnt_file(&path, mesh, 0) {
             Ok(data) => {
+                for issue in &data.import_issues {
+                    bevy::log::warn!("Setup import: {issue}; Export/Run blocked (viewing is available)");
+                }
                 let applied_contacts = data.apply_contact_settings(&mut model.contacts);
                 data.merge_into(&mut setup);
                 setup.set_changed();

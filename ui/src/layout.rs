@@ -212,6 +212,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             // Task navigation stays visible while the active page scrolls.
             spawn_sidebar_navigation(panel);
             spawn_view_toolbar(panel);
+            crate::solve_ui::spawn_import_warning(panel);
             divider(panel);
             spawn_selection_level_bar(panel);
             divider(panel);

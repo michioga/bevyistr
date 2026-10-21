@@ -291,6 +291,9 @@ fn validate_analysis_setup(
     setup: &AnalysisSetup,
     report: &mut FrontistrValidationReport,
 ) {
+    for blocker in crate::cnt_writer::export_blockers(setup) {
+        report.error("Setup compatibility", blocker);
+    }
     for (index, condition) in setup.boundary_conditions.iter().enumerate() {
         let location = format!("BC[{}] {}", index + 1, condition.name);
         let Some(mesh) = model.meshes.get(condition.mesh_index) else {

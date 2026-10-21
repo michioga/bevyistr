@@ -111,6 +111,28 @@ fn validation_precedes_the_run_folder_dialog() {
 }
 
 #[test]
+fn unsupported_import_blocks_run_even_with_an_existing_export_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("heat.cnt");
+    std::fs::write(&source, "!SOLUTION, TYPE=HEAT\n!END\n").unwrap();
+    let model = FemModel::demo_hex8();
+    let mut setup = AnalysisSetup::default();
+    hecmw::load_cnt_file(&source, &model.meshes[0], 0)
+        .unwrap()
+        .merge_into(&mut setup);
+    let mut state = FrontistrRunState::default();
+    state.register_export(dir.path().into(), "model".into());
+    let error = state
+        .prepare_inputs(&model, &setup, "demo", |_| {
+            panic!("blocked import must not open picker")
+        })
+        .unwrap_err();
+    assert!(error.contains("TYPE=HEAT"));
+    assert!(!dir.path().join("model.cnt").exists());
+    assert!(!state.is_running());
+}
+
+#[test]
 fn failed_input_write_does_not_remember_a_new_target() {
     let dir = tempfile::tempdir().unwrap();
     let mut state = FrontistrRunState::default();
