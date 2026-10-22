@@ -73,7 +73,12 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
 
     // ── STEP ──
     if s.analysis_type == AnalysisType::NlStatic || s.analysis_type == AnalysisType::Dynamic {
-        writeln!(o, "!STEP, SUBSTEPS={}", s.substeps).unwrap();
+        writeln!(
+            o,
+            "!STEP, SUBSTEPS={}, MAXITER={}, CONVERG={:.8e}",
+            s.substeps, s.nonlinear_max_iterations, s.nonlinear_convergence_tol
+        )
+        .unwrap();
         if !setup.boundary_conditions.is_empty() {
             writeln!(o, "BOUNDARY, 1").unwrap();
         }
@@ -184,7 +189,7 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     )
     .unwrap();
     writeln!(o, " {}, 1", s.max_iterations).unwrap();
-    writeln!(o, " {:.2e}, 1.0, 0.0", s.convergence_tol).unwrap();
+    writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
 
     writeln!(o).unwrap();
     writeln!(o, "!WRITE, RESULT").unwrap();
@@ -440,7 +445,10 @@ mod tests {
         let text = build_cnt(&setup, &contacts);
 
         assert!(text.contains("!SOLUTION, TYPE=STATIC, NONLINEAR\n"));
-        assert!(text.contains("!STEP, SUBSTEPS=1\nCONTACT, 1\n"));
+        assert!(text.contains(&format!(
+            "!STEP, SUBSTEPS=1, MAXITER=50, CONVERG={:.8e}\nCONTACT, 1\n",
+            1e-3_f32
+        )));
     }
 
     #[test]

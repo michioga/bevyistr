@@ -146,6 +146,25 @@ pub(crate) struct RowText(usize);
 #[derive(Component)]
 pub(crate) struct Status;
 
+#[derive(Component)]
+pub(crate) struct PinGuide;
+
+pub(crate) fn spawn_pin_guide(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((Status, PinGuide, text("")));
+}
+
+fn pin_guide(comparing: bool, pinned: bool) -> &'static str {
+    match (comparing, pinned) {
+        (true, true) => {
+            "Comparison active: click / Clear pinned keeps comparison. CSV: PINNED only."
+        }
+        (true, false) => {
+            "Comparison remains. Pin a target to export CSV; Clear comparison removes the list."
+        }
+        _ => "",
+    }
+}
+
 fn text(value: &str) -> impl Bundle {
     (
         Text::new(value),
@@ -274,7 +293,7 @@ pub(crate) fn update(
         Without<Row>,
     >,
     mut labels: Query<(&RowText, &mut Text), Without<Status>>,
-    mut statuses: Query<&mut Text, With<Status>>,
+    mut statuses: Query<(&mut Text, Has<PinGuide>), With<Status>>,
 ) {
     if !comparison.entries.is_empty()
         && (*page != SidebarPage::Results
@@ -365,13 +384,17 @@ pub(crate) fn update(
         "Click to pin; Add keeps a target for comparison (max 4).".into()
     } else {
         format!(
-            "COMPARISON | {} | {} targets\nShared axes | result/model units. Click replaces PINNED only. CSV exports PINNED only.",
+            "COMPARISON | {} | {} targets\nHISTORY legend | shared axes | result/model units.",
             comparison.field,
             comparison.entries.len()
         )
     };
-    for mut status in &mut statuses {
-        status.set_if_neq(Text::new(message.clone()));
+    for (mut status, guide) in &mut statuses {
+        status.set_if_neq(Text::new(if guide {
+            pin_guide(!comparison.entries.is_empty(), pin.selection().is_some()).into()
+        } else {
+            message.clone()
+        }));
     }
 }
 
@@ -379,6 +402,14 @@ pub(crate) fn update(
 mod tests {
     use super::*;
     use fem_core::NodeId;
+
+    #[test]
+    fn comparison_guide_distinguishes_clear_pin_and_csv_scope() {
+        assert_eq!(pin_guide(false, true), "");
+        assert!(pin_guide(true, true).contains("CSV: PINNED only"));
+        assert!(pin_guide(true, false).contains("Comparison remains"));
+        assert!(pin_guide(true, false).contains("Pin a target to export CSV"));
+    }
 
     fn target(index: usize) -> Target {
         Target::Node {
@@ -540,7 +571,10 @@ mod tests {
             .init_resource::<ResultGeometry>()
             .init_resource::<FemModelVersion>()
             .add_systems(Startup, |mut commands: Commands| {
-                commands.spawn(Node::default()).with_children(spawn);
+                commands.spawn(Node::default()).with_children(|parent| {
+                    spawn_pin_guide(parent);
+                    spawn(parent);
+                });
             })
             .add_systems(Update, update);
         app.update();
@@ -570,6 +604,14 @@ mod tests {
         pin(&mut app, 0);
         click(&mut app, |a| matches!(a, Action::Add));
         pin(&mut app, 1);
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Text, With<PinGuide>>()
+                .single(app.world())
+                .unwrap()
+                .0
+                .contains("CSV: PINNED only")
+        );
         assert_eq!(app.world().resource::<Comparison>().entries.len(), 1);
         click(&mut app, |a| matches!(a, Action::Add));
         click(&mut app, |a| matches!(a, Action::Add));
@@ -587,9 +629,25 @@ mod tests {
         );
         app.world_mut().resource_mut::<ProbePin>().clear();
         app.update();
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Text, With<PinGuide>>()
+                .single(app.world())
+                .unwrap()
+                .0
+                .contains("Comparison remains")
+        );
         assert_eq!(app.world().resource::<Comparison>().entries.len(), 1);
         click(&mut app, |a| matches!(a, Action::Clear));
         assert!(app.world().resource::<Comparison>().entries.is_empty());
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Text, With<PinGuide>>()
+                .single(app.world())
+                .unwrap()
+                .0
+                .is_empty()
+        );
     }
 
     #[test]

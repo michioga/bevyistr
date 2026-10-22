@@ -4,7 +4,7 @@
 //! of `AnalysisSetup`, while Esc reliably restores the last solver value.
 
 use crate::layout::UiInputCapture;
-use crate::measurement::{editable_value, format_measurement};
+use crate::measurement::editable_value;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
@@ -23,16 +23,36 @@ pub(crate) enum SolverField {
     Substeps,
     MaxIterations,
     ConvergenceTolerance,
+    NonlinearMaxIterations,
+    NonlinearConvergenceTolerance,
 }
 
 impl SolverField {
     fn label(self) -> &'static str {
         match self {
             Self::Substeps => "Substeps",
-            Self::MaxIterations => "Max iterations",
-            Self::ConvergenceTolerance => "Tolerance",
+            Self::MaxIterations => "Linear max iterations",
+            Self::ConvergenceTolerance => "Linear tolerance",
+            Self::NonlinearMaxIterations => "Nonlinear max iterations",
+            Self::NonlinearConvergenceTolerance => "Nonlinear residual tolerance",
         }
     }
+
+    fn active(self, settings: &fem_core::SolverSettings) -> bool {
+        match self {
+            Self::MaxIterations | Self::ConvergenceTolerance => {
+                settings.solver_method.is_iterative()
+            }
+            _ => settings.analysis_type == fem_core::AnalysisType::NlStatic,
+        }
+    }
+}
+
+#[derive(Component)]
+pub(crate) enum SolverControlGroup {
+    Linear,
+    Nonlinear,
+    DirectHint,
 }
 
 #[derive(Component)]
@@ -53,24 +73,67 @@ enum ParsedSolverValue {
 }
 
 pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
-    solver_value_row(
-        parent,
-        "Substeps",
-        SolverField::Substeps,
-        "SolverSubstepsInput",
-    );
-    solver_value_row(
-        parent,
-        "Max iterations",
-        SolverField::MaxIterations,
-        "SolverMaxIterationsInput",
-    );
-    solver_value_row(
-        parent,
-        "Convergence tol.",
-        SolverField::ConvergenceTolerance,
-        "SolverConvergenceToleranceInput",
-    );
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                ..default()
+            },
+            SolverControlGroup::Linear,
+        ))
+        .with_children(|group| {
+            solver_hint(group, "LINEAR ITERATION | !SOLVER");
+            solver_value_row(
+                group,
+                "Max iterations",
+                SolverField::MaxIterations,
+                "SolverMaxIterationsInput",
+            );
+            solver_value_row(
+                group,
+                "Relative residual",
+                SolverField::ConvergenceTolerance,
+                "SolverConvergenceToleranceInput",
+            );
+        });
+    parent.spawn((Node::default(), SolverControlGroup::DirectHint)).with_children(|group| {
+        solver_hint(group, "Direct method: linear iteration controls are not used. Availability depends on the FrontISTR build.");
+    });
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                ..default()
+            },
+            SolverControlGroup::Nonlinear,
+        ))
+        .with_children(|group| {
+            solver_hint(group, "NONLINEAR STEP | !STEP (fixed increment)");
+            solver_value_row(
+                group,
+                "Substeps",
+                SolverField::Substeps,
+                "SolverSubstepsInput",
+            );
+            solver_value_row(
+                group,
+                "Newton max iter.",
+                SolverField::NonlinearMaxIterations,
+                "SolverNonlinearIterationsInput",
+            );
+            solver_value_row(
+                group,
+                "Residual tol.",
+                SolverField::NonlinearConvergenceTolerance,
+                "SolverNonlinearToleranceInput",
+            );
+            solver_hint(
+                group,
+                "Independent of linear tolerance. Other nonlinear criteria use FrontISTR defaults.",
+            );
+        });
     parent.spawn((
         Text::new("Enter applies an exact value; Esc restores"),
         TextFont {
@@ -79,6 +142,17 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
         },
         TextColor(TEXT_MUTED),
         SolverInputStatus,
+    ));
+}
+
+fn solver_hint(parent: &mut ChildSpawnerCommands, label: &str) {
+    parent.spawn((
+        Text::new(label),
+        TextFont {
+            font_size: FontSize::Px(9.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
     ));
 }
 
@@ -127,10 +201,11 @@ fn solver_value_row(
                     ..EditableText::new("0")
                 },
                 EditableTextFilter::new(move |character| match field {
-                    SolverField::Substeps | SolverField::MaxIterations => {
-                        character.is_ascii_digit()
-                    }
-                    SolverField::ConvergenceTolerance => {
+                    SolverField::Substeps
+                    | SolverField::MaxIterations
+                    | SolverField::NonlinearMaxIterations => character.is_ascii_digit(),
+                    SolverField::ConvergenceTolerance
+                    | SolverField::NonlinearConvergenceTolerance => {
                         character.is_ascii_digit()
                             || matches!(character, '+' | '-' | '.' | 'e' | 'E')
                     }
@@ -172,14 +247,34 @@ pub(crate) fn solver_numeric_input_system(
         &mut BorderColor,
     )>,
     mut statuses: Query<&mut Text, With<SolverInputStatus>>,
+    mut groups: Query<(&SolverControlGroup, &mut Node)>,
 ) {
+    for (group, mut node) in &mut groups {
+        let visible = match group {
+            SolverControlGroup::Linear => setup.solver.solver_method.is_iterative(),
+            SolverControlGroup::Nonlinear => {
+                setup.solver.analysis_type == fem_core::AnalysisType::NlStatic
+            }
+            SolverControlGroup::DirectHint => !setup.solver.solver_method.is_iterative(),
+        };
+        node.display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
     let focused_entity = input_focus.get();
     if !focused_entity.is_some_and(|entity| inputs.contains(entity)) {
         state.error = None;
     }
 
     for (entity, field, mut input, mut border) in &mut inputs {
-        let focused = focused_entity == Some(entity);
+        let active = field.0.active(&setup.solver);
+        if !active && focused_entity == Some(entity) {
+            input_focus.clear();
+            state.error = None;
+        }
+        let focused = active && focused_entity == Some(entity);
         let current = editable_value(&input);
 
         if focused {
@@ -237,23 +332,29 @@ fn solver_value_text(settings: &fem_core::SolverSettings, field: SolverField) ->
     match field {
         SolverField::Substeps => settings.substeps.to_string(),
         SolverField::MaxIterations => settings.max_iterations.to_string(),
-        SolverField::ConvergenceTolerance => format_measurement(settings.convergence_tol),
+        SolverField::ConvergenceTolerance => format!("{:.8e}", settings.convergence_tol),
+        SolverField::NonlinearMaxIterations => settings.nonlinear_max_iterations.to_string(),
+        SolverField::NonlinearConvergenceTolerance => {
+            format!("{:.8e}", settings.nonlinear_convergence_tol)
+        }
     }
 }
 
 fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValue, String> {
     match field {
-        SolverField::Substeps | SolverField::MaxIterations => {
+        SolverField::Substeps
+        | SolverField::MaxIterations
+        | SolverField::NonlinearMaxIterations => {
             let value = text
                 .trim()
                 .parse::<u32>()
                 .map_err(|_| "enter a positive whole number".to_string())?;
-            if value == 0 {
-                return Err("value must be at least 1".to_string());
+            if value == 0 || value > i32::MAX as u32 {
+                return Err("value must be between 1 and 2147483647".to_string());
             }
             Ok(ParsedSolverValue::Integer(value))
         }
-        SolverField::ConvergenceTolerance => {
+        SolverField::ConvergenceTolerance | SolverField::NonlinearConvergenceTolerance => {
             let value = text
                 .trim()
                 .parse::<f32>()
@@ -278,6 +379,12 @@ fn apply_solver_value(
         }
         (SolverField::ConvergenceTolerance, ParsedSolverValue::Float(value)) => {
             settings.convergence_tol = value;
+        }
+        (SolverField::NonlinearMaxIterations, ParsedSolverValue::Integer(value)) => {
+            settings.nonlinear_max_iterations = value
+        }
+        (SolverField::NonlinearConvergenceTolerance, ParsedSolverValue::Float(value)) => {
+            settings.nonlinear_convergence_tol = value
         }
         _ => unreachable!("parsed solver value must match its field"),
     }
@@ -314,5 +421,198 @@ mod tests {
         assert_eq!(settings.substeps, 1);
         assert_eq!(settings.max_iterations, 250);
         assert_eq!(settings.convergence_tol, 1.0e-6);
+        assert_eq!(settings.nonlinear_max_iterations, 50);
+        apply_solver_value(
+            &mut settings,
+            SolverField::NonlinearMaxIterations,
+            ParsedSolverValue::Integer(37),
+        );
+        assert_eq!(settings.max_iterations, 250);
+        assert_eq!(settings.nonlinear_max_iterations, 37);
+    }
+
+    #[test]
+    fn tolerances_round_trip_without_display_rounding() {
+        let mut settings = fem_core::SolverSettings::default();
+        for field in [
+            SolverField::ConvergenceTolerance,
+            SolverField::NonlinearConvergenceTolerance,
+        ] {
+            for value in [1.2345679e-18, 2.3456789e-4, f32::MIN_POSITIVE] {
+                apply_solver_value(&mut settings, field, ParsedSolverValue::Float(value));
+                assert_eq!(
+                    parse_solver_value(field, &solver_value_text(&settings, field)),
+                    Ok(ParsedSolverValue::Float(value))
+                );
+            }
+            for invalid in ["NaN", "inf", "0", "-1"] {
+                assert!(parse_solver_value(field, invalid).is_err());
+            }
+        }
+        assert!(parse_solver_value(SolverField::NonlinearMaxIterations, "4294967295").is_err());
+    }
+
+    #[test]
+    fn nonlinear_editor_commits_on_enter_and_restores_on_escape() {
+        let mut app = App::new();
+        let mut setup = fem_core::AnalysisSetup::default();
+        setup.solver.analysis_type = fem_core::AnalysisType::NlStatic;
+        setup.solver.solver_method = fem_core::LinearSolverMethod::Mumps;
+        app.insert_resource(setup)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<UiKeyboardState>()
+            .init_resource::<SolverEditorState>()
+            .add_systems(Update, solver_numeric_input_system);
+        let input = app
+            .world_mut()
+            .spawn((
+                SolverValueInput(SolverField::NonlinearMaxIterations),
+                EditableText::new("37"),
+                BorderColor::all(INPUT_BORDER),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(input, bevy::input_focus::FocusCause::Navigated);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<fem_core::AnalysisSetup>()
+                .solver
+                .nonlinear_max_iterations,
+            50
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<fem_core::AnalysisSetup>()
+                .solver
+                .nonlinear_max_iterations,
+            37
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut()
+            .get_mut::<EditableText>(input)
+            .unwrap()
+            .editor_mut()
+            .set_text("99");
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(input, bevy::input_focus::FocusCause::Navigated);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        assert_eq!(
+            editable_value(app.world().get::<EditableText>(input).unwrap()),
+            "37"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<fem_core::AnalysisSetup>()
+                .solver
+                .max_iterations,
+            100
+        );
+        assert_eq!(
+            app.world()
+                .resource::<fem_core::AnalysisSetup>()
+                .solver
+                .nonlinear_max_iterations,
+            37
+        );
+    }
+
+    #[test]
+    fn hidden_controls_discard_pending_enter_and_restore_stored_value() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<UiKeyboardState>()
+            .init_resource::<fem_core::AnalysisSetup>()
+            .init_resource::<SolverEditorState>()
+            .add_systems(Update, solver_numeric_input_system);
+        let linear = app
+            .world_mut()
+            .spawn((Node::default(), SolverControlGroup::Linear))
+            .id();
+        let nonlinear = app
+            .world_mut()
+            .spawn((Node::default(), SolverControlGroup::Nonlinear))
+            .id();
+        let direct = app
+            .world_mut()
+            .spawn((Node::default(), SolverControlGroup::DirectHint))
+            .id();
+        let input = app
+            .world_mut()
+            .spawn((
+                SolverValueInput(SolverField::MaxIterations),
+                EditableText::new("999"),
+                BorderColor::all(INPUT_BORDER),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(input, bevy::input_focus::FocusCause::Navigated);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.world_mut()
+            .resource_mut::<fem_core::AnalysisSetup>()
+            .solver
+            .solver_method = fem_core::LinearSolverMethod::Mumps;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<fem_core::AnalysisSetup>()
+                .solver
+                .max_iterations,
+            100
+        );
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+        assert_eq!(
+            editable_value(app.world().get::<EditableText>(input).unwrap()),
+            "100"
+        );
+        assert_eq!(
+            app.world().get::<Node>(linear).unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            app.world().get::<Node>(nonlinear).unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            app.world().get::<Node>(direct).unwrap().display,
+            Display::Flex
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        {
+            let mut setup = app.world_mut().resource_mut::<fem_core::AnalysisSetup>();
+            setup.solver.analysis_type = fem_core::AnalysisType::NlStatic;
+            setup.solver.solver_method = fem_core::LinearSolverMethod::Cg;
+        }
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(linear).unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(
+            app.world().get::<Node>(nonlinear).unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(
+            app.world().get::<Node>(direct).unwrap().display,
+            Display::None
+        );
     }
 }

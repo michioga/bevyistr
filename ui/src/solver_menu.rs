@@ -60,6 +60,7 @@ impl Kind {
             .to_vec(),
             Self::Method => [
                 LinearSolverMethod::Mumps,
+                LinearSolverMethod::DirectMkl,
                 LinearSolverMethod::Cg,
                 LinearSolverMethod::Gmres,
                 LinearSolverMethod::Direct,

@@ -136,6 +136,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         },
         TextColor(Color::WHITE),
     ));
+    crate::probe_comparison::spawn_pin_guide(parent);
     parent
         .spawn((
             Button,

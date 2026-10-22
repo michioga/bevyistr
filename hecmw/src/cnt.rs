@@ -32,6 +32,9 @@ use std::path::Path;
 use bevy::prelude::Vec3;
 #[path = "cnt_compatibility.rs"]
 mod compatibility;
+#[cfg(test)]
+#[path = "solver_settings_tests.rs"]
+mod solver_settings_tests;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
@@ -367,14 +370,14 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     .or_else(|| header.params.get("ITMAX"))
                     .and_then(|value| value.parse::<u32>().ok())
                 {
-                    solver.max_iterations = value;
+                    solver.nonlinear_max_iterations = value;
                 }
                 if let Some(value) = header
                     .params
                     .get("CONVERG")
                     .and_then(|value| value.parse::<f32>().ok())
                 {
-                    solver.convergence_tol = value;
+                    solver.nonlinear_convergence_tol = value;
                 }
                 i += 1;
             }
@@ -385,11 +388,33 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     solver.solver_method = match method.to_ascii_uppercase().as_str() {
                         "GMRES" => LinearSolverMethod::Gmres,
                         "MUMPS" => LinearSolverMethod::Mumps,
-                        "DIRECT" | "DIRECTMKL" | "MKL" | "PARDISO" | "MKL_PARDISO" => {
-                            LinearSolverMethod::Direct
-                        }
+                        "DIRECT" => LinearSolverMethod::Direct,
+                        "DIRECTMKL" | "MKL" => LinearSolverMethod::DirectMkl,
                         _ => LinearSolverMethod::Cg,
                     };
+                }
+                // The first two SOLVER data rows belong to the linear solve,
+                // independent of STEP ordering. Remaining options are audited
+                // by the compatibility checker before export is permitted.
+                let rows: Vec<_> = lines[i + 1..]
+                    .iter()
+                    .take_while(|line| !is_keyword(line))
+                    .map(|line| strip_comment(line))
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                if let Some(value) = rows
+                    .first()
+                    .and_then(|row| row.split(',').next())
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                {
+                    solver.max_iterations = value;
+                }
+                if let Some(value) = rows
+                    .get(1)
+                    .and_then(|row| row.split(',').next())
+                    .and_then(|value| value.trim().parse::<f32>().ok())
+                {
+                    solver.convergence_tol = value;
                 }
                 i += 1;
             }
@@ -1047,8 +1072,10 @@ mod tests {
         let solver = data.solver.as_ref().expect("solver settings");
         assert_eq!(solver.analysis_type, AnalysisType::NlStatic);
         assert_eq!(solver.substeps, 100);
-        assert_eq!(solver.max_iterations, 1000);
-        assert_eq!(solver.convergence_tol, 1.0e-4);
+        assert_eq!(solver.nonlinear_max_iterations, 1000);
+        assert_eq!(solver.nonlinear_convergence_tol, 1.0e-4);
+        assert_eq!(solver.max_iterations, 100);
+        assert_eq!(solver.convergence_tol, 1.0e-6);
         assert_eq!(solver.solver_method, LinearSolverMethod::Mumps);
 
         let mut contacts = vec![ContactPair::new(

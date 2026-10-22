@@ -13,6 +13,22 @@ mod tests;
 #[derive(Component)]
 pub(crate) struct SourceLabel;
 
+#[derive(Component)]
+pub(crate) struct SpeedHint;
+
+pub(crate) fn spawn_speed_hint(parent: &mut ChildSpawnerCommands) {
+    parent.spawn((
+        SpeedHint,
+        Text::new("Frames/sec; not physical-time playback"),
+        Pickable::IGNORE,
+        TextFont {
+            font_size: FontSize::Px(10.),
+            ..default()
+        },
+        TextColor(Color::srgb(0.6, 0.72, 0.78)),
+    ));
+}
+
 pub(crate) fn spawn_details(parent: &mut ChildSpawnerCommands) {
     parent.spawn((
         SourceLabel,
@@ -51,11 +67,13 @@ pub(crate) fn sync(
             Option<&SliderLabelText>,
             Option<&SliderValueText>,
             Has<SourceLabel>,
+            Has<SpeedHint>,
         ),
         Or<(
             With<SliderLabelText>,
             With<SliderValueText>,
             With<SourceLabel>,
+            With<SpeedHint>,
         )>,
     >,
 ) {
@@ -70,19 +88,38 @@ pub(crate) fn sync(
         .and_then(|s| s.get(index));
     let modal = step.is_some_and(|s| s.eigenvalue.is_some());
     let position = if count == 0 { 0 } else { index + 1 };
-    for (mut text, label, value, source) in &mut texts {
+    for (mut text, label, value, source, speed) in &mut texts {
         if label.is_some_and(|l| l.0 == SliderId::ResultStep) {
             text.set_if_neq(Text::new(if modal { "Mode (order)" } else { "Frame" }));
         } else if value.is_some_and(|v| v.0 == SliderId::ResultStep) {
             text.set_if_neq(Text::new(format!("{position} / {count}")));
+        } else if label.is_some_and(|l| l.0 == SliderId::PlaybackSpeed) {
+            text.set_if_neq(Text::new(if modal {
+                "Speed (modes/sec)"
+            } else {
+                "Speed (frames/sec)"
+            }));
+        } else if speed {
+            text.set_if_neq(Text::new(if modal {
+                "Modes/sec; switches modes, not vibration"
+            } else {
+                "Frames/sec; not physical-time playback"
+            }));
         } else if source {
             let detail = step.map_or_else(
                 || "No result frames".into(),
                 |s| {
                     format!(
-                        "{}\n{}",
+                        "{}{}\n{}",
+                        if modal {
+                            "Order above; original mode below:\n"
+                        } else {
+                            ""
+                        },
                         s.frame_description(),
-                        if count == 1 {
+                        if count == 1 && modal {
+                            "Single mode"
+                        } else if count == 1 {
                             "Single frame"
                         } else {
                             "Click / drag to seek and pause"

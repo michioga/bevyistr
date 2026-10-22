@@ -445,6 +445,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                             id: SliderId::PlaybackSpeed,
                                         },
                                     );
+                                    crate::result_seek::spawn_speed_hint(sliders);
                                     sliders.spawn((
                                         crate::result_menu::DeformationScaleSection,
                                         Node { flex_direction: FlexDirection::Column, ..default() },

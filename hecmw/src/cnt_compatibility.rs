@@ -3,7 +3,7 @@
 //! be reported. Expand this allow-list only with round-trip regression tests.
 
 use super::{CntData, KeywordHeader, parse_keyword_header, strip_comment};
-use fem_core::{SetupImportIssue, SolverSettings};
+use fem_core::{AnalysisType, SetupImportIssue, SolverSettings};
 use std::collections::HashSet;
 
 pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
@@ -33,8 +33,10 @@ pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
             i += 1;
         }
         let name = header.name.as_str();
-        let reason = if matches!(name, "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION")
-            && !seen.insert(header.name.clone())
+        let reason = if matches!(
+            name,
+            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP"
+        ) && !seen.insert(header.name.clone())
         {
             Some("Repeated control cards cannot be preserved".to_string())
         } else {
@@ -72,12 +74,18 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "WRITE" => &["RESULT", "VISUAL"],
         "VISUAL" => &["METHOD"],
         "ELASTIC" => &["TYPE"],
-        "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY"
-        | "SURFACE_NUM=1" | "SURFACE 1" | "OUTPUT_TYPE=VTK" | "ITEM=1" | "ITEM=2" => &[],
-        "STEP" => return Some("Step timing, activation groups and nonlinear iteration controls are not fully preserved yet".into()),
+        "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "SURFACE_NUM=1" | "SURFACE 1"
+        | "OUTPUT_TYPE=VTK" | "ITEM=1" | "ITEM=2" => &[],
+        "STEP" => &["TYPE", "INC_TYPE", "SUBSTEPS", "MAXITER", "CONVERG"],
         "DYNAMIC" => return Some("Dynamic integration settings cannot yet be regenerated".into()),
-        "SECTION" => return Some("CNT section formulation/orientation is not preserved by the editor".into()),
-        _ => return Some("Unsupported CNT keyword; its settings would be omitted on export".into()),
+        "SECTION" => {
+            return Some(
+                "CNT section formulation/orientation is not preserved by the editor".into(),
+            );
+        }
+        _ => {
+            return Some("Unsupported CNT keyword; its settings would be omitted on export".into());
+        }
     };
     let mut unsupported: Vec<_> = h
         .params
@@ -123,22 +131,78 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
             let solver = data.solver.clone().unwrap_or_else(SolverSettings::default);
             if !matches!(
                 value("METHOD").as_deref(),
-                Some("CG" | "GMRES" | "MUMPS" | "DIRECT")
+                Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
             ) {
-                Some(
-                    "Unsupported or missing solver METHOD; aliases such as DIRECTMKL must not be converted to DIRECT",
-                )
+                Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
             } else if !is("PRECOND", "1") || !is("ITERLOG", "YES") || !is("TIMELOG", "YES") {
                 Some(
                     "Solver options/defaults are not preserved (writer uses PRECOND=1, ITERLOG=YES, TIMELOG=YES)",
                 )
+            } else if solver.max_iterations == 0
+                || solver.max_iterations > i32::MAX as u32
+                || !solver.convergence_tol.is_finite()
+                || solver.convergence_tol <= 0.0
+            {
+                Some("Linear iterations/tolerance must be valid positive values")
             } else if body.len() != 2
+                || body[0]
+                    .split(',')
+                    .next()
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    != Some(solver.max_iterations)
                 || !numbers(body[0], &[solver.max_iterations as f32, 1.0])
                 || !numbers(body[1], &[solver.convergence_tol, 1.0, 0.0])
             {
                 Some(
-                    "Linear solver data/defaults are not preserved yet; separate linear/nonlinear settings are planned",
+                    "Only NITER/RESID with iterPREmax=1, SIGMA_DIAG=1 and OMEGA=0 are currently preserved; missing/extra options remain blocked",
                 )
+            } else {
+                None
+            }
+        }
+        "STEP" => {
+            let solver = data.solver.clone().unwrap_or_default();
+            let valid_integer = |key: &str| {
+                h.params.get(key).is_none_or(|s| {
+                    s.parse::<u32>()
+                        .ok()
+                        .is_some_and(|v| v > 0 && v <= i32::MAX as u32)
+                })
+            };
+            let valid_tol = h.params.get("CONVERG").is_none_or(|s| {
+                s.parse::<f32>()
+                    .ok()
+                    .is_some_and(|v| v.is_finite() && v > 0.0)
+            });
+            let mut expected = Vec::new();
+            if !data.boundary_conditions.is_empty() {
+                expected.push("BOUNDARY,1".to_string());
+            }
+            if !data.nodal_loads.is_empty() || !data.distributed_loads.is_empty() {
+                expected.push("LOAD,1".to_string());
+            }
+            let mut actual: Vec<_> = body
+                .iter()
+                .map(|row| {
+                    row.split(',')
+                        .map(|s| s.trim().to_ascii_uppercase())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect();
+            expected.sort();
+            actual.sort();
+            if solver.analysis_type != AnalysisType::NlStatic
+                || (h.params.contains_key("TYPE") && !is("TYPE", "STATIC"))
+                || (h.params.contains_key("INC_TYPE") && !is("INC_TYPE", "FIXED"))
+                || !data.contact_settings.is_empty()
+                || expected != actual
+            {
+                Some(
+                    "Only a single nonlinear static fixed-increment STEP activating all boundary/load groups 1 is preserved; timing/contact/partial activation remains blocked",
+                )
+            } else if !valid_integer("SUBSTEPS") || !valid_integer("MAXITER") || !valid_tol {
+                Some("STEP substeps/iterations/tolerance must be valid positive values")
             } else {
                 None
             }
@@ -295,6 +359,7 @@ mod tests {
         for method in [
             LinearSolverMethod::Cg,
             LinearSolverMethod::Mumps,
+            LinearSolverMethod::DirectMkl,
             LinearSolverMethod::Gmres,
             LinearSolverMethod::Direct,
         ] {
@@ -368,14 +433,18 @@ mod tests {
     }
 
     #[test]
-    fn repeated_cards_and_nondefault_solver_data_are_reported() {
+    fn repeated_cards_are_reported_but_linear_iteration_settings_are_preserved() {
         assert!(
             !read("!SOLUTION, TYPE=STATIC\n!SOLUTION, TYPE=EIGEN")
                 .import_issues
                 .is_empty()
         );
         let text = "!SOLVER, METHOD=CG, PRECOND=1, ITERLOG=YES, TIMELOG=YES\n200,1\n1e-8,1,0\n";
-        assert_eq!(read(text).import_issues.len(), 1);
+        let parsed = read(text);
+        assert!(parsed.import_issues.is_empty());
+        let solver = parsed.solver.unwrap();
+        assert_eq!(solver.max_iterations, 200);
+        assert_eq!(solver.convergence_tol, 1e-8);
     }
 
     #[test]

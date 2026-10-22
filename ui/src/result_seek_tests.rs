@@ -41,6 +41,7 @@ fn setup(count: usize, modal: bool, scale: f32) -> (App, Entity, Entity) {
                     },
                 );
                 spawn_details(parent);
+                spawn_speed_hint(parent);
             });
         })
         .add_systems(
@@ -153,6 +154,15 @@ fn modal_seek_shows_order_and_preserves_the_original_mode_number() {
     assert_eq!(title(&mut app), "Mode (order)");
     assert_eq!(value(&mut app), "3 / 3");
     assert!(source(&mut app).contains("Mode 7 | Eigenvalue"));
+    assert!(source(&mut app).contains("Order above; original mode below"));
+    assert!(
+        app.world_mut()
+            .query_filtered::<&Text, With<SpeedHint>>()
+            .single(app.world())
+            .unwrap()
+            .0
+            .contains("not vibration")
+    );
     assert!(!source(&mut app).contains("Time"));
     assert_thumb(&mut app, 260.);
     // A shorter replacement series must reset both count and position.
@@ -165,6 +175,14 @@ fn modal_seek_shows_order_and_preserves_the_original_mode_number() {
     app.update();
     assert_eq!(title(&mut app), "Frame");
     assert_eq!(value(&mut app), "1 / 1");
+    assert!(
+        app.world_mut()
+            .query_filtered::<&Text, With<SpeedHint>>()
+            .single(app.world())
+            .unwrap()
+            .0
+            .contains("not physical-time")
+    );
     assert_thumb(&mut app, 0.);
 }
 

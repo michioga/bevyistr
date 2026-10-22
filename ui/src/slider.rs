@@ -19,7 +19,7 @@ pub enum SliderId {
     SurfaceAngle,
     /// Distributed load (pressure / gravity acceleration) magnitude.
     DloadMagnitude,
-    /// Animation playback speed: value is steps/second (0.5 – 10).
+    /// Series playback speed: frames (or modes) per second, not physical time (0.5–10).
     PlaybackSpeed,
     /// Translation increment as a percentage of the selected part's size.
     AssemblyMovePercent,

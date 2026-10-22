@@ -109,6 +109,8 @@ fn pointer_selection_preserves_numbers_exports_and_supports_undo_redo() {
         substeps: 17,
         max_iterations: 123,
         convergence_tol: 2e-7,
+        nonlinear_max_iterations: 37,
+        nonlinear_convergence_tol: 3.456789e-4,
         ..default()
     };
     app.world_mut().resource_mut::<AnalysisSetup>().solver = original.clone();

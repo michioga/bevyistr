@@ -52,6 +52,10 @@ Resultsで再生を停止し、結果の表面にマウスを合わせると、�
 **Clear comparison**で全解除します。残った対象の色・番号は変えません。
 比較を全解除すると、PINNEDがあれば通常の単一履歴に戻ります。
 
+比較中はPINNED欄の近くに **Comparison active** とCSVの対象がPINNEDだけであることを表示します。
+固定を解除しても比較は残り、案内が **Comparison remains** に切り替わります。
+CSVを保存するには対象を固定し直してください。比較一覧は **HISTORY legend** としてグラフの色に対応します。
+
 ![NodalMISESを2節点で比較し、色付き一覧と共通軸の履歴を表示した画面](../assets/images/results-probe-comparison.png)
 
 表示例：Part 1のNode 103（水色）とNode 949（橙色）の5フレームを比較しています。

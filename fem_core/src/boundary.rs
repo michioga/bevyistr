@@ -420,10 +420,14 @@ pub struct SolverSettings {
     pub analysis_type: AnalysisType,
     /// Number of substeps (for nonlinear or time-dependent analyses).
     pub substeps: u32,
-    /// Maximum Newton–Raphson iterations per substep.
+    /// Linear solver iteration limit (`!SOLVER` NITER), not Newton iterations.
     pub max_iterations: u32,
-    /// Convergence tolerance (relative residual norm).
+    /// Linear solver relative residual tolerance (`!SOLVER` RESID).
     pub convergence_tol: f32,
+    /// Newton iteration limit per substep (`!STEP, MAXITER`).
+    pub nonlinear_max_iterations: u32,
+    /// Nonlinear residual convergence threshold (`!STEP, CONVERG`).
+    pub nonlinear_convergence_tol: f32,
     /// Linear solver method.
     pub solver_method: LinearSolverMethod,
 }
@@ -435,6 +439,8 @@ impl Default for SolverSettings {
             substeps: 1,
             max_iterations: 100,
             convergence_tol: 1.0e-6,
+            nonlinear_max_iterations: 50,
+            nonlinear_convergence_tol: 1.0e-3,
             solver_method: LinearSolverMethod::Cg,
         }
     }
@@ -472,6 +478,7 @@ impl AnalysisType {
 pub enum LinearSolverMethod {
     Cg,
     Mumps,
+    DirectMkl,
     Direct,
     Gmres,
 }
@@ -481,6 +488,7 @@ impl LinearSolverMethod {
         match self {
             Self::Cg => "CG",
             Self::Mumps => "MUMPS",
+            Self::DirectMkl => "MKL (DIRECTmkl)",
             Self::Direct => "Direct",
             Self::Gmres => "GMRES",
         }
@@ -489,9 +497,14 @@ impl LinearSolverMethod {
         match self {
             Self::Cg => "CG",
             Self::Mumps => "MUMPS",
+            Self::DirectMkl => "DIRECTmkl",
             Self::Direct => "DIRECT",
             Self::Gmres => "GMRES",
         }
+    }
+
+    pub const fn is_iterative(self) -> bool {
+        matches!(self, Self::Cg | Self::Gmres)
     }
 }
 

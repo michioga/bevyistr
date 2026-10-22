@@ -539,17 +539,39 @@ fn validate_analysis_setup(
         }
     }
 
-    if setup.solver.substeps == 0 {
-        report.error("Solver", "substeps must be at least 1");
+    if setup.solver.substeps == 0 || setup.solver.substeps > i32::MAX as u32 {
+        report.error("Solver", "substeps must be in 1..=2147483647");
     }
-    if setup.solver.max_iterations == 0 {
-        report.error("Solver", "maximum iterations must be at least 1");
+    if setup.solver.max_iterations == 0 || setup.solver.max_iterations > i32::MAX as u32 {
+        report.error(
+            "Linear solver",
+            "maximum iterations must be in 1..=2147483647",
+        );
     }
     if !setup.solver.convergence_tol.is_finite() || setup.solver.convergence_tol <= 0.0 {
         report.error(
-            "Solver",
+            "Linear solver",
             "convergence tolerance must be finite and positive",
         );
+    }
+
+    if setup.solver.analysis_type == AnalysisType::NlStatic {
+        if setup.solver.nonlinear_max_iterations == 0
+            || setup.solver.nonlinear_max_iterations > i32::MAX as u32
+        {
+            report.error(
+                "Nonlinear step",
+                "maximum iterations must be in 1..=2147483647",
+            );
+        }
+        if !setup.solver.nonlinear_convergence_tol.is_finite()
+            || setup.solver.nonlinear_convergence_tol <= 0.0
+        {
+            report.error(
+                "Nonlinear step",
+                "convergence tolerance must be finite and positive",
+            );
+        }
     }
 
     if setup.boundary_conditions.is_empty() {
@@ -1085,7 +1107,7 @@ mod tests {
         assert!(summary.contains("BC[1] BAD_BC: references missing node 999"));
         assert!(summary.contains("invalid DOF range 0..=7"));
         assert!(summary.contains("MPC[1] BAD_MPC: term 2 references missing part 2"));
-        assert!(summary.contains("Solver: substeps must be at least 1"));
+        assert!(summary.contains("Solver: substeps must be in 1..=2147483647"));
     }
 
     #[test]
