@@ -32,9 +32,13 @@ use std::path::Path;
 use bevy::prelude::Vec3;
 #[path = "cnt_compatibility.rs"]
 mod compatibility;
+#[path = "eigen_settings.rs"]
+mod eigen_settings;
 #[cfg(test)]
 #[path = "solver_settings_tests.rs"]
 mod solver_settings_tests;
+#[path = "write_settings.rs"]
+mod write_settings;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
@@ -318,6 +322,22 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
         let header = parse_keyword_header(trimmed);
 
         match header.name.as_str() {
+            "WRITE" => {
+                if let Ok((res, vis, frequency)) = write_settings::parse(&header) {
+                    for (present, target) in [
+                        (res, fem_core::OutputTarget::Res),
+                        (vis, fem_core::OutputTarget::Vis),
+                    ] {
+                        if present {
+                            *data.output.write_mut(target) = fem_core::WriteControl {
+                                enabled: true,
+                                frequency,
+                            };
+                        }
+                    }
+                }
+                i += 1;
+            }
             "OUTPUT_RES" | "OUTPUT_VIS" => {
                 let target = if header.name == "OUTPUT_RES" {
                     fem_core::OutputTarget::Res
@@ -355,6 +375,21 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 i += 1;
             }
 
+            "EIGEN" => {
+                let rows: Vec<_> = lines[i + 1..]
+                    .iter()
+                    .take_while(|line| !is_keyword(line))
+                    .map(|line| strip_comment(line))
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                if let Ok(eigen) = eigen_settings::parse_rows(&rows) {
+                    data.solver
+                        .get_or_insert_with(SolverSettings::default)
+                        .eigen = eigen;
+                }
+                // Compatibility audit reports malformed/unsupported cards.
+                i += 1;
+            }
             "STEP" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
                 if let Some(value) = header

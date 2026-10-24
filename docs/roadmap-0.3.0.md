@@ -13,6 +13,62 @@
 
 ## 実装順序と区切り
 
+### 2026-10-24追補: リリース候補の検証へ
+
+[リリース候補チェックリスト](release-0.3.0.md)に実機確認・配布準備・統合と公開の順序を集約。
+固有値入力と保存間隔の未コミット変更を保持し、まずworkspaceと配布アーカイブの検証を進める。
+版番号は据え置き。Windows配布Actions・第三者ライセンス・候補SHAでのCIは未完了。
+
+### 2026-10-23決定: リリース優先・カメラ操作案は後回し
+
+メンテナーの指示により、SolidCraft風のカメラ操作は提案として保存し、
+0.3.0には追加しない。今回のリリース条件にも含めず、既存機能の検証・公開準備を優先する。
+以下は未実装・未確定のリリース後候補であり、再開時に採用範囲を確認する。
+
+- 従来操作／SolidCraft風操作の切り替えとTOMLへの保存。
+- SolidCraft標準を参考に、右ドラッグで回転、中ドラッグで平行移動、カーソル位置を基準としたホイールズーム。
+- ボタン割り当て、回転方式、回転中心を別々に扱う。Free orbitは標準操作と同一視しない。
+- 回転中心をドラッグ開始時に固定し、真上・真下付近で上方向が急に切り替わる挙動を改善する。
+- 左クリックの選択、部品姿勢の編集、Resultsの左右キーによるコマ送りと干渉させない。
+- これは表示用カメラの改善であり、解析メッシュの座標を変更する機能ではない。
+
+参考: [SolidCraft公式操作説明](https://docs.solidcraft.io/guide/ui-tour.html)、
+[公開ナビゲーション実装](https://github.com/tangency-labs/solidcraft/blob/main/crates/ui-egui/src/navigation.rs)。
+完全互換や実装時期は約束しない。コード変更・commit・pushはこの記録では行わない。
+
+### 2026-10-23追補: RES／VISの保存間隔
+
+優先順序4として、SAVE RESULTSにRES／VTK別のON/OFF・正整数の出力間隔を追加。
+物理量の選択と独立させ、WRITEなしの入力は勝手に有効化しない。
+RESULT／VISUAL併記と後続カードによる更新を保持し、FILE等の未対応オプション・不正値は引き続き出力停止。
+固有値出力はFrontISTRソースに合わせて全モード出力と案内し、間隔欄は編集不可にする。
+版番号・ブランチ・タグは変更しない。
+GUIと実ソルバーの確認は別途行い、次の区切りは優先順序5の総合検証と公開準備。
+
+RES OFFの実行では、実行開始時の設定に従って自動結果読込をスキップし、VTKはOpen Resultsへ案内する。
+検証: `cargo test -p bevyistr-fem-core -p bevyistr-hecmw -p bevyistr-ui --lib --locked --offline`
+でcore 23件・HECMW 100件・UI 213件成功、失敗0、実データ／実機依存6件スキップ。
+mdBookビルド・今回の主要Rustファイルの整形検査・diff空白検査も成功。
+TEMP/TMPはプロセス内で`target/compat-test-temp`へ指定。実機GUI・実ソルバーによる出力間隔検証は未実施。
+
+### 2026-10-22追補: 固有値解析の入力設定
+
+`f094705`でSolver分離・Results案内のcommit/pushを確認し、優先順序3へ進めた。
+SolveにEigenvalue専用のNGET／LCZTOL／LCZMAX／SIGMA欄を追加。
+線形／非線形反復とは独立し、CNTの読み込み・出力・再読込、Enter／Esc・Undo／Redoで保持する。
+許容差とシフト量はf64で保持する。初期モード数3は従来のbevyistrの出力方針を維持。
+省略されたオプションは公式既定値、未知の列・行・パラメータ、欠落／重複カード、不正値は出力停止。
+STATICEIGENや他の未対応設定を含む入力の制限は解除していない。
+
+検証: HECMW 96件・UI 210件成功、0失敗、実データ／実機依存6件スキップ
+（`cargo test -p bevyistr-hecmw -p bevyistr-ui --lib --locked --offline`）。
+mdBookビルド成功。FrontISTR本体による新規解析とGUIの実機操作は未確認。
+提供されたspringの画像では、Mode (order) 2 / 5、元Mode 2、速度modes/secと非振動の説明を確認した。
+単体テストと画像で確認できない連続操作・収束の保証は区別する。
+
+次の実装は優先順序4の出力間隔／RES-VIS制御。続いて総合検証、ブランチ統合、版番号・タグ、
+crates.ioとWindows Release準備へ進む。現段階では版番号、タグ、ブランチを変更しない。
+
 ### 2026-10-22追補: Solver分離と第三者UIレビュー
 
 - 線形反復（NITER/RESID）と非線形反復（MAXITER/CONVERG）を別々に保持・編集・出力する。

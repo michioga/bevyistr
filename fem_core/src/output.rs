@@ -105,6 +105,34 @@ impl OutputControl {
 pub struct OutputSettings {
     pub res: OutputControl,
     pub vis: OutputControl,
+    pub write_res: WriteControl,
+    pub write_vis: WriteControl,
+}
+
+/// Whether to request a file, independently of the quantities in that file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteControl {
+    pub enabled: bool,
+    pub frequency: u32,
+}
+
+impl Default for WriteControl {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            frequency: 1,
+        }
+    }
+}
+
+impl WriteControl {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.frequency == 0 || self.frequency > i32::MAX as u32 {
+            Err("Output interval must be between 1 and 2147483647 steps")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl OutputSettings {
@@ -113,6 +141,20 @@ impl OutputSettings {
         Self {
             res: OutputControl::default(),
             vis: OutputControl::default(),
+            write_res: WriteControl::default(),
+            write_vis: WriteControl::default(),
+        }
+    }
+    pub fn write(&self, target: OutputTarget) -> &WriteControl {
+        match target {
+            OutputTarget::Res => &self.write_res,
+            OutputTarget::Vis => &self.write_vis,
+        }
+    }
+    pub fn write_mut(&mut self, target: OutputTarget) -> &mut WriteControl {
+        match target {
+            OutputTarget::Res => &mut self.write_res,
+            OutputTarget::Vis => &mut self.write_vis,
         }
     }
     pub fn get(&self, target: OutputTarget) -> &OutputControl {
@@ -133,6 +175,7 @@ impl Default for OutputSettings {
     fn default() -> Self {
         let mut settings = Self::inherited();
         for target in [OutputTarget::Res, OutputTarget::Vis] {
+            settings.write_mut(target).enabled = true;
             for keyword in ["DISP", "NMISES"] {
                 settings.get_mut(target).set(target, keyword, Some(true));
             }

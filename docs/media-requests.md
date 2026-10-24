@@ -1,5 +1,21 @@
 # マニュアル用の撮影依頼
 
+## 今回：出力先と保存間隔（実機確認後）
+
+- 保存先: `D:\Work\bevyistr\docs\media-inbox\solve-output-intervals.png`
+- 掲載先: [出力先・保存間隔・物理量](src/solve/output-fields.md)
+- SolveでStaticまたはNonlinearを選択し、SAVE RESULTSのRES: ON／Every 2 stepsとVTK: ON／Every 5 stepsを確定した状態。
+- SAVE RESULTSと直下のOUTPUT FIELDSが読める画面を撮影してください。新しい解析の実行は不要です。
+
+## 今回：固有値解析の設定（実機確認後）
+
+- 保存先: `D:\Work\bevyistr\docs\media-inbox\solve-eigen-settings.png`
+- 掲載先: [固有値解析の設定](src/solve/eigen.md)
+- 公開可能なモデルでSolve → Eigenvalueを選択し、MUMPSと専用4項目が見える状態。
+- モード数5・許容差1e-8・最大反復80・シフト0.01をEnterで確定し、文字が読めるウィンドウ全体を撮影してください。
+- 実行ログや成功結果は不要です。この撮影は入力画面の説明用で、解析成功の証拠とは扱いません。
+- 既存のチュートリアル入力や結果を上書きしないでください。
+
 まずResultsの2点をお願いします。保存先はローカルの`D:\Work\bevyistr\docs\media-inbox\`です。このフォルダはGit管理・公開対象外です。素材を確認してから公開用フォルダへ移します。
 
 ## 1. コンターの物理量メニュー

@@ -33,7 +33,16 @@ pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
             i += 1;
         }
         let name = header.name.as_str();
-        let reason = if matches!(
+        let reason = if name == "WRITE"
+            && raw
+                .split(',')
+                .skip(1)
+                .filter(|p| !p.trim().is_empty())
+                .count()
+                != header.params.len()
+        {
+            Some("Repeated WRITE parameters cannot be preserved unambiguously".to_string())
+        } else if matches!(
             name,
             "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP"
         ) && !seen.insert(header.name.clone())
@@ -54,6 +63,21 @@ pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
         material = name == "MATERIAL"
             || (material && (matches!(name, "ELASTIC" | "DENSITY") || name.starts_with("ITEM")));
     }
+    if data
+        .solver
+        .as_ref()
+        .is_some_and(|s| s.analysis_type == AnalysisType::Eigen)
+        && !seen.contains("EIGEN")
+    {
+        issues.push(SetupImportIssue {
+            source: "CNT".into(),
+            line: 1,
+            keyword: "!EIGEN (missing)".into(),
+            message:
+                "Missing EIGEN card: implicit solver defaults are not regenerated; inspection only"
+                    .into(),
+        });
+    }
     issues
 }
 
@@ -71,7 +95,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "CONTACT" => &["GRPID", "INTERACTION"],
         "MATERIAL" => &["NAME"],
         "NGROUP" | "NGRP" => &["NGRP"],
-        "WRITE" => &["RESULT", "VISUAL"],
+        "WRITE" => &["RESULT", "VISUAL", "FREQUENCY"],
         "VISUAL" => &["METHOD"],
         "ELASTIC" => &["TYPE"],
         "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "SURFACE_NUM=1" | "SURFACE 1"
@@ -210,9 +234,17 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "STATIC" if body.len() != 1 || !numbers(body[0], &[1.0, 1.0]) => {
             Some("Static increment/time settings are not preserved (writer uses 1, 1)")
         }
-        "EIGEN" if body.len() != 1 || !numbers(body[0], &[3.0]) => Some(
-            "Eigen mode count/tolerance/iterations/shift are not preserved (writer currently requests 3 modes)",
-        ),
+        "EIGEN" => {
+            if !data
+                .solver
+                .as_ref()
+                .is_some_and(|s| s.analysis_type == AnalysisType::Eigen)
+            {
+                Some("EIGEN controls require the supported EIGEN analysis type")
+            } else {
+                super::eigen_settings::parse_rows(body).err()
+            }
+        }
         "VERSION" if body.len() != 1 || !numbers(body[0], &[3.0]) => {
             Some("Only VERSION 3 is emitted")
         }
@@ -317,12 +349,12 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 None
             }
         }
-        "WRITE"
-            if h.params.len() != 1
-                || !(is("RESULT", "") || is("VISUAL", ""))
-                || !body.is_empty() =>
-        {
-            Some("Output frequency/WRITE options are not preserved")
+        "WRITE" => {
+            if !body.is_empty() {
+                Some("Unexpected WRITE data is not preserved")
+            } else {
+                super::write_settings::parse(h).err()
+            }
         }
         "VISUAL" if !is("METHOD", "PSR") || !body.is_empty() => {
             Some("Only the default PSR/VTK visualization is regenerated")
@@ -410,7 +442,7 @@ mod tests {
             "!MATERIAL, NAME=A\n!ITEM=3\n1e-5",
             "!SECTION, SECNUM=1",
             "!CONTACT_ALGO, TYPE=ALAGRANGE",
-            "!WRITE, RESULT, FREQUENCY=10",
+            "!WRITE, RESULT, FREQUENCY=0",
             "!VISUAL, METHOD=PVR",
             "!RESTART, READ",
             "!UNKNOWN\n1,2,3",
@@ -535,7 +567,7 @@ mod tests {
     #[test]
     fn comments_do_not_truncate_boundary_load_or_inline_node_groups() {
         let parsed = read(
-            "!ngroup, NGRP=FIXED\n1\n!! comment\n2\n!SOLUTION, TYPE=EIGEN # comment\n!BOUNDARY, GRPID=1\n!! comment\nFIXED,1,3,0\n!CLOAD, GRPID=1\n1,1,10\n!! comment\n2,1,20\n!END",
+            "!ngroup, NGRP=FIXED\n1\n!! comment\n2\n!SOLUTION, TYPE=EIGEN # comment\n!EIGEN\n3\n!BOUNDARY, GRPID=1\n!! comment\nFIXED,1,3,0\n!CLOAD, GRPID=1\n1,1,10\n!! comment\n2,1,20\n!END",
         );
         assert!(
             parsed.import_issues.is_empty(),

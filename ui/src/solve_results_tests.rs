@@ -9,6 +9,16 @@ use crate::{
 use fem_core::{FemModelVersion, FemResultSet, ResultField, StepResult};
 use visualization::VisualizationSettings;
 
+#[test]
+fn res_disabled_run_does_not_load_existing_results_or_change_page() {
+    let (_dir, mut app, _, _) = fixture(SolverRunPhase::Succeeded);
+    app.world_mut().resource_mut::<FrontistrRunState>().auto_load_results = false;
+    app.update();
+    assert!(app.world().resource::<FrontistrRunState>().completed_results().is_none());
+    assert_eq!(*app.world().resource::<SidebarPage>(), SidebarPage::Solve);
+    assert_eq!(app.world().resource::<FemResultSet>().by_mesh[0][0].step, 99);
+}
+
 fn fixture(phase: SolverRunPhase) -> (tempfile::TempDir, App, Entity, Entity) {
     let dir = tempfile::tempdir().unwrap();
     let mut model = FemModel::demo_hex8();

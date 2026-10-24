@@ -413,9 +413,11 @@ pub enum SectionKind {
 
 /// Solver settings that control how FrontISTR runs the analysis.
 /// Corresponds to the `!SOLUTION`, `!STEP`, `!STATIC`, `!DYNAMIC`, and
-/// `!SOLVER` keywords in the `.cnt` file.
+/// `!SOLVER` / `!EIGEN` keywords in the `.cnt` file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SolverSettings {
+    /// Lanczos eigenvalue controls, independent of linear/nonlinear iterations.
+    pub eigen: EigenSettings,
     /// Analysis type: static, dynamic, or eigenvalue.
     pub analysis_type: AnalysisType,
     /// Number of substeps (for nonlinear or time-dependent analyses).
@@ -435,6 +437,7 @@ pub struct SolverSettings {
 impl Default for SolverSettings {
     fn default() -> Self {
         Self {
+            eigen: EigenSettings::default(),
             analysis_type: AnalysisType::Static,
             substeps: 1,
             max_iterations: 100,
@@ -443,6 +446,44 @@ impl Default for SolverSettings {
             nonlinear_convergence_tol: 1.0e-3,
             solver_method: LinearSolverMethod::Cg,
         }
+    }
+}
+
+/// FrontISTR `!EIGEN`: NGET, LCZTOL, LCZMAX, SIGMA.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EigenSettings {
+    pub mode_count: u32,
+    pub tolerance: f64,
+    pub max_iterations: u32,
+    pub shift: f64,
+}
+
+impl Default for EigenSettings {
+    fn default() -> Self {
+        Self {
+            mode_count: 3,
+            tolerance: 1e-6,
+            max_iterations: 60,
+            shift: 0.01,
+        }
+    }
+}
+
+impl EigenSettings {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.mode_count == 0 || self.mode_count > i32::MAX as u32 {
+            return Err("Eigen mode count must be in 1..=2147483647");
+        }
+        if self.max_iterations <= self.mode_count || self.max_iterations > i32::MAX as u32 {
+            return Err("Eigen maximum iterations must exceed the mode count and be <= 2147483647");
+        }
+        if !self.tolerance.is_finite() || self.tolerance <= 0.0 {
+            return Err("Eigen tolerance must be finite and positive");
+        }
+        if !self.shift.is_finite() {
+            return Err("Eigen shift must be finite (zero and negative values are allowed)");
+        }
+        Ok(())
     }
 }
 

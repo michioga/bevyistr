@@ -111,6 +111,7 @@ fn pointer_selection_preserves_numbers_exports_and_supports_undo_redo() {
         convergence_tol: 2e-7,
         nonlinear_max_iterations: 37,
         nonlinear_convergence_tol: 3.456789e-4,
+        eigen: fem_core::EigenSettings { mode_count: 7, tolerance: 1.2345678901234567e-9, max_iterations: 90, shift: -0.12345678901234567 },
         ..default()
     };
     app.world_mut().resource_mut::<AnalysisSetup>().solver = original.clone();

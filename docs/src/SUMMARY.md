@@ -14,6 +14,7 @@
 - [BC / Loads：拘束と荷重](boundary-loads.md)
 - [Materials：材料の選択と割り当て](materials.md)
 - [Solve：出力と実行](solve/index.md)
+  - [固有値解析の設定](solve/eigen.md)
   - [出力する物理量](solve/output-fields.md)
 
 # 結果の確認

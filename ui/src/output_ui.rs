@@ -50,6 +50,7 @@ fn text(value: impl Into<String>) -> impl Bundle {
 }
 
 pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
+    crate::output_interval::spawn(parent);
     parent.spawn(text("OUTPUT FIELDS | next analysis"));
     for target in [OutputTarget::Res, OutputTarget::Vis] {
         parent

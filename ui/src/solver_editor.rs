@@ -18,6 +18,10 @@ const INPUT_ERROR_BORDER: Color = Color::srgb(0.98, 0.36, 0.30);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
 
+#[cfg(test)]
+#[path = "eigen_editor_tests.rs"]
+mod eigen_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SolverField {
     Substeps,
@@ -25,6 +29,10 @@ pub(crate) enum SolverField {
     ConvergenceTolerance,
     NonlinearMaxIterations,
     NonlinearConvergenceTolerance,
+    EigenModes,
+    EigenTolerance,
+    EigenMaxIterations,
+    EigenShift,
 }
 
 impl SolverField {
@@ -35,6 +43,10 @@ impl SolverField {
             Self::ConvergenceTolerance => "Linear tolerance",
             Self::NonlinearMaxIterations => "Nonlinear max iterations",
             Self::NonlinearConvergenceTolerance => "Nonlinear residual tolerance",
+            Self::EigenModes => "Requested modes",
+            Self::EigenTolerance => "Eigen tolerance",
+            Self::EigenMaxIterations => "Eigen maximum iterations",
+            Self::EigenShift => "Eigen shift",
         }
     }
 
@@ -43,6 +55,10 @@ impl SolverField {
             Self::MaxIterations | Self::ConvergenceTolerance => {
                 settings.solver_method.is_iterative()
             }
+            Self::EigenModes
+            | Self::EigenTolerance
+            | Self::EigenMaxIterations
+            | Self::EigenShift => settings.analysis_type == fem_core::AnalysisType::Eigen,
             _ => settings.analysis_type == fem_core::AnalysisType::NlStatic,
         }
     }
@@ -53,6 +69,7 @@ pub(crate) enum SolverControlGroup {
     Linear,
     Nonlinear,
     DirectHint,
+    Eigen,
 }
 
 #[derive(Component)]
@@ -70,6 +87,7 @@ pub(crate) struct SolverEditorState {
 enum ParsedSolverValue {
     Integer(u32),
     Float(f32),
+    Double(f64),
 }
 
 pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
@@ -133,6 +151,17 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
                 group,
                 "Independent of linear tolerance. Other nonlinear criteria use FrontISTR defaults.",
             );
+        });
+    parent.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), ..default() }, SolverControlGroup::Eigen))
+        .with_children(|group| {
+            solver_hint(group, "EIGENVALUE | !EIGEN (Lanczos)");
+            for (label, field, name) in [
+                ("Requested modes", SolverField::EigenModes, "EigenModesInput"),
+                ("Tolerance", SolverField::EigenTolerance, "EigenToleranceInput"),
+                ("Max iterations", SolverField::EigenMaxIterations, "EigenIterationsInput"),
+                ("Shift (sigma)", SolverField::EigenShift, "EigenShiftInput"),
+            ] { solver_value_row(group, label, field, name); }
+            solver_hint(group, "Max iterations must exceed modes; allow ample margin. Shift is a solver parameter, not Hz. Independent of linear iterations.");
         });
     parent.spawn((
         Text::new("Enter applies an exact value; Esc restores"),
@@ -203,9 +232,13 @@ fn solver_value_row(
                 EditableTextFilter::new(move |character| match field {
                     SolverField::Substeps
                     | SolverField::MaxIterations
-                    | SolverField::NonlinearMaxIterations => character.is_ascii_digit(),
+                    | SolverField::NonlinearMaxIterations
+                    | SolverField::EigenModes
+                    | SolverField::EigenMaxIterations => character.is_ascii_digit(),
                     SolverField::ConvergenceTolerance
-                    | SolverField::NonlinearConvergenceTolerance => {
+                    | SolverField::NonlinearConvergenceTolerance
+                    | SolverField::EigenTolerance
+                    | SolverField::EigenShift => {
                         character.is_ascii_digit()
                             || matches!(character, '+' | '-' | '.' | 'e' | 'E')
                     }
@@ -256,6 +289,9 @@ pub(crate) fn solver_numeric_input_system(
                 setup.solver.analysis_type == fem_core::AnalysisType::NlStatic
             }
             SolverControlGroup::DirectHint => !setup.solver.solver_method.is_iterative(),
+            SolverControlGroup::Eigen => {
+                setup.solver.analysis_type == fem_core::AnalysisType::Eigen
+            }
         };
         node.display = if visible {
             Display::Flex
@@ -337,6 +373,10 @@ fn solver_value_text(settings: &fem_core::SolverSettings, field: SolverField) ->
         SolverField::NonlinearConvergenceTolerance => {
             format!("{:.8e}", settings.nonlinear_convergence_tol)
         }
+        SolverField::EigenModes => settings.eigen.mode_count.to_string(),
+        SolverField::EigenMaxIterations => settings.eigen.max_iterations.to_string(),
+        SolverField::EigenTolerance => format!("{:.16e}", settings.eigen.tolerance),
+        SolverField::EigenShift => format!("{:.16e}", settings.eigen.shift),
     }
 }
 
@@ -344,7 +384,9 @@ fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValu
     match field {
         SolverField::Substeps
         | SolverField::MaxIterations
-        | SolverField::NonlinearMaxIterations => {
+        | SolverField::NonlinearMaxIterations
+        | SolverField::EigenModes
+        | SolverField::EigenMaxIterations => {
             let value = text
                 .trim()
                 .parse::<u32>()
@@ -353,6 +395,21 @@ fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValu
                 return Err("value must be between 1 and 2147483647".to_string());
             }
             Ok(ParsedSolverValue::Integer(value))
+        }
+        SolverField::EigenTolerance | SolverField::EigenShift => {
+            let value = text
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| "enter a finite number".to_string())?;
+            if !value.is_finite() || (field == SolverField::EigenTolerance && value <= 0.0) {
+                return Err(if field == SolverField::EigenTolerance {
+                    "tolerance must be finite and positive"
+                } else {
+                    "shift must be finite"
+                }
+                .into());
+            }
+            Ok(ParsedSolverValue::Double(value))
         }
         SolverField::ConvergenceTolerance | SolverField::NonlinearConvergenceTolerance => {
             let value = text
@@ -386,6 +443,16 @@ fn apply_solver_value(
         (SolverField::NonlinearConvergenceTolerance, ParsedSolverValue::Float(value)) => {
             settings.nonlinear_convergence_tol = value
         }
+        (SolverField::EigenModes, ParsedSolverValue::Integer(value)) => {
+            settings.eigen.mode_count = value
+        }
+        (SolverField::EigenMaxIterations, ParsedSolverValue::Integer(value)) => {
+            settings.eigen.max_iterations = value
+        }
+        (SolverField::EigenTolerance, ParsedSolverValue::Double(value)) => {
+            settings.eigen.tolerance = value
+        }
+        (SolverField::EigenShift, ParsedSolverValue::Double(value)) => settings.eigen.shift = value,
         _ => unreachable!("parsed solver value must match its field"),
     }
 }

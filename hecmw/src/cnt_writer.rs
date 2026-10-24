@@ -51,6 +51,16 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
     if setup.solver.analysis_type == AnalysisType::Dynamic {
         blockers.push("Dynamic setup is incomplete: integration/time settings are not supported for export or Run. Existing results can still be viewed.".into());
     }
+    if setup.solver.analysis_type == AnalysisType::Eigen {
+        if let Err(reason) = setup.solver.eigen.validate() {
+            blockers.push(reason.into());
+        }
+    }
+    for target in [fem_core::OutputTarget::Res, fem_core::OutputTarget::Vis] {
+        if let Err(reason) = setup.output.write(target).validate() {
+            blockers.push(format!("{}: {reason}", target.label()));
+        }
+    }
     blockers
 }
 
@@ -98,7 +108,13 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
         }
         AnalysisType::Eigen => {
             writeln!(o, "!EIGEN").unwrap();
-            writeln!(o, "3").unwrap(); // default: request 3 modes
+            let e = &s.eigen;
+            writeln!(
+                o,
+                "{}, {:.16e}, {}, {:.16e}",
+                e.mode_count, e.tolerance, e.max_iterations, e.shift
+            )
+            .unwrap();
         }
         AnalysisType::Dynamic => {
             writeln!(o, "!DYNAMIC").unwrap();
@@ -192,8 +208,18 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
 
     writeln!(o).unwrap();
-    writeln!(o, "!WRITE, RESULT").unwrap();
-    writeln!(o, "!WRITE, VISUAL").unwrap();
+    for (name, control) in [
+        ("RESULT", &setup.output.write_res),
+        ("VISUAL", &setup.output.write_vis),
+    ] {
+        if control.enabled {
+            if control.frequency == 1 {
+                writeln!(o, "!WRITE, {name}").unwrap();
+            } else {
+                writeln!(o, "!WRITE, {name}, FREQUENCY={}", control.frequency).unwrap();
+            }
+        }
+    }
     for control in [&setup.output.res, &setup.output.vis] {
         for card in &control.cards {
             writeln!(o, "{}", card.header).unwrap();

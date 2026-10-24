@@ -29,6 +29,7 @@ mod result_seek;
 #[cfg(test)]
 mod widget_test_input;
 mod output_ui;
+mod output_interval;
 mod selection_ui;
 pub mod slider;
 mod solve_ui;
@@ -271,6 +272,7 @@ impl Plugin for UiPlugin {
                 measurement_box_input_system,
                 engineering_numeric_input_system.after(update_ui_keyboard_state),
                 solver_numeric_input_system.after(update_ui_keyboard_state),
+                output_interval::update.after(update_ui_keyboard_state).after(sidebar_page_button_system),
             )
                 .in_set(InteractionSystems::UiInput),
         );
@@ -554,6 +556,7 @@ impl Plugin for UiPlugin {
                     .after(create_mpc_pair_button_system)
                     .after(solver_numeric_input_system)
                     .after(material_numeric_input_system)
+                    .after(output_interval::update)
                     .after(add_section_button_system)
                     .after(measurement_box_input_system),
                 undo_redo_system

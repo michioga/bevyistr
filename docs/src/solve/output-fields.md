@@ -1,5 +1,34 @@
 # Solveで出力する物理量を選ぶ
 
+## 保存するファイルと間隔（0.3.0向け開発版）
+
+**SAVE RESULTS | next analysis** でRES／VTKをそれぞれON/OFFにし、
+**Every … steps** に保存間隔を入力します。1は毎ステップ、5は5ステップごとの指定です。
+正の整数をEnterで確定し、Escで復元します。Ctrl+Z／Ctrl+Yで取消・やり直しできます。
+OFFでは該当する`!WRITE`カードを出しません。OFF中も間隔・物理量の設定は編集セッション内に保持します。
+ただし、OFFで書き出したCNTには間隔がないため、再読込時は未指定・間隔1になります。
+
+これは**ソルバーの出力間隔**であり、秒単位やResultsの再生速度ではありません。
+最終ステップなどはソルバー側の強制出力により、間隔外でも保存される場合があります。
+新規モデルは両方ON・間隔1です。読み込んだCNTで`!WRITE`指定がない出力先はOFFのまま保持し、
+物理量をONにしただけではファイル出力を有効化しません。両方OFFでは結果ファイルを要求しません。
+実行後の自動表示はRESを使うため、RESをOFFにした実行では自動読込を行いません。
+VTKだけを出力した場合は **Open Results** で開いてください。
+
+**固有値解析では間隔欄が編集不可**になります。確認したFrontISTRの固有値出力実装は
+`FREQUENCY`を参照せず、要求したモードを順に出力します。ON/OFFは使用できます。
+別の解析方式へ戻ると保持した間隔を再び編集できます。既存CNTの間隔値も勝手に書き換えません。
+
+RESは`!WRITE, RESULT, FREQUENCY=n`、VTKは`!WRITE, VISUAL, FREQUENCY=n`に対応します。
+同一カードでのRESULT／VISUAL指定は両方へ適用し、同じ出力先の後続カードはその設定を上書きします。
+FILE、LOG、FEMAPなどの追加指定や、不正な間隔・重複パラメータは未対応として出力を停止します。
+これは一般的なCNTの完全再現を保証するものではありません。
+
+仕様: [FrontISTR !WRITE,RESULT](https://source-docs.frontistr.com/keyword_reference/cnt/write_result.html)。
+確認した実装は`m_out.f90`、`fstr_setup.f90`、`static_output.f90`、`fstr_EIG_output.f90`です。
+
+## 出力する物理量
+
 Solveの解析方式は **Analysis type: ...**、連立方程式ソルバーは **Linear solver: ...** のポップアップから選べます。MUMPSは先頭に表示しますが、メニューを開くだけでは現在値を変更しません。選択中の項目は`[x]`で示し、項目をクリックすると確定します。矢印キー／Enterでも選択でき、Escや外側へのフォーカス移動では変更せず閉じます。Ctrl+Z／Ctrl+Yで取消・やり直しができます。数値欄は独立して保持します。ソルバーのDirectと、下部の実行方式Direct／MPIは別の設定です。
 
 Solveの **OUTPUT FIELDS** から **RES** または **VTK** のメニューを開きます。それぞれCNTの`!OUTPUT_RES`、`!OUTPUT_VIS`に対応し、独立した設定です。

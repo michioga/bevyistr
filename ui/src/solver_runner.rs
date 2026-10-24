@@ -80,6 +80,7 @@ pub(crate) struct FrontistrRunState {
     process: Option<SolverProcessHandle>,
     stop_requested: bool,
     results_source: Option<crate::run_results::RunResultSource>,
+    auto_load_results: bool,
 }
 
 impl Default for FrontistrRunState {
@@ -120,6 +121,7 @@ impl Default for FrontistrRunState {
             process: None,
             stop_requested: false,
             results_source: None,
+            auto_load_results: true,
         }
     }
 }
@@ -159,7 +161,7 @@ impl FrontistrRunState {
     }
 
     pub(crate) fn completed_results(&self) -> Option<&crate::run_results::RunResultSource> {
-        (self.phase == SolverRunPhase::Succeeded).then_some(self.results_source.as_ref()).flatten()
+        (self.phase == SolverRunPhase::Succeeded && self.auto_load_results).then_some(self.results_source.as_ref()).flatten()
     }
 
     pub(crate) fn register_export(&mut self, directory: PathBuf, stem: String) {
@@ -280,7 +282,7 @@ impl FrontistrRunState {
         Ok(true)
     }
 
-    fn start(&mut self, model_version: u64) -> Result<(), String> {
+    fn start(&mut self, model_version: u64, res_enabled: bool) -> Result<(), String> {
         let target = self
             .project
             .as_ref()
@@ -288,11 +290,15 @@ impl FrontistrRunState {
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
         }
-        let mut results_source = crate::run_results::RunResultSource::capture(
-            &target.directory, &target.stem,
-            if self.launch_mode == SolverLaunchMode::Mpi { self.mpi_ranks } else { 1 },
-            model_version,
-        )?;
+        let mut results_source = if res_enabled {
+            Some(crate::run_results::RunResultSource::capture(
+                &target.directory, &target.stem,
+                if self.launch_mode == SolverLaunchMode::Mpi { self.mpi_ranks } else { 1 },
+                model_version,
+            )?)
+        } else {
+            None
+        };
         let process = spawn_solver_process(SolverProcessConfig {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
@@ -305,7 +311,9 @@ impl FrontistrRunState {
             mpi_launcher: self.mpi_launcher.clone(),
         })?;
 
-        results_source.partition_prefix = process.partition_prefix.clone();
+        if let Some(source) = &mut results_source {
+            source.partition_prefix = process.partition_prefix.clone();
+        }
         self.phase = SolverRunPhase::Running;
         self.message = "Preparing FrontISTR run...".to_string();
         self.log_lines.clear();
@@ -314,7 +322,8 @@ impl FrontistrRunState {
         self.log_path = Some(process.log_path().to_owned());
         self.process = Some(process);
         self.stop_requested = false;
-        self.results_source = Some(results_source);
+        self.results_source = results_source;
+        self.auto_load_results = res_enabled;
         Ok(())
     }
 
@@ -381,6 +390,10 @@ impl FrontistrRunState {
 
         if terminal {
             if self.phase == SolverRunPhase::Succeeded {
+                if !self.auto_load_results {
+                    self.message.push_str(" RES output was OFF: automatic result loading skipped. Use Open Results for any VTK output.");
+                    self.results_source = None;
+                }
                 if let Some(source) = &mut self.results_source {
                     if let Err(error) = source.finish() {
                         self.message.push_str(&format!(" Result discovery failed: {error}"));
@@ -996,7 +1009,7 @@ pub(crate) fn run_frontistr_button_system(
                     continue;
                 }
             }
-            if let Err(error) = state.start(version.as_deref().map_or(0, |v| v.value)) {
+            if let Err(error) = state.start(version.as_deref().map_or(0, |v| v.value), setup.output.write_res.enabled) {
                 state.report_preflight_error(error);
             }
         }
