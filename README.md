@@ -7,6 +7,8 @@ A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
 Version **0.2.0** is [available on crates.io](https://crates.io/crates/bevyistr/0.2.0).
+This source tree is preparing **0.3.0**; it has not been released yet. See the
+[0.3.0 release notes (draft)](docs/src/release-notes.md) and [release checklist](docs/release-0.3.0.md).
 See the [release record and maintainer procedures](docs/releasing.md) for verification
 results and the exact source commit.
 

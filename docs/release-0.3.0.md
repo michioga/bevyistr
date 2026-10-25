@@ -1,9 +1,14 @@
 # 0.3.0 リリース候補チェックリスト
 
-2026-10-24。公開前の作業記録です。現在の版番号は0.2.0です。
-固有値入力・RES/VTK保存間隔は未コミットです。commit、push、マージ、タグ作成、公開はメンテナーが行います。
+2026-10-25更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
+固有値入力・RES/VTK保存間隔は6e8ab53でcommit/push済みです。
+メンテナーの再確認によりcommit、push、マージ、タグ作成は引き続きメンテナーが行います。
+2026-10-25時点で固有値入力・保存間隔の実機確認は未実施との回答があり、正式公開前の確認として残します。
 方針は[release-policy.md](release-policy.md)、操作確認は[verification.md](verification.md)、
 公開手順は[releasing.md](releasing.md)を参照してください。
+
+**公開停止事項（2026-10-25）:** [依存監査](dependency-audit-0.3.0.md)で脆弱性3件と警告8件を検出。
+実機確認・依存対策・配布物確認が済むまで正式公開しません。
 
 ## 今回の範囲
 
@@ -45,7 +50,7 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 
 - [ ] リモートを更新し、mainとの差分・祖先関係・未統合コミットを確認する。
 - [ ] mainへ統合する。積み重ねた旧枝を重複マージしない。
-- [ ] 全11クレートの版番号・厳密内部依存・Cargo.lockを0.3.0へ揃える。
+- [x] 全11クレートの版番号・厳密内部依存・Cargo.lockを0.3.0へ揃える（2026-10-25、未コミット）。
 - [ ] README・マニュアル・リリースノートを更新する。公開前は公開済みと書かない。
 - [ ] 版番号更新後の同一SHAでCI、パッケージ検証、Windows ZIP実機確認を再実施する。
 - [ ] 検証済みSHAに注釈付きタグv0.3.0を付ける。公開後は移動しない。
@@ -59,6 +64,8 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 途中で止まったら成功済みの名前・版番号・SHAを記録し、未公開分だけ再開します。
 
 ## 2026-10-24 検証記録
+
+この節は版番号更新前の記録です。更新後の検証は末尾の2026-10-25節を参照してください。
 
 - 基点はf094705と未コミット変更。版番号0.2.0。
 - 11クレートのメタデータ・LICENSE・埋め込み素材チェックと.crate作成は成功。
@@ -86,3 +93,22 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 [/DEBUG設定](https://learn.microsoft.com/en-us/cpp/build/reference/debug-generate-debug-info?view=msvc-170)。
 ローカルの永続環境変数・Cargoプロファイル・公開ソースはこの対処では変更していません。
 既存CIはDEV/TESTのdebug情報を無効化していますが、今回の候補SHAでのCI実行確認は別途必要です。
+
+## 2026-10-25 公開準備と停止事項
+
+- 6e8ab53のcommit/pushを確認。fetch後も開発枝とoriginが一致し、mainは未統合。
+- 全11クレート、厳密内部依存、Cargo.lockを0.3.0へ更新。外部依存は変更していない。
+- Windowsで`cargo build -p bevyistr --locked --offline --jobs 2`成功。
+  EXEのFileVersion/ProductVersionも0.3.0であることを確認した。配布用releaseビルドとは別。
+- `cargo test --workspace --locked --offline --jobs 1`で401成功・0失敗・8スキップ。
+  前回と同様、プロセス内TEMP/TMPをtarget配下へ、_LINK_へ/DEBUG:NONEを指定。
+- `cargo package --workspace --locked --offline --allow-dirty --no-verify`で全11アーカイブ作成成功。
+  0.3.0アーカイブの展開後ビルド、registry向けdry-run、クリーンな最終候補のCIは別途必要。
+- mdBookビルド、メタデータの11クレート版番号/内部依存一致、diff空白検査に成功。
+- cargo-audit 0.22.2で脆弱性3件・警告8件を検出。内容と経路は[監査記録](dependency-audit-0.3.0.md)。
+- メンテナーは保存間隔・固有値設定の実機確認が未実施と回答。公開条件として残す。
+- GitHub CLI認証は無効と表示された。自動公開を行う場合は再認証が必要。認証情報は変更していない。
+- commit/push/main統合/タグはメンテナーが担当。公開操作は未実施。
+
+今回のコミット案: `chore: prepare 0.3.0 release metadata and record audit blockers`
+このコミットだけではリリース完了ではないため、まだv0.3.0タグを付けない。
