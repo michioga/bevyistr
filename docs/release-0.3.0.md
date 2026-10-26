@@ -1,14 +1,15 @@
 # 0.3.0 リリース候補チェックリスト
 
-2026-10-25更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
+2026-10-26更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
 固有値入力・RES/VTK保存間隔は6e8ab53でcommit/push済みです。
 メンテナーの再確認によりcommit、push、マージ、タグ作成は引き続きメンテナーが行います。
 2026-10-25時点で固有値入力・保存間隔の実機確認は未実施との回答があり、正式公開前の確認として残します。
 方針は[release-policy.md](release-policy.md)、操作確認は[verification.md](verification.md)、
 公開手順は[releasing.md](releasing.md)を参照してください。
 
-**公開停止事項（2026-10-25）:** [依存監査](dependency-audit-0.3.0.md)で脆弱性3件と警告8件を検出。
-実機確認・依存対策・配布物確認が済むまで正式公開しません。
+**公開前の残作業（2026-10-26）:** [依存監査](dependency-audit-0.3.0.md)の脆弱性3件と
+unsound警告3件は解消しました。保守終了警告5件は依存経路と対応方針を記録しています。
+実機確認・ライセンス確認・正式候補CI・配布物確認が済むまで正式公開しません。
 
 ## 今回の範囲
 
@@ -50,7 +51,7 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 
 - [ ] リモートを更新し、mainとの差分・祖先関係・未統合コミットを確認する。
 - [ ] mainへ統合する。積み重ねた旧枝を重複マージしない。
-- [x] 全11クレートの版番号・厳密内部依存・Cargo.lockを0.3.0へ揃える（2026-10-25、未コミット）。
+- [x] 全11クレートの版番号・厳密内部依存・Cargo.lockを0.3.0へ揃える（d75e6fcでコミット済み）。
 - [ ] README・マニュアル・リリースノートを更新する。公開前は公開済みと書かない。
 - [ ] 版番号更新後の同一SHAでCI、パッケージ検証、Windows ZIP実機確認を再実施する。
 - [ ] 検証済みSHAに注釈付きタグv0.3.0を付ける。公開後は移動しない。
@@ -112,3 +113,18 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 
 今回のコミット案: `chore: prepare 0.3.0 release metadata and record audit blockers`
 このコミットだけではリリース完了ではないため、まだv0.3.0タグを付けない。
+
+## 2026-10-26 依存の脆弱性修正
+
+- 基点はd75e6fc。Bevy 0.19.1の機能を維持し、Zstandardを公式のzstd_cへ切り替え。
+  wayland-scanner/quick-xmlとanyhow/event-listener/memmap2を修正版へ更新した。
+- パッケージ検証で分かったclipboard-winのyanked版参照も5.4.3への更新で解消した。
+- 最終Cargo.lockの監査は終了コード0、脆弱性0件、unsound警告0件。
+  保守終了警告5件の依存経路と今後の対応は[監査記録](dependency-audit-0.3.0.md)に記載。
+- Windows開発ビルド、全11クレートのパッケージ作成、展開ソースからのビルドとUI単独checkが成功。
+  最終lockfileでworkspaceテスト401成功・0失敗・8スキップ。TEMP/TMPとMSVC設定は前節と同じ。
+- mdBookビルドとdiff空白検査成功。Dependency security workflowを追加したが、GitHub上では未実行。
+- 未コミット作業ツリーでの検証であり、Linux CI・GUI・配布ZIPの確認を代替しない。
+  保存間隔と固有値入力の実機確認、ライセンス収集など、上記チェックリストの残作業を継続する。
+
+コミット案: `fix: resolve vulnerable dependencies and add security audit CI`

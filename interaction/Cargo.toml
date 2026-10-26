@@ -15,5 +15,5 @@ include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo
 name = "interaction"
 
 [dependencies]
-bevy = "0.19"
+bevy.workspace = true
 fem_core.workspace = true

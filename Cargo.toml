@@ -23,6 +23,16 @@ repository = "https://github.com/michioga/bevyistr"
 
 # Keep source-level crate names stable while publishing uniquely named packages.
 [workspace.dependencies]
+# Preserve Bevy 0.19 defaults, expanding the 3D profile to choose zstd_c.
+# The stock `3d` / `3d_api` profiles enable vulnerable ruzstd 0.8.x.
+# Do not enable those profiles or default features in member crates.
+bevy = { version = "0.19", default-features = false, features = [
+    "2d", "ui", "audio",
+    "common_api", "bevy_light", "bevy_mikktspace", "ktx2",
+    "morph_animation", "morph", "smaa_luts", "tonemapping_luts", "zstd_c",
+    "bevy_render", "bevy_core_pipeline", "bevy_gizmos_render",
+    "bevy_anti_alias", "bevy_gltf", "bevy_pbr", "bevy_post_process", "gltf_animation",
+] }
 fem_core = { package = "bevyistr-fem-core", path = "fem_core", version = "=0.3.0" }
 interaction = { package = "bevyistr-interaction", path = "interaction", version = "=0.3.0" }
 selection = { package = "bevyistr-selection", path = "selection", version = "=0.3.0" }

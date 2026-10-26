@@ -1,6 +1,73 @@
-# 0.3.0 公開前の依存監査（2026-10-25）
+# 0.3.0 公開前の依存監査
 
-**結果: 公開前に解決・評価が必要。監査は合格していません。**
+**2026-10-26再監査: 脆弱性0件、unsound警告0件。保守終了警告5件は残存。**
+
+## 修正と再監査（2026-10-26）
+
+Bevy 0.19.1と既存の描画機能を維持し、次の変更を行いました。
+
+| 依存 | 変更 |
+| --- | --- |
+| wayland-scanner / quick-xml | 0.31.10 / 0.39.4 → 0.31.11 / 0.41.0 |
+| ruzstd | 0.8.3を依存から除去。Bevy公式のzstd_cバックエンドへ変更 |
+| anyhow | 1.0.102 → 1.0.103 |
+| event-listener | 5.4.1 → 5.4.2 |
+| memmap2 | 0.9.10 → 0.9.11 |
+| clipboard-win | 5.4.1（yanked）→ 5.4.3。パッケージ検証時に判明した取り下げ済み版の参照も解消 |
+
+Bevyの設定をworkspaceへ集約し、全11クレートで共有します。標準の`3d` / `3d_api`は
+`zstd_rust`を再度有効にするため、3D機能を展開して`zstd_c`を選びました。
+Cargoメタデータで、元のdefault機能をバックエンドと集約用feature名以外は維持していることを確認しました。
+Bevy 0.20への移行、上流ソースの改変、監査除外は行っていません。
+
+新たな依存はzstd 0.13.3、zstd-safe 7.3.0、zstd-sys 2.1.2+zstd.1.5.7です。
+通常のビルドでは同梱Cソースをコンパイルして静的リンクします。WindowsはMSVC、Linuxは
+Cコンパイラが必要です。既存のRelease checksのビルド環境で用意する構成です。
+この変更だけで別途zstd DLLをインストールする必要はありません。
+
+```powershell
+./target/release-tools/bin/cargo-audit.exe audit --db target/advisory-db --file Cargo.lock --deny unsound --json
+```
+
+終了コード0。対象653パッケージ、脆弱性0件、unsound警告0件、unmaintained警告5件。
+RustSec DBは1352件、commit `21d909e4c8bd4e14c7aea58bf980c881a0053ab1`。
+OS/architectureの絞り込みやignore指定はありません。新しいDependency security workflowも
+全lockfileを監査し、脆弱性またはunsound警告を検出すると失敗します。
+
+### 更新後の検証
+
+- Windows / Rust 1.99.1でアプリの開発ビルド成功。
+- 全11クレートのパッケージ作成成功。最終lockfileではyanked警告なし。
+- 展開した配布ソースでアプリビルド・workspaceテスト・UI単独check成功。
+  テストは401成功、0失敗、8スキップ（実チュートリアル7件、実機MPI1件）。
+  clipboard-win更新後にパッケージを作り直し、展開先とlockfileを更新して再確認した。
+  内部クレートのみ展開パスへpatchする既存の検証方式で、第三者依存のchecksumは変更していない。
+- TEMP/TMPはプロセス内でtarget配下、MSVCのPDB容量制限対策は`_LINK_`の`/DEBUG:NONE`。
+  永続的な環境設定・Cargoプロファイルは変更していない。
+- mdBookビルドと`git diff --check`成功。
+
+これらは未コミット作業ツリーでの確認。Linuxビルド、新規Actionsの実行、GUI実機操作、
+registry向けdry-run、Windows配布ZIPとライセンス同梱確認は完了扱いにしない。
+
+### 残る保守終了警告
+
+以下は脆弱性の検出とは区別します。現在の依存を維持したまま置換できる修正版は
+RustSecに記載されておらず、親ライブラリ側の移行を追跡します。警告は隠していません。
+
+| 依存 | 確認した経路・今後の対応 |
+| --- | --- |
+| paste 1.0.15 | parry3d → simba → paste。数値演算・物理依存の上流移行を追跡 |
+| ttf-parser 0.25.1 | Linux winit → sctk-adwaita → ab_glyph → owned_ttf_parser。ウィンドウ装飾の依存更新を追跡 |
+| zbus_names 4.3.2 | Linux rfd → ashpd → zbus。親依存のzbus 6対応を追跡 |
+| zvariant 5.12.0 | 同上。zbus 6への統合に伴う移行が必要 |
+| zvariant_derive 5.12.0 | 同上 |
+
+これらの解消のためだけに描画・物理・ファイルダイアログを削除したり、互換性のない版へ
+強制置換したりはしていません。第三者ライセンスの収集、実機確認、正式候補CIは別の公開前確認です。
+
+## 初回監査（2026-10-25、修正前の記録）
+
+以下は修正前の結果です。現在の状態は上の再監査を参照してください。
 
 対象は6e8ab53から版番号のみ0.3.0へ更新したCargo.lockです。外部依存は更新していません。
 `cargo-audit 0.22.2`をリポジトリの`target/release-tools`へインストールし、次の監査を実行しました。
@@ -43,7 +110,7 @@ unmaintained（保守状況の警告。脆弱性の検出とは区別）:
 - zvariant 5.12.0: RUSTSEC-2026-0370。
 - zvariant_derive 5.12.0: RUSTSEC-2026-0372。
 
-## 次の対処
+## 初回時点の対処方針
 
 1. anyhow/event-listener/memmap2とwayland-scannerについて、互換範囲内の更新と再監査を検討する。
    crates.ioメタデータではwayland-scanner 0.31.11のquick-xml要求は^0.41。
@@ -53,5 +120,5 @@ unmaintained（保守状況の警告。脆弱性の検出とは区別）:
 3. 保守終了警告について親依存・利用箇所・代替を確認し、対応または残存理由を記録する。
 4. 変更した場合はWindows/Linuxのビルド・回帰・実機確認と監査をやり直す。
 
-今回の作業では上記依存の更新、監査除外、タグ作成、crates.io/GitHub Release公開は行っていません。
+初回監査時点では上記依存の更新、監査除外、タグ作成、crates.io/GitHub Release公開は行っていません。
 監査ツール・DB・ビルド生成物はgit管理外のtarget内にあり、ユーザーの恒久PATHや認証設定は変更していません。

@@ -12,7 +12,7 @@ categories = ["science", "visualization"]
 include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [dependencies]
-bevy = { version = "0.19", features = ["bevy_dev_tools", "debug"] }
+bevy = { workspace = true, features = ["bevy_dev_tools", "debug"] }
 fem_core.workspace = true
 hecmw.workspace = true
 gmsh.workspace = true

@@ -15,7 +15,7 @@ include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo
 name = "gmsh"
 
 [dependencies]
-bevy = "0.19"
+bevy.workspace = true
 fem_core.workspace = true
 
 [dev-dependencies]

@@ -15,7 +15,7 @@ include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo
 name = "box_select"
 
 [dependencies]
-bevy = "0.19"
+bevy.workspace = true
 fem_core.workspace = true
 selection.workspace = true
 camera.workspace = true

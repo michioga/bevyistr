@@ -15,5 +15,5 @@ include = ["src/**", "tests/**", "examples/**", "test-data/**", "assets/**", "bu
 name = "hecmw"
 
 [dependencies]
-bevy = "0.19"
+bevy.workspace = true
 fem_core.workspace = true

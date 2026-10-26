@@ -1,0 +1,36 @@
+name: Dependency security
+
+on:
+  push:
+    paths:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/security.yml'
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/security.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select stable Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      # Audit the complete lockfile, including dependencies of other platforms.
+      # Unmaintained warnings stay visible; vulnerabilities and unsoundness fail.
+      - name: Audit dependencies (no publication)
+        run: cargo audit --deny unsound
