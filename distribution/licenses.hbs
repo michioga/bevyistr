@@ -1,0 +1,23 @@
+bevyistr — Third-party Rust dependencies
+Generated from the locked Windows dependency graph by cargo-about.
+Build dependencies are included; test-only dependencies are excluded.
+Additional native/asset notices are in the licenses directory.
+The application itself is licensed under the MIT license in LICENSE.
+
+DEPENDENCY INVENTORY
+{{#each crates}}
+{{package.name}} {{package.version}} — {{license}}
+{{/each}}
+
+LICENSE TEXTS
+{{#each licenses}}
+===============================================================================
+{{name}} ({{id}})
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

@@ -1,15 +1,15 @@
 # 0.3.0 リリース候補チェックリスト
 
-2026-10-26更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
+2026-10-27更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
 固有値入力・RES/VTK保存間隔は6e8ab53でcommit/push済みです。
 メンテナーの再確認によりcommit、push、マージ、タグ作成は引き続きメンテナーが行います。
-2026-10-25時点で固有値入力・保存間隔の実機確認は未実施との回答があり、正式公開前の確認として残します。
+メンテナーから「RES=2／VTK=5のExport・再読込」「固有値入力4項目の保存・再読込」の両方を確認できたとの回答を受領しました（2026-10-27記録）。
 方針は[release-policy.md](release-policy.md)、操作確認は[verification.md](verification.md)、
 公開手順は[releasing.md](releasing.md)を参照してください。
 
-**公開前の残作業（2026-10-26）:** [依存監査](dependency-audit-0.3.0.md)の脆弱性3件と
+**公開前の残作業（2026-10-27）:** [依存監査](dependency-audit-0.3.0.md)の脆弱性3件と
 unsound警告3件は解消しました。保守終了警告5件は依存経路と対応方針を記録しています。
-実機確認・ライセンス確認・正式候補CI・配布物確認が済むまで正式公開しません。
+Windows ZIPとライセンス同梱をローカルで検証済みです。その他の実機確認・正式候補CI・配布物確認が済むまで正式公開しません。
 
 ## 今回の範囲
 
@@ -23,9 +23,9 @@ SolidCraft風カメラ操作・パネル折りたたみ・比較全体CSVは今�
 ## 現在の変更を確定
 
 - [ ] 固有値入力・保存間隔の変更と自動テストをレビューする。
-- [ ] 対応する新規モデルでRES=2、VTK=5を確定し、ExportしたCNTと再読込値を照合する。
+- [x] RES=2、VTK=5のExport・再読込を確認する（メンテナー確認報告）。
 - [ ] Esc、Undo/Redo、OFF/ON、不正値、固有値時の間隔編集不可を実機確認する。
-- [ ] 固有値入力を5、1e-8、80、0.01にし、CNTと再読込で一致することを確認する。
+- [x] 固有値入力4項目の保存・再読込を確認する（メンテナー確認報告）。
 - [ ] 非流体の検証用コピーで実ソルバーの保存間隔とRES OFF後の自動読込抑止を確認する。
 - [ ] 確認した変更をcommit/pushし、候補SHAを記録する。
 
@@ -40,7 +40,7 @@ SolidCraft風カメラ操作・パネル折りたたみ・比較全体CSVは今�
 - [ ] スキップした実データ・実機テストを必要な手動確認と突き合わせる。
 - [ ] mdBookをビルドし、新設定と既知の制限の説明を確認する。
 - [ ] 依存ライセンス・脆弱性を確認し、ZIP用の第三者ライセンスを用意する。
-- [ ] Windows配布Actionsを実装する。既存Release checksはZIP作成用ではない。
+- [x] Windows配布Actionsを実装する。構文検証済み、GitHubでの実行はcommit/push後。既存Release checksとは別。
 - [ ] 固定runner/toolchainでZIP候補を作り、SHA-256とビルド情報を保存する。
 - [ ] 開発ツール・oneAPIに依存しない環境でZIP起動、版番号、材料・設定保存、結果表示を確認する。
 
@@ -128,3 +128,30 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
   保存間隔と固有値入力の実機確認、ライセンス収集など、上記チェックリストの残作業を継続する。
 
 コミット案: `fix: resolve vulnerable dependencies and add security audit CI`
+
+## 2026-10-27 Windows配布準備
+
+- 基点5e50fdd177d1a7211f33a7d3b6c8c3fa054face1と未コミットの配布スクリプト。
+  アプリのRustソースとCargo.lockは基点から変更なし。コミット・タグ・公開操作は行っていない。
+- メンテナーがRES=2／VTK=5のExport・再読込、および固有値入力4項目の保存・再読込を確認済みと回答。
+  この報告を他の未確認操作や実ソルバーの間隔検証まで拡張しない。
+- 基点SHAの[Dependency security](https://github.com/michioga/bevyistr/actions/runs/40288819495)と
+  [Documentation](https://github.com/michioga/bevyistr/actions/runs/40288819405)の成功を確認。
+  同じSHAのWindows/Linux Release checksは未確認。
+- Rust 1.99.1、x86_64-pc-windows-msvc、release、locked、CRT静的リンクでビルド成功。
+  EXE ProductVersionは0.3.0。直接DLL参照20件にVCRUNTIME/MSVCP/oneAPI/zstd DLLは含まれなかった。
+- cargo-about 0.9.2でWindows向け390クレート、153ライセンス本文を収集。
+  FiraMono、Bevy shader、同梱nativeコード、Rust標準ライブラリの追加通知も同梱。
+- ローカルZIPは36,899,072 bytes、展開後694ファイル。
+  SHA-256: `8749a2371d290ac86a3e36df66e52de2dbf120e47a8ca38e8fb138d7f20a5f4d`。
+  BUILD-INFO.jsonのsource_dirty=trueであり、正式配布用ではない。
+- ZIP全体・収録ファイルのハッシュ、必須ファイル、版番号・内容検査が成功。
+  不正なZIPチェックサムと、ZIPハッシュだけ再計算したREADME改変の両方を拒否した。
+- 空白を含む展開先、別設定パス、Windows標準フォルダーだけのPATHで起動。
+  15秒間プロセスが存続し、試験で起動したプロセスだけを終了した。
+  GPU描画・材料Reload・設定保存・結果操作・別PCでの動作を確認したという意味ではない。
+- PowerShell構文検証、YAMLパース、actionlint 1.7.12による新workflow検証が成功。
+  Windows packageはタグからビルドし、手動指定時だけRelease下書きに添付する。
+  正式公開や既存添付の上書きは自動で行わない。
+- ローカルZIP・検証方法と正式タグの手順は[windows-package.md](windows-package.md)に記録。
+  最終候補はcleanなコミットからCIで再作成し、そのZIPを操作確認する。

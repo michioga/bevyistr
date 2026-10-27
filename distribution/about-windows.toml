@@ -1,0 +1,9 @@
+# Windows binary dependencies, including build dependencies, without test-only crates.
+accepted = [
+    "MIT", "Apache-2.0", "Unicode-3.0", "BSD-2-Clause", "BSD-3-Clause",
+    "BSL-1.0", "ISC", "Zlib", "CC0-1.0", "MIT-0", "0BSD", "Unlicense",
+]
+targets = ["x86_64-pc-windows-msvc"]
+ignore-dev-dependencies = true
+ignore-build-dependencies = false
+ignore-transitive-dependencies = false

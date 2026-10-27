@@ -46,8 +46,10 @@ OS/architectureの絞り込みやignore指定はありません。新しいDepen
   永続的な環境設定・Cargoプロファイルは変更していない。
 - mdBookビルドと`git diff --check`成功。
 
-これらは未コミット作業ツリーでの確認。Linuxビルド、新規Actionsの実行、GUI実機操作、
-registry向けdry-run、Windows配布ZIPとライセンス同梱確認は完了扱いにしない。
+上記は修正時の未コミット作業ツリーでの確認です。
+2026-10-27追記: コミット5e50fddの[Dependency security](https://github.com/michioga/bevyistr/actions/runs/40288819495)成功を確認しました。
+Windows ZIPとライセンス同梱のローカル検証も完了し、[リリース記録](release-0.3.0.md)へ追記しています。
+Linuxビルド、registry向けdry-run、最終候補ZIPのGUI実機操作は別途必要です。
 
 ### 残る保守終了警告
 

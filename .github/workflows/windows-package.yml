@@ -1,0 +1,119 @@
+name: Windows package
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing annotated tag (blank builds selected ref as a candidate)'
+        required: false
+        type: string
+        default: ''
+      attach_draft:
+        description: 'Attach the tagged ZIP to a draft Release; never publish'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      tag: ${{ steps.package.outputs.tag }}
+      sha: ${{ steps.package.outputs.sha }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release source
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          ATTACH_DRAFT: ${{ inputs.attach_draft }}
+        run: |
+          $tag = $env:REQUESTED_TAG
+          if (!$tag -and $env:GITHUB_REF_TYPE -eq 'tag') { $tag = $env:GITHUB_REF_NAME }
+          if ($tag -and $tag -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected tag vX.Y.Z' }
+          if ($env:ATTACH_DRAFT -eq 'true' -and !$tag) { throw 'Draft attachment requires an existing release tag' }
+          if ($tag) {
+            git merge-base --is-ancestor HEAD origin/main
+            if ($LASTEXITCODE -ne 0) { throw 'Release source must be included in main' }
+          }
+          "PACKAGE_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Install pinned Rust and release tools
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.1 install cargo-about --version 0.9.2 --features cli --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.1 install cargo-audit --version 0.22.2 --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Audit locked dependencies
+        run: |
+          cargo +1.99.1 audit --deny unsound
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and verify ZIP
+        id: package
+        run: |
+          ./scripts/package-windows.ps1 -Tag $env:PACKAGE_TAG
+          $result = Get-Content target/windows-package-result.json -Raw | ConvertFrom-Json
+          ./scripts/test-windows-package.ps1 -Zip $result.zip -Checksums (Join-Path $result.artifact_directory 'SHA256SUMS.txt')
+          "artifact_directory=$($result.artifact_directory)" >> $env:GITHUB_OUTPUT
+          "version=$($result.version)" >> $env:GITHUB_OUTPUT
+          "tag=$($result.tag)" >> $env:GITHUB_OUTPUT
+          "sha=$($result.source_commit)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: windows-x86_64
+          path: ${{ steps.package.outputs.artifact_directory }}
+          if-no-files-found: error
+          retention-days: 30
+
+  draft:
+    if: github.event_name == 'workflow_dispatch' && inputs.attach_draft
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.build.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: windows-x86_64
+          path: artifacts
+      - name: Attach to draft only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          (cd artifacts && sha256sum --check SHA256SUMS.txt)
+          if gh release view "$RELEASE_TAG" --json isDraft > release.json; then
+            test "$(jq -r .isDraft release.json)" = true || { echo "Refusing to modify a published Release"; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "bevyistr $RELEASE_TAG" \
+              --notes-file "distribution/release-notes-$RELEASE_VERSION.md"
+          fi
+          gh release upload "$RELEASE_TAG" artifacts/*.zip artifacts/SHA256SUMS.txt
