@@ -1,3 +1,4 @@
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::infinite_grid::{InfiniteGrid, InfiniteGridPlugin, InfiniteGridSettings};
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::pbr::wireframe::{WireframeConfig, WireframePlugin};
@@ -175,6 +176,8 @@ fn setup(mut commands: Commands, model: Option<Res<FemModel>>) {
 
     commands.spawn((
         Camera3d::default(),
+        // Avoid Bevy's default LUT-based transform: compressed LUTs are disabled.
+        Tonemapping::Reinhard,
         Camera::default(),
         IsDefaultUiCamera,
         MainViewportCamera,

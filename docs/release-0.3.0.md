@@ -1,15 +1,17 @@
 # 0.3.0 リリース候補チェックリスト
 
-2026-10-27更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
+2026-10-31更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
 固有値入力・RES/VTK保存間隔は6e8ab53でcommit/push済みです。
 メンテナーの再確認によりcommit、push、マージ、タグ作成は引き続きメンテナーが行います。
 メンテナーから「RES=2／VTK=5のExport・再読込」「固有値入力4項目の保存・再読込」の両方を確認できたとの回答を受領しました（2026-10-27記録）。
 方針は[release-policy.md](release-policy.md)、操作確認は[verification.md](verification.md)、
 公開手順は[releasing.md](releasing.md)を参照してください。
 
-**公開前の残作業（2026-10-27）:** [依存監査](dependency-audit-0.3.0.md)の脆弱性3件と
-unsound警告3件は解消しました。保守終了警告5件は依存経路と対応方針を記録しています。
-Windows ZIPとライセンス同梱をローカルで検証済みです。その他の実機確認・正式候補CI・配布物確認が済むまで正式公開しません。
+**公開前の残作業（2026-10-31）:** mainに9e94ec9を統合しましたが、Windows packageは
+更新されたDBによるzstd系の脆弱性3件・unsound警告10件で停止しました。
+修正枝fix/zstd-advisoriesで依存を除去し、再監査は脆弱性0件・unsound 0件です。
+保守終了警告5件は[依存監査](dependency-audit-0.3.0.md)で追跡しています。
+修正後のローカルZIPは作成・検証済みです。変更後のCI・色味の表示確認と、cleanな正式候補の配布物確認を継続します。
 
 ## 今回の範囲
 
@@ -155,3 +157,29 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
   正式公開や既存添付の上書きは自動で行わない。
 - ローカルZIP・検証方法と正式タグの手順は[windows-package.md](windows-package.md)に記録。
   最終候補はcleanなコミットからCIで再作成し、そのZIPを操作確認する。
+
+## 2026-10-28～31 zstd系の追加検出への対応
+
+- mainは9e94ec9へfast-forward済み。同SHAの[Windows/Linux Release checks](https://github.com/michioga/bevyistr/actions/runs/40495142220)成功を確認したが、
+  [Windows package #1](https://github.com/michioga/bevyistr/actions/runs/40499302894)は更新DBのzstd系の脆弱性3件・unsound 10件で停止した。
+- メンテナーは圧縮テクスチャ依存を外して色調変換を変更する方針を選択した。
+  fix/zstd-advisoriesでzstd_c・tonemapping_luts・smaa_lutsを無効化し、
+  メイン表示とビューキューブへReinhardを明示した。Zstandard圧縮KTX2とSMAA用LUTは非対応。
+  モデルの明るさ・色味が変わるため、実結果のコンター・凡例・材料色の確認を残す。
+- Cargo.lockからzstd・zstd-safe・zstd-sysの3クレートを除去。解決した依存グラフでも両zstdバックエンドがないことを確認した。
+  FEMの計算値・コンター値域の処理は変更していない。
+- 10月28日: Windows workspaceで401成功・0失敗・8スキップ。
+  全11クレートの公開用アーカイブ作成、展開アプリのビルド・workspaceテスト401成功・UI単独checkも成功。
+  8件は実チュートリアル7件・実機MPI1件。TEMP/TMPとMSVCの対処は以前と同様。
+- 展開アーカイブから作ったアプリを隔離した設定パスで起動し、Vulkan上でデモ形状・グリッド・
+  ビューキューブを画面確認した。起動ログにLUT不足・描画エラーはなく、試験用プロセスは終了済み。
+- 修正後のWindows release ZIPを作成。10月31日に再検証して682ファイル・EXE版番号0.3.0・全収録ハッシュの一致を確認。
+  36,129,551 bytes、SHA-256: `868a3bd123c5708c0fa37029b0a179c74c51d5de78497686cf8a6ef55b170482`。
+  384クレート・148ライセンス本文と追加の素材/標準ライブラリ通知を同梱。
+  ソース基点は9e94ec9、source_dirty=true。正式公開用のZIPではない。
+- ZIPを空白を含む別のフォルダーへ展開し、Windows標準フォルダーだけのPATH・隔離設定で起動。
+  15秒後も動作し、ウィンドウタイトル0.3.0を確認した。別PCや実結果の全操作を確認した意味ではない。
+- 10月31日: 最新RustSec DB 1395件、commit `2295466c4e9df26647fd67d8fa1c705ac2fc7f81`で再監査。
+  全650依存、終了コード0、脆弱性0件・unsound 0件・保守終了警告5件。監査除外なし。
+- 修正枝のcommit/push後にRelease checksとWindows packageを同じ候補で再実行する。
+  表示確認とCI成功を確認してからmainへ統合し、正式タグ・公開手順へ進む。

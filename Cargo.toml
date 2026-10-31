@@ -23,13 +23,14 @@ repository = "https://github.com/michioga/bevyistr"
 
 # Keep source-level crate names stable while publishing uniquely named packages.
 [workspace.dependencies]
-# Preserve Bevy 0.19 defaults, expanding the 3D profile to choose zstd_c.
-# The stock `3d` / `3d_api` profiles enable vulnerable ruzstd 0.8.x.
-# Do not enable those profiles or default features in member crates.
+# Expand the 3D profile to omit compressed tone-mapping/SMAA LUTs and zstd.
+# Both Bevy 0.19 zstd backends currently require vulnerable decoder versions.
+# Cameras explicitly use LUT-free Reinhard; retain the other rendering features.
+# Do not enable `3d`, `3d_api`, LUT features or defaults in member crates.
 bevy = { version = "0.19", default-features = false, features = [
     "2d", "ui", "audio",
     "common_api", "bevy_light", "bevy_mikktspace", "ktx2",
-    "morph_animation", "morph", "smaa_luts", "tonemapping_luts", "zstd_c",
+    "morph_animation", "morph",
     "bevy_render", "bevy_core_pipeline", "bevy_gizmos_render",
     "bevy_anti_alias", "bevy_gltf", "bevy_pbr", "bevy_post_process", "gltf_animation",
 ] }

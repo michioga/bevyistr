@@ -5,6 +5,7 @@
 //! directions, while the main orbit focus and distance remain unchanged.
 
 use bevy::camera::{ScalingMode, Viewport, visibility::RenderLayers};
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::math::primitives::Cuboid;
 use bevy::mesh::Mesh3d;
 use bevy::pbr::MeshMaterial3d;
@@ -61,6 +62,8 @@ pub(crate) fn spawn_navigation_cube(
 ) {
     commands.spawn((
         Camera3d::default(),
+        // Keep the cube consistent with the main camera without compressed LUTs.
+        Tonemapping::Reinhard,
         Camera {
             order: 20,
             clear_color: ClearColorConfig::None,
