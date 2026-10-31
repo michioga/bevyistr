@@ -1,6 +1,6 @@
 # リリース管理方針（0.3.0以降）
 
-2026-10-27更新。Windows配布用Actionsとローカル検証スクリプトを用意しました。正式公開は未実施です。
+2026-10-31更新。Windows配布用Actionsとローカル検証スクリプトを使用し、0.3.0を公開しました。
 実行手順は[Windows ZIP](windows-package.md)を参照してください。
 コミット、push、マージ、タグ作成、crates.io公開、GitHub Release公開はメンテナーが行います。
 

@@ -12,7 +12,9 @@
 [bevyistr 0.3.0](https://crates.io/crates/bevyistr/0.3.0)と内部10クレートを公開しました。
 ソースは注釈付きタグ`v0.3.0`、commit `794a994ad85beab814dbb380186d96a0f823d032`です。
 全11配布アーカイブのchecksum・Git SHA・非yankを確認しました。
-CIリンク・チェックサム・GitHub ReleaseとPagesの残作業は[0.3.0記録](release-0.3.0.md)を参照してください。
+[GitHub Release](https://github.com/michioga/bevyistr/releases/tag/v0.3.0)にCIのWindows ZIPとチェックサムを公開し、
+[Pages](https://michioga.github.io/bevyistr/)もmainから更新しました。
+CIリンク・チェックサム・検証範囲は[0.3.0記録](release-0.3.0.md)を参照してください。
 
 以下は0.2.0の公開履歴と、当時の操作手順です。
 

@@ -1,16 +1,17 @@
-# 0.3.0 リリース候補チェックリスト
+# 0.3.0 公開記録と検証チェックリスト
 
-2026-10-31更新。crates.ioの全11クレートを0.3.0として公開しました。GitHub ReleaseとPagesの更新は別途完了を確認します。
+2026-10-31更新。crates.io全11クレート、GitHub ReleaseのWindows ZIP、mainからのPages公開を確認しました。
 固有値入力・RES/VTK保存間隔は6e8ab53でcommit/push済みです。
 メンテナーの再確認によりcommit、push、マージ、タグ作成は引き続きメンテナーが行います。
 メンテナーから「RES=2／VTK=5のExport・再読込」「固有値入力4項目の保存・再読込」の両方を確認できたとの回答を受領しました（2026-10-27記録）。
 方針は[release-policy.md](release-policy.md)、操作確認は[verification.md](verification.md)、
 公開手順は[releasing.md](releasing.md)を参照してください。
 
-**現在の残作業（2026-10-31）:** 修正と最終文書をmainへ統合し、794a994に注釈付きタグv0.3.0を作成しました。
+**公開状況（2026-10-31）:** 修正と最終文書をmainへ統合し、794a994に注釈付きタグv0.3.0を作成しました。
 Windows/Linux CI・依存監査・ドキュメントビルドに成功し、全11クレートをcrates.ioへ公開済みです。
 脆弱性0件・unsound 0件、保守終了警告5件は[依存監査](dependency-audit-0.3.0.md)で追跡しています。
-タグからのローカルWindows ZIPは作成・検証済みです。Windows配布Actionsの完了確認、GitHub ReleaseとPages更新を継続します。
+同タグのWindows配布Actions成果物をReleaseで公開し、mainのPagesデプロイも成功しました。
+未チェックの実機確認項目は、公開時点の検証範囲として残します。
 
 ## 今回の範囲
 
@@ -28,7 +29,7 @@ SolidCraft風カメラ操作・パネル折りたたみ・比較全体CSVは今�
 - [ ] Esc、Undo/Redo、OFF/ON、不正値、固有値時の間隔編集不可を実機確認する。
 - [x] 固有値入力4項目の保存・再読込を確認する（メンテナー確認報告）。
 - [ ] 非流体の検証用コピーで実ソルバーの保存間隔とRES OFF後の自動読込抑止を確認する。
-- [ ] 確認した変更をcommit/pushし、候補SHAを記録する。
+- [x] 確認した変更をcommit/pushし、候補SHAを記録する。
 
 提供されたSolve画像は配置を示しますが、RES/VTKはいずれも1です。
 またSetup incompleteによりExport/Runは停止対象です。2/5の保存・解析実行の証拠とは扱いません。
@@ -54,12 +55,12 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 - [x] mainへ統合する。積み重ねた旧枝を重複マージしない。
 - [x] 全11クレートの版番号・厳密内部依存・Cargo.lockを0.3.0へ揃える（d75e6fcでコミット済み）。
 - [x] README・マニュアル・リリースノートを更新する。公開前は公開済みと書かない。
-- [ ] 版番号更新後の同一SHAでCI、パッケージ検証、Windows ZIP実機確認を再実施する。
+- [x] 版番号更新後の同一SHAでCI、パッケージ検証、Windows ZIP起動確認を再実施する。確認範囲は末尾の記録を参照。
 - [x] 検証済みSHAに注釈付きタグv0.3.0を付ける。公開後は移動しない。
 - [x] 依存順にdry-runとcrates.io公開を行い、各クレートの反映を確認する。
-- [ ] 同じタグのZIPとSHA-256をRelease下書きに添付し、確認後に公開する。
-- [ ] 公開版インストール・ZIP起動・Pages内容を確認する。
-- [ ] Pages公開元とenvironment許可をmainへ移行し、包含確認済みの旧作業枝だけ整理する。
+- [x] 同じタグのZIPとSHA-256を検証し、GitHub Releaseで公開する。
+- [x] 公開版のdebug profileインストール・CI release ZIP起動・Pages内容を確認する。
+- [x] Pages公開元とenvironment許可をmainへ移行し、包含確認済みの旧作業枝だけ整理する。
 
 公開順: fem-core → interaction → camera → selection → box-select → hecmw → gmsh
 → picking → visualization → ui → bevyistr。
@@ -195,7 +196,8 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
   全ての.cargo_vcs_info.jsonが上記SHA・dirty=falseと一致し、yankされていないことを確認した。
 - タグから作成したクリーンなWindows ZIPの内容検証成功。
 - [Windows package](https://github.com/michioga/bevyistr/actions/runs/41190214827)成功。
-  GitHub Releaseへの添付・公開とPages更新を継続する。
+  [GitHub Release](https://github.com/michioga/bevyistr/releases/tag/v0.3.0)でZIPとSHA256SUMS.txtを公開済み。
+  [Pagesデプロイ](https://github.com/michioga/bevyistr/actions/runs/41193347693)はmain許可追加後の再実行で成功。
   この記録はタグ後の文書更新であり、公開済みパッケージの内容は変更しない。
 
 Windows ZIP SHA-256: `674867d3c57c69f682064d4bd01ef558deb8fc192ab25d9277e3ed6b3572c536`
@@ -226,3 +228,5 @@ Windows ZIP SHA-256: `674867d3c57c69f682064d4bd01ef558deb8fc192ab25d9277e3ed6b35
   最初のPATH制限付き確認は早期に終了コード0で終了して判定できず、通常PATHで再確認した。
   Release profileのcargo install、別PC、すべての結果操作の実機確認を意味しない。
 - ダウンロードしたアプリのCargo.lockも監査し、脆弱性0件・unsound 0件、保守終了警告5件を確認。
+
+旧作業枝feat/eigen-result-metadataとfix/zstd-advisoriesは、mainへの包含を確認してローカル・リモートとも整理済み。Pagesの旧ブランチ許可も除去し、mainとv0.3.0を保持した。
