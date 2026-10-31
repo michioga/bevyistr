@@ -1,4 +1,4 @@
-# 固有値解析の設定（0.3.0向け開発版）
+# 固有値解析の設定（0.3.0）
 
 Solveで **Analysis type → Eigenvalue** を選ぶと、**EIGENVALUE | !EIGEN (Lanczos)** 欄が表示されます。
 この機能は公開済みv0.2.0には含まれません。

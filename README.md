@@ -6,9 +6,9 @@ A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
-Version **0.2.0** is [available on crates.io](https://crates.io/crates/bevyistr/0.2.0).
-This source tree is preparing **0.3.0**; it has not been released yet. See the
-[0.3.0 release notes (draft)](docs/src/release-notes.md) and [release checklist](docs/release-0.3.0.md).
+This source tree targets **0.3.0**. See the [release notes](docs/src/release-notes.md),
+[crates.io packages](https://crates.io/crates/bevyistr), and
+[release checklist](docs/release-0.3.0.md).
 See the [release record and maintainer procedures](docs/releasing.md) for verification
 results and the exact source commit.
 
@@ -21,7 +21,7 @@ bevyistr is under active development. It can currently assemble meshes, author a
 ## Install from crates.io
 
 ```sh
-cargo install bevyistr --version 0.2.0 --locked
+cargo install bevyistr --version 0.3.0 --locked
 bevyistr
 ```
 
@@ -35,11 +35,11 @@ icon and default material library are embedded.
 
 The [Japanese user manual](docs/src/introduction.md) is organized as an mdBook; see its [table of contents](docs/src/SUMMARY.md). It covers viewport operation, setup, execution, and result viewing, with current limitations kept explicit.
 
-Read the manual on [GitHub Pages](https://michioga.github.io/bevyistr/). It targets **0.3.0 development**, not just the published **0.2.0** release. Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. Pages deployment is manual from the selected branch; pushing changes alone does not publish the site.
+Read the manual on [GitHub Pages](https://michioga.github.io/bevyistr/). It documents the **0.3.0** feature set. Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. Pages deployment is manual from the selected branch; pushing changes alone does not publish the site.
 
 ## Current capabilities
 
-Development toward **0.3.0** adds **Export pinned history CSV...** below the pinned probe's
+**0.3.0** adds **Export pinned history CSV...** below the pinned probe's
 history plot. It saves all loaded frames of the selected part-local node/element
 and field, with separate Frame / Step / Time columns and explicit missing-value
 status. Exported values are independent of deformation scale and contour colors.

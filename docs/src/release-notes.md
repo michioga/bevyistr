@@ -1,7 +1,8 @@
-# 0.3.0 リリースノート（公開準備中）
+# 0.3.0 リリースノート
 
-2026-10-31時点の公開候補です。crates.ioへの公開・Windows ZIPの配布はまだ完了していません。
-以下は0.2.0からの変更点です。アプリの版番号表示だけでは公開済みとは判断しないでください。
+以下は0.2.0から0.3.0への変更点です。
+パッケージと配布物は[crates.io](https://crates.io/crates/bevyistr)と
+[GitHub Releases](https://github.com/michioga/bevyistr/releases)で確認できます。
 
 ## 結果の確認と比較
 

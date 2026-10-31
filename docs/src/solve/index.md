@@ -4,7 +4,7 @@
 
 解析方式と連立方程式ソルバーはメニューから選択します。MUMPS、MKL (DIRECTmkl)、CG、GMRES、Directの選択と、実行方式のDirect／MPIは別の設定です。
 
-0.3.0向け開発版では、反復の種類を分けて表示します。
+0.3.0では、反復の種類を分けて表示します。
 
 - **LINEAR ITERATION | !SOLVER**：CG／GMRESの最大反復数と相対残差。MUMPS／MKL／Directでは非表示になり、直接法の案内を表示します。CG／GMRESへ戻すと入力値は保持されています。
 - **NONLINEAR STEP | !STEP**：Nonlinearでのみ表示する固定増分のサブステップ数、Newton反復上限、非線形残差の許容値です。線形反復とは独立しており、MUMPSでも設定できます。
@@ -18,7 +18,7 @@ Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数
 
 ## 実行する
 
-### 読み込んだ設定に未対応項目がある場合（0.3.0開発版）
+### 読み込んだ設定に未対応項目がある場合（0.3.0）
 
 Open Project／Open Setupで、再出力時に保持できないCNT設定を検出すると、
 画面上部に **Setup incomplete** を表示します。Solveには元ファイル名・行番号・

@@ -8,14 +8,15 @@ Select geometry in the viewport; confirm engineering data numerically. Includes
 mesh assembly, contact and boundary-condition setup, material assignment, solver
 execution, and RES / VTU / PVTU result visualization with animation and probes.
 
-Version **0.2.0** is [available on crates.io](https://crates.io/crates/bevyistr/0.2.0).
-This source tree targets **0.3.0**, currently in release preparation. The version
-shown by a local build is not evidence of publication to crates.io.
+Version **0.3.0** includes pinned-probe CSV export, comparison of up to four probes,
+eigenvalue metadata, frame/mode seeking, and safeguards against lossy setup export.
+See [crates.io](https://crates.io/crates/bevyistr) for package versions and
+[release notes](https://michioga.github.io/bevyistr/release-notes.html) for changes and limitations.
 
 ## Installation
 
 ```sh
-cargo install bevyistr --version 0.2.0 --locked
+cargo install bevyistr --version 0.3.0 --locked
 bevyistr
 ```
 

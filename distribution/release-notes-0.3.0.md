@@ -1,6 +1,6 @@
 # bevyistr 0.3.0
 
-Release preparation: this text is a draft.
+FrontISTR pre/post-processing with probe comparison, CSV export, eigenvalue metadata and clearer result navigation.
 
 - Export the pinned node/element history to CSV and compare up to four probes.
 - Preserve eigenvalue metadata and distinguish mode order from time steps.
@@ -27,4 +27,4 @@ CSV exports the current pinned target, not the entire comparison.
 
 [Manual](https://michioga.github.io/bevyistr/) · [Source](https://github.com/michioga/bevyistr)
 
-Before publishing: confirm final Windows/Linux CI, ZIP smoke tests and all eleven crates.io packages, and replace this preparation note with the verified release date and scope.
+Validation scope and remaining platform limits are recorded in the [release checklist](https://github.com/michioga/bevyistr/blob/main/docs/release-0.3.0.md).
