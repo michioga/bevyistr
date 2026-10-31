@@ -1,17 +1,16 @@
 # 0.3.0 リリース候補チェックリスト
 
-2026-10-31更新。公開前の作業記録です。ソースの版番号を0.3.0へ更新しましたが、未公開です。
+2026-10-31更新。crates.ioの全11クレートを0.3.0として公開しました。GitHub ReleaseとPagesの更新は別途完了を確認します。
 固有値入力・RES/VTK保存間隔は6e8ab53でcommit/push済みです。
 メンテナーの再確認によりcommit、push、マージ、タグ作成は引き続きメンテナーが行います。
 メンテナーから「RES=2／VTK=5のExport・再読込」「固有値入力4項目の保存・再読込」の両方を確認できたとの回答を受領しました（2026-10-27記録）。
 方針は[release-policy.md](release-policy.md)、操作確認は[verification.md](verification.md)、
 公開手順は[releasing.md](releasing.md)を参照してください。
 
-**公開前の残作業（2026-10-31）:** mainに9e94ec9を統合しましたが、Windows packageは
-更新されたDBによるzstd系の脆弱性3件・unsound警告10件で停止しました。
-修正枝fix/zstd-advisoriesで依存を除去し、再監査は脆弱性0件・unsound 0件です。
-保守終了警告5件は[依存監査](dependency-audit-0.3.0.md)で追跡しています。
-修正後のローカルZIPは作成・検証済みです。変更後のCI・色味の表示確認と、cleanな正式候補の配布物確認を継続します。
+**現在の残作業（2026-10-31）:** 修正と最終文書をmainへ統合し、794a994に注釈付きタグv0.3.0を作成しました。
+Windows/Linux CI・依存監査・ドキュメントビルドに成功し、全11クレートをcrates.ioへ公開済みです。
+脆弱性0件・unsound 0件、保守終了警告5件は[依存監査](dependency-audit-0.3.0.md)で追跡しています。
+タグからのローカルWindows ZIPは作成・検証済みです。Windows配布Actionsの完了確認、GitHub ReleaseとPages更新を継続します。
 
 ## 今回の範囲
 
@@ -37,13 +36,13 @@ SolidCraft風カメラ操作・パネル折りたたみ・比較全体CSVは今�
 
 ## 配布候補を検証
 
-- [ ] Windowsのworkspaceテスト、展開アーカイブからのビルド・テストを完了する。
-- [ ] 同じSHAでLinuxのRelease checksを完了する。Linux GUI実機確認とは区別する。
+- [x] Windowsのworkspaceテスト、展開アーカイブからのビルド・テストを完了する。
+- [x] 同じSHAでLinuxのRelease checksを完了する。Linux GUI実機確認とは区別する。
 - [ ] スキップした実データ・実機テストを必要な手動確認と突き合わせる。
-- [ ] mdBookをビルドし、新設定と既知の制限の説明を確認する。
-- [ ] 依存ライセンス・脆弱性を確認し、ZIP用の第三者ライセンスを用意する。
+- [x] mdBookをビルドし、新設定と既知の制限の説明を確認する。
+- [x] 依存ライセンス・脆弱性を確認し、ZIP用の第三者ライセンスを用意する。
 - [x] Windows配布Actionsを実装する。構文検証済み、GitHubでの実行はcommit/push後。既存Release checksとは別。
-- [ ] 固定runner/toolchainでZIP候補を作り、SHA-256とビルド情報を保存する。
+- [x] 固定runner/toolchainでZIP候補を作り、SHA-256とビルド情報を保存する。
 - [ ] 開発ツール・oneAPIに依存しない環境でZIP起動、版番号、材料・設定保存、結果表示を確認する。
 
 AllowDirtyでの検証は開発途中の確認専用です。正式候補はcleanなコミットから再検証します。
@@ -51,13 +50,13 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
 
 ## 統合・版番号・公開
 
-- [ ] リモートを更新し、mainとの差分・祖先関係・未統合コミットを確認する。
-- [ ] mainへ統合する。積み重ねた旧枝を重複マージしない。
+- [x] リモートを更新し、mainとの差分・祖先関係・未統合コミットを確認する。
+- [x] mainへ統合する。積み重ねた旧枝を重複マージしない。
 - [x] 全11クレートの版番号・厳密内部依存・Cargo.lockを0.3.0へ揃える（d75e6fcでコミット済み）。
-- [ ] README・マニュアル・リリースノートを更新する。公開前は公開済みと書かない。
+- [x] README・マニュアル・リリースノートを更新する。公開前は公開済みと書かない。
 - [ ] 版番号更新後の同一SHAでCI、パッケージ検証、Windows ZIP実機確認を再実施する。
-- [ ] 検証済みSHAに注釈付きタグv0.3.0を付ける。公開後は移動しない。
-- [ ] 依存順にdry-runとcrates.io公開を行い、各クレートの反映を確認する。
+- [x] 検証済みSHAに注釈付きタグv0.3.0を付ける。公開後は移動しない。
+- [x] 依存順にdry-runとcrates.io公開を行い、各クレートの反映を確認する。
 - [ ] 同じタグのZIPとSHA-256をRelease下書きに添付し、確認後に公開する。
 - [ ] 公開版インストール・ZIP起動・Pages内容を確認する。
 - [ ] Pages公開元とenvironment許可をmainへ移行し、包含確認済みの旧作業枝だけ整理する。
@@ -183,3 +182,47 @@ AllowDirtyでの検証は開発途中の確認専用です。正式候補はclea
   全650依存、終了コード0、脆弱性0件・unsound 0件・保守終了警告5件。監査除外なし。
 - 修正枝のcommit/push後にRelease checksとWindows packageを同じ候補で再実行する。
   表示確認とCI成功を確認してからmainへ統合し、正式タグ・公開手順へ進む。
+
+## 2026-10-31 crates.io公開完了
+
+- mainへの統合後、最終文書変更794a994を公開対象として確定。
+- 注釈付きタグv0.3.0は794a994ad85beab814dbb380186d96a0f823d032を参照。
+- [Windows/Linux Release checks](https://github.com/michioga/bevyistr/actions/runs/41189865722)、
+  [タグの依存監査](https://github.com/michioga/bevyistr/actions/runs/41190214831)、
+  [タグのドキュメントビルド](https://github.com/michioga/bevyistr/actions/runs/41190214866)成功。
+- 全11クレートで通常のpublish dry-run後に公開。各版のレジストリ反映を確認してから後続へ進んだ。
+- レジストリから全11アーカイブを取得し、APIのchecksumとSHA-256を照合。
+  全ての.cargo_vcs_info.jsonが上記SHA・dirty=falseと一致し、yankされていないことを確認した。
+- タグから作成したクリーンなWindows ZIPの内容検証成功。
+- [Windows package](https://github.com/michioga/bevyistr/actions/runs/41190214827)成功。
+  GitHub Releaseへの添付・公開とPages更新を継続する。
+  この記録はタグ後の文書更新であり、公開済みパッケージの内容は変更しない。
+
+Windows ZIP SHA-256: `674867d3c57c69f682064d4bd01ef558deb8fc192ab25d9277e3ed6b3572c536`
+
+| クレート | 公開アーカイブのSHA-256 |
+| --- | --- |
+| bevyistr-fem-core | `b5ad73f781118fc1c33543028344eda290c32ae456087010ecfaaeca0556b88b` |
+| bevyistr-interaction | `3f780db257a74f3cc12b288e453ed93a291e6dbcc77d6a06292ef94dc218d2bb` |
+| bevyistr-camera | `8d3a834240626f3ff2b355702053ba2fd76eedbe569181fec9363d8ebb63e942` |
+| bevyistr-selection | `27386c44997e7983b5a6f39cab62cf736c99064507c44f1f934d54b6005bc36c` |
+| bevyistr-box-select | `50ecbb2fdbeaaf1ee0843a69a84351f3832e45b1fbed180b77fbe076f1effbc9` |
+| bevyistr-hecmw | `76b8abad7d2673811b85b59ac5c4d0b7e82137ddec11045fe07973e114a48755` |
+| bevyistr-gmsh | `da92f9fcada9754d6cb9b7d8ec5811a8292e6e42b4559b212a8850fb3a5e3321` |
+| bevyistr-picking | `c8e8d723060e7a4d9daca9179bbb05794a80007e39787870bb3b8b1f9f50ab96` |
+| bevyistr-visualization | `e6f6c1052a45b8e95c92e4c7f28aa03c6901544be890d7d414814a1e3f6b4698` |
+| bevyistr-ui | `db363527cacb3c69dad2f8a6b8e5251a769743a1fdb7b55d011e65552dad3289` |
+| bevyistr | `8f5325ad4c4e2abe6cd82f66676992aaefefc5956f42ab72a1f2c4be0a1b5d7c` |
+
+### Windows Actions成果物とレジストリ版の確認
+
+- CIのWindows ZIPを取得し、外側のartifactと内側の配布ZIPの両方のチェックサムを検証。
+  artifact ID: 13039780949、runner image: win25-vs2026 / 20261021.278.1。
+- CI配布ZIPのSHA-256: `5a43c8b8e538ce5ad38616314137beff3fc83dc01495169722df620e053ca48a`。
+  上記のローカルZIPとは別のビルド。ReleaseにはCI成果物を使用する。
+- 682ファイル、版番号0.3.0、source_tag=v0.3.0、source_commit=794a994、source_dirty=falseを確認。
+  空白を含む別の展開先・隔離設定で起動し、0.3.0のウィンドウが20秒間動作することを確認。
+- crates.io版をCargoのdebug profileでtarget配下の隔離したrootへインストールし、通常PATHで起動確認。
+  最初のPATH制限付き確認は早期に終了コード0で終了して判定できず、通常PATHで再確認した。
+  Release profileのcargo install、別PC、すべての結果操作の実機確認を意味しない。
+- ダウンロードしたアプリのCargo.lockも監査し、脆弱性0件・unsound 0件、保守終了警告5件を確認。

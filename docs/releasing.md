@@ -1,4 +1,4 @@
-# 0.2.0 公開記録とリリース手順（メンテナー向け）
+# 公開記録とリリース手順（メンテナー向け）
 
 0.3.0以降のタグ・保守ブランチ・Windowsバイナリ配布の設計は
 [リリース管理方針](release-policy.md)を参照してください。
@@ -7,7 +7,16 @@
 コミット・push・マージ・タグ作成・crates.io公開はメンテナーが行います。
 `publish_crates_io`で準備し、mainへマージしたv0.2.0を2026-09-20に公開しました。
 
-## 公開結果
+## 0.3.0公開記録（2026-10-31）
+
+[bevyistr 0.3.0](https://crates.io/crates/bevyistr/0.3.0)と内部10クレートを公開しました。
+ソースは注釈付きタグ`v0.3.0`、commit `794a994ad85beab814dbb380186d96a0f823d032`です。
+全11配布アーカイブのchecksum・Git SHA・非yankを確認しました。
+CIリンク・チェックサム・GitHub ReleaseとPagesの残作業は[0.3.0記録](release-0.3.0.md)を参照してください。
+
+以下は0.2.0の公開履歴と、当時の操作手順です。
+
+## 0.2.0公開結果
 
 - [bevyistr v0.2.0](https://crates.io/crates/bevyistr/0.2.0)と内部10クレートを公開済みです。
 - 公開ソース: [`70db85dcc704600666f9eda3841ec02e17fd3965`](https://github.com/michioga/bevyistr/commit/70db85dcc704600666f9eda3841ec02e17fd3965)。
