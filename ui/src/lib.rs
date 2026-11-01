@@ -16,6 +16,7 @@ mod mpc_ui;
 mod project_io;
 mod results_ui;
 mod result_open;
+mod result_loading;
 mod result_menu;
 mod result_range_ui;
 mod result_probe_ui;

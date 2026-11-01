@@ -1,20 +1,18 @@
 //! Guided, transactional result opening. File parsing runs off the UI thread.
 use crate::{
     layout::SidebarPage,
+    result_loading::{MeshInput, ResultInput, ResultLoadTask},
     results_ui::{OpenResultButton, PlaybackState, ResultLoadError},
     slider::{SliderId, SliderState, SliderTrack},
 };
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use fem_core::{FemModel, FemResultSet, ResultGeometry};
-use std::{
-    path::{Path, PathBuf},
-    sync::{Mutex, mpsc},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Resource, Default)]
 pub(crate) struct ResultOpenState {
-    pending: Option<Mutex<mpsc::Receiver<Result<hecmw::vtk_scene::ResultScene, String>>>>,
+    pending: Option<ResultLoadTask>,
     path: PathBuf,
     pub status: String,
 }
@@ -56,11 +54,7 @@ fn candidate_mesh(path: &Path) -> Option<PathBuf> {
     None
 }
 
-enum GeometryInput {
-    File(PathBuf),
-    Current(fem_core::FemMesh),
-}
-fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<GeometryInput> {
+fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<MeshInput> {
     let candidate = candidate_mesh(path);
     let current = model.and_then(|m| {
         if m.meshes.len() == 1 && m.meshes[0].nodes != fem_core::FemMesh::demo_hex8().nodes {
@@ -81,8 +75,8 @@ fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<GeometryInput> {
         match choice {
             rfd::MessageDialogResult::Yes => {
                 return candidate
-                    .map(GeometryInput::File)
-                    .or_else(|| current.cloned().map(GeometryInput::Current));
+                    .map(MeshInput::File)
+                    .or_else(|| current.cloned().map(MeshInput::Current));
             }
             rfd::MessageDialogResult::No => {}
             _ => return None,
@@ -92,7 +86,7 @@ fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<GeometryInput> {
         .set_title("Select the matching MSH for this RES (editable model is preserved)")
         .add_filter("HEC-MW mesh", &["msh"])
         .pick_file()
-        .map(GeometryInput::File)
+        .map(MeshInput::File)
 }
 
 pub(crate) fn open_result_button_system(
@@ -140,11 +134,22 @@ pub(crate) fn open_result_button_system(
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("vtu") || e.eq_ignore_ascii_case("pvtu"));
         let input = if vtk {
-            None
+            ResultInput::Vtk(path.clone())
         } else {
             match choose_mesh(&path, model.as_deref()) {
-                Some(input) => Some(input),
+                Some(mesh) => ResultInput::WithMesh {
+                    path: path.clone(),
+                    mesh,
+                },
                 None => continue,
+            }
+        };
+        let pending = match ResultLoadTask::spawn(input) {
+            Ok(pending) => pending,
+            Err(message) => {
+                error.0 = Some(message);
+                state.status = "Result not opened; previous display retained.".into();
+                continue;
             }
         };
         run_results.cancel_pending();
@@ -155,38 +160,7 @@ pub(crate) fn open_result_button_system(
             "Loading {} ...\nYour editable model is preserved.",
             path.file_name().unwrap_or_default().to_string_lossy()
         );
-        let (tx, rx) = mpsc::channel();
-        state.pending = Some(Mutex::new(rx));
-        std::thread::spawn(move || {
-            let loaded = (|| {
-                if vtk {
-                    return hecmw::vtk_scene::load_scene(&path);
-                }
-                let mesh = match input.unwrap() {
-                    GeometryInput::File(file) => {
-                        hecmw::load_mesh_file(file).map_err(|e| e.to_string())?
-                    }
-                    GeometryInput::Current(mesh) => mesh,
-                };
-                let steps = if path
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("frd"))
-                {
-                    hecmw::load_frd_file(
-                        &path,
-                        &mesh.nodes.iter().map(|n| n.id).collect::<Vec<_>>(),
-                    )
-                    .map_err(|e| e.to_string())?
-                } else {
-                    hecmw::result_series::load_mesh_result_series(&path, &mesh)?
-                };
-                Ok(hecmw::vtk_scene::ResultScene {
-                    model: FemModel::single_mesh("Result mesh", mesh),
-                    steps: vec![steps],
-                })
-            })();
-            let _ = tx.send(loaded);
-        });
+        state.pending = Some(pending);
     }
 }
 
@@ -201,22 +175,15 @@ pub(crate) fn poll_result_open(
     mut sliders: Query<&mut SliderState, With<SliderTrack>>,
     mut fit: ResMut<crate::project_io::CameraFitRequest>,
 ) {
-    let Some(rx) = &state.pending else {
+    let Some(task) = &state.pending else {
         return;
     };
-    let reply = rx.lock().unwrap().try_recv();
-    let loaded = match reply {
-        Ok(v) => v,
-        Err(mpsc::TryRecvError::Empty) => return,
-        Err(_) => Err("Result reader stopped unexpectedly".into()),
+    let Some(loaded) = task.poll() else {
+        return;
     };
     state.pending = None;
     let scene = match loaded {
-        Ok(s) if s.steps.first().is_some_and(|s| !s.is_empty()) => s,
-        Ok(_) => {
-            error.0 = Some("No result steps".into());
-            return;
-        }
+        Ok(s) => s,
         Err(e) => {
             error.0 = Some(e);
             state.status = "Result not opened; previous display retained.".into();
@@ -302,104 +269,5 @@ pub(crate) fn sync_result_page(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn opening_is_transactional_and_model_page_preserves_pre_geometry() {
-        for piece_count in [1, 2] {
-            check_transactional_open(piece_count);
-        }
-    }
-
-    fn check_transactional_open(piece_count: usize) {
-        let mut app = App::new();
-        let pre = FemModel::demo_hex8();
-        let mut result_mesh = fem_core::FemMesh::demo_hex8();
-        result_mesh.nodes[0].position.x = 10.;
-        let (tx, rx) = mpsc::channel();
-        let mut scene = hecmw::vtk_scene::ResultScene {
-            model: FemModel::single_mesh("Result", result_mesh),
-            steps: vec![vec![fem_core::StepResult {
-                step: 5,
-                eigenvalue: None,
-                time: 1.,
-                fields: vec![fem_core::ResultField::NodeScalar {
-                    name: "NodalMISES".into(),
-                    values: vec![1.; 8],
-                    min: 1.,
-                    max: 1.,
-                }],
-            }]],
-        };
-        if piece_count == 2 {
-            scene
-                .model
-                .add_mesh("Second piece", fem_core::FemMesh::demo_hex8());
-            scene.steps.push(scene.steps[0].clone());
-        }
-        tx.send(Ok(scene)).unwrap();
-        app.insert_resource(pre.clone())
-            .insert_resource(ResultOpenState {
-                pending: Some(Mutex::new(rx)),
-                path: "job.0005.pvtu".into(),
-                status: String::new(),
-            })
-            .init_resource::<ResultLoadError>()
-            .init_resource::<ResultGeometry>()
-            .init_resource::<FemResultSet>()
-            .init_resource::<visualization::VisualizationSettings>()
-            .init_resource::<PlaybackState>()
-            .init_resource::<crate::project_io::CameraFitRequest>()
-            .insert_resource(SidebarPage::Model)
-            .add_systems(Update, (poll_result_open, sync_result_page).chain());
-        app.update();
-        assert_eq!(
-            app.world().resource::<FemResultSet>().by_mesh.len(),
-            piece_count
-        );
-        assert_eq!(
-            app.world()
-                .resource::<ResultGeometry>()
-                .model
-                .as_ref()
-                .unwrap()
-                .meshes
-                .len(),
-            piece_count
-        );
-        assert_eq!(
-            app.world()
-                .resource::<ResultOpenState>()
-                .status
-                .contains("not welded"),
-            piece_count > 1
-        );
-        assert_eq!(
-            app.world().resource::<FemModel>().meshes[0].nodes,
-            pre.meshes[0].nodes
-        );
-        assert_eq!(*app.world().resource::<SidebarPage>(), SidebarPage::Results);
-        assert!(app.world().resource::<ResultGeometry>().visible);
-        *app.world_mut().resource_mut::<SidebarPage>() = SidebarPage::Model;
-        app.update();
-        assert!(!app.world().resource::<ResultGeometry>().visible);
-        assert_eq!(
-            app.world().resource::<FemModel>().meshes[0].nodes,
-            pre.meshes[0].nodes
-        );
-        let (tx, rx) = mpsc::channel();
-        tx.send(Err("invalid data".into())).unwrap();
-        app.world_mut().resource_mut::<ResultOpenState>().pending = Some(Mutex::new(rx));
-        app.update();
-        assert_eq!(app.world().resource::<FemResultSet>().by_mesh[0][0].step, 5);
-        assert_eq!(*app.world().resource::<SidebarPage>(), SidebarPage::Model);
-    }
-    #[test]
-    fn finds_res_mesh_in_project_ancestor() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("job.msh"), "").unwrap();
-        let res = dir.path().join("fstrRES/STEP1/job.res.0.1");
-        assert_eq!(candidate_mesh(&res), Some(dir.path().join("job.msh")));
-        assert!(candidate_mesh(&dir.path().join("unknown.res.0.1")).is_none());
-    }
-}
+#[path = "result_open_tests.rs"]
+mod tests;
