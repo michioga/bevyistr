@@ -5,6 +5,10 @@ use bevy::prelude::Vec3;
 use fem_core::{ElementId, NodeId, ResultField, StepResult};
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[path = "native_result_parse_tests.rs"]
+mod parse_tests;
+
 #[derive(Clone, Debug, Default)]
 struct Block {
     layout: Vec<(String, usize)>,
@@ -34,9 +38,14 @@ impl<'a> Tokens<'a> {
     }
     fn number(&mut self) -> Result<f32, String> {
         let token = self.next()?;
-        token
-            .replace(['D', 'd'], "E")
-            .parse::<f32>()
+        // Most files already use E notation. Allocate a normalized string
+        // only for Fortran D exponents, not once per ordinary result value.
+        let parsed = if token.contains(['D', 'd']) {
+            token.replace(['D', 'd'], "E").parse::<f32>()
+        } else {
+            token.parse::<f32>()
+        };
+        parsed
             .ok()
             .filter(|v| v.is_finite())
             .ok_or_else(|| format!("Invalid/non-finite result value {token:?}"))
@@ -84,10 +93,24 @@ impl<'a> Tokens<'a> {
     }
 }
 
+/// Byte boundaries of a whole marker line, including its line ending.
+/// Borrow the data/global slices instead of copying the full result file.
+fn marker_line(source: &str, marker: &str) -> Option<(usize, usize)> {
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
+        let start = offset;
+        offset += line.len();
+        if line.trim() == marker {
+            return Some((start, offset));
+        }
+    }
+    None
+}
+
 impl NativeResult {
     pub fn parse(source: &str) -> Result<Self, String> {
-        let mut lines = source.lines();
-        let header = lines.next().unwrap_or("").trim();
+        let (header, remainder) = source.split_once('\n').unwrap_or((source, ""));
+        let header = header.trim();
         if !header.starts_with("*fstrresult") {
             return Err(
                 "Expected FrontISTR ASCII *fstrresult header (binary results are not supported)"
@@ -96,24 +119,18 @@ impl NativeResult {
         }
         let mut time = None;
         let mut eigenvalue = None;
-        let remainder = lines.collect::<Vec<_>>().join("\n");
         let data = if header.split_whitespace().nth(1).is_some() {
             if header.split_whitespace().nth(1) != Some("2.0") {
                 return Err(format!("Unsupported HEC-MW result version: {header}"));
             }
-            let rows: Vec<_> = remainder.lines().collect();
-            let global = rows
-                .iter()
-                .position(|s| s.trim() == "*global")
+            let (global, global_end) = marker_line(remainder, "*global")
                 .ok_or("Missing *global section")?;
-            let data = rows
-                .iter()
-                .position(|s| s.trim() == "*data")
+            let (data, data_end) = marker_line(remainder, "*data")
                 .ok_or("Missing *data section")?;
             if global >= data {
                 return Err("Invalid result section order".into());
             }
-            let text = rows[global + 1..data].join("\n");
+            let text = &remainder[global_end..data];
             let mut tokens = Tokens(text.split_whitespace());
             let count = tokens.count()?;
             let layout = tokens.layout(count)?;
@@ -139,7 +156,7 @@ impl NativeResult {
             if tokens.0.next().is_some() {
                 return Err("Extra global result data".into());
             }
-            rows[data + 1..].join("\n")
+            &remainder[data_end..]
         } else {
             remainder
         };

@@ -165,3 +165,63 @@ RES読み込み、完全な選択操作、複数区画の実データ、GPU描�
 ばねはTimeの系列とは扱わず、読込対象の5モードを数えています。
 複数区画の形状保持は合成fixtureで検証しました。複数区画の実データの性能、RES、GPU、
 ピークメモリ、GUIでの操作感は今回の比較の対象外です。
+
+## ネイティブASCII RESの解析（2026-11-01）
+
+`e237f56`を基準に、`NativeResult`の通常数値の文字列確保と、本文／セクションのコピーを削減しました。
+E指数・通常の数値は直接解析し、FortranのD／d指数がある場合だけ文字列を正規化します。
+セクションは元文字列を参照し、LF／CRLF・末尾改行の省略にも対応を維持します。
+数値の精度、欠損節点のNaN表現、IDの照合・重複検査、非有限値の拒否は変更しません。
+
+専用の読取専用例を追加しました。Windows／Linuxで同じ引数を使えます。
+
+```text
+cargo +1.99.1 run -p bevyistr-hecmw --release --example benchmark_results --locked -- <matching.msh> <result.res.rank.step>
+```
+
+例えばconrodでは次の組合せです。
+
+```text
+cargo +1.99.1 run -p bevyistr-hecmw --release --example benchmark_results --locked -- D:/Work/FrontISTR/tutorial/19_conrod/conrod.msh D:/Work/FrontISTR/tutorial/19_conrod/fstrRES/STEP1/conrod.res.0.1
+```
+
+測定範囲を分けて出力します。
+
+- `MESH first_ms`: MSH読込・トポロジー構築の初回観測値。
+- `RES read_ms`: 指定した単一RESのUTF-8テキスト読込。
+- `RES parse_ms`: メモリ上の単一RESからネイティブレコードを解析する処理。ファイルI/Oは含まない。
+- `RES map_ms`: 解析済みレコードをMSHのID順へ配置し、未使用節点の欠損を展開する処理。
+- `SERIES repeat_median_ms`: 読込済みMSHに対する系列全体のファイルI/O・解析・ID対応・欠損展開。
+  MSHの読込、GUIダイアログ、モデル登録、描画は含まない。
+
+各中央値は予熱後5回です。生成物の破棄を計測の外に置き、OSキャッシュは消していません。
+今回の3例題は完全な単一メッシュ結果です。MPIのランク統合を測る例ではありません。
+VTKの`LOAD`は形状・トポロジー構築も含むため、このRESの`SERIES`と直接比較できません。
+
+### 測定結果
+
+Windows／CPU／Rust 1.99.1・release profileは前節と同じです。
+修正前は`e237f56`に計測例だけを追加して構築し、`target/res-benchmark-before.exe`へ保存。
+修正後は`e237f56`からの未コミット変更を含みます。検証プロセス内のTEMP／TMP・PDB無効化と
+`--offline`を使用しました。
+
+| 例題 | フレーム／モード | 単一RES解析 前→後 ms | 系列全体 前→後 ms | 系列で観測した短縮率 |
+| --- | ---: | ---: | ---: | ---: |
+| conrod | 2 | 111.569→69.657 | 311.635→230.601 | 約26% |
+| eigen spring | 5 | 34.794→19.163 | 273.681→193.807 | 約29% |
+| heat block | 1 | 8.738→4.913 | 15.304→11.357 | 約26% |
+
+ばねの入力は`15_eigen_spring/spring.msh`と`spring.res.0.1`、熱は
+`16_heat_block/block.msh`と`block.res.0.1`です。結果のデータ量・出力物理量は例題ごとに異なります。
+生ログは`target/res-{conrod,spring,heat}-{before,after}.txt`にあります（Git管理対象外）。
+
+系列全体のID順序、各フレームのStep／Time／Eigenvalue、全フィールドの名前・種別・範囲・値のビット列から
+計算する比較用signatureも出力します。非暗号用途の64bitハッシュで、正式なファイル同一性保証ではありません。
+今回の比較では3例題とも変更前後で一致しました。
+
+- conrod: `e1a25731951a0067`
+- eigen spring: `3a560eac6b7ac41c`
+- heat block: `d593f497086b68dd`
+
+これらは特定入力・単一環境でのCPU計測です。アプリ全体の高速化率、GPU描画、ピークメモリ、
+実機MPIの速度、GUIでの操作感の測定ではありません。
