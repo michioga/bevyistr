@@ -1,6 +1,9 @@
 use super::*;
 use std::path::PathBuf;
 
+#[path = "vtk_series_topology_tests.rs"]
+mod series_topology_tests;
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {

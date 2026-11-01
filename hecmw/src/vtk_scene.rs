@@ -1,7 +1,8 @@
 //! Standalone ASCII VTK result geometry, never installed into the pre-model.
 use crate::vtu::{arrays, attr_value, parse_vtu, section};
+use crate::vtk_partitions::PieceGeometry;
 use fem_core::{
-    ElementId, ElementType, FemElement, FemMesh, FemModel, FemNode, NodeId, ResultField, StepResult,
+    ElementId, ElementType, FemElement, FemModel, FemNode, NodeId, ResultField, StepResult,
 };
 use std::path::Path;
 
@@ -30,7 +31,7 @@ fn integers(source: &str, name: &str) -> Result<Vec<usize>, String> {
     Err(format!("Missing {name}"))
 }
 
-fn parse_scene_piece(source: &str) -> Result<(FemMesh, StepResult), String> {
+fn parse_piece_data(source: &str) -> Result<(PieceGeometry, StepResult), String> {
     for tag in ["PointData", "CellData"] {
         if let Some(block) = section(source, tag).map_err(|e| e.to_string())? {
             for tail in block.split("<DataArray").skip(1) {
@@ -159,10 +160,16 @@ fn parse_scene_piece(source: &str) -> Result<(FemMesh, StepResult), String> {
             }
         }
     }
-    crate::vtk_partitions::filter_ghosts(FemMesh::new(nodes, elements), step)
+    crate::vtk_partitions::filter_ghosts(PieceGeometry { nodes, elements }, step)
 }
 
-fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
+#[cfg(test)]
+fn parse_scene_piece(source: &str) -> Result<(fem_core::FemMesh, StepResult), String> {
+    let (geometry, step) = parse_piece_data(source)?;
+    Ok((geometry.into_mesh(), step))
+}
+
+fn read_parts(path: &Path) -> Result<Vec<(PieceGeometry, StepResult)>, String> {
     let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     if path
         .extension()
@@ -197,7 +204,7 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
                 }
                 let text = std::fs::read_to_string(&file)
                     .map_err(|e| format!("{}: {e}", file.display()))?;
-                let (mesh, mut step) = parse_scene_piece(&text).map_err(|e| format!("{s}: {e}"))?;
+                let (mesh, mut step) = parse_piece_data(&text).map_err(|e| format!("{s}: {e}"))?;
                 crate::vtu::apply_wrapper_eigenvalue(wrapper_eigen, &mut step).map_err(|e| format!("{s}: {e}"))?;
                 if let Some(time) = wrapper_time {
                     if vtk_time(&text)?
@@ -211,7 +218,7 @@ fn read_parts(path: &Path) -> Result<Vec<(FemMesh, StepResult)>, String> {
             })
             .collect()
     } else {
-        Ok(vec![parse_scene_piece(&source)?])
+        Ok(vec![parse_piece_data(&source)?])
     }
 }
 
@@ -247,9 +254,9 @@ pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
             let mut model = FemModel::default();
             let mut steps = Vec::with_capacity(parts.len());
             for (i, (mesh, mut step)) in parts.into_iter().enumerate() {
-                // Parsing/ghost filtering already built the final topology.
-                // Generic insertion rebuilds defensively for editable meshes;
-                // this read-only loader can move the validated cache as-is.
+                // Build topology only after ghost filtering and only for the
+                // first frame. Later frames still compare all nodes/elements.
+                let mesh = mesh.into_mesh();
                 model.parts.push(fem_core::Part {
                     name: format!("VTK piece {} (local IDs)", i + 1),
                     mesh_index: i,

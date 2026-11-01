@@ -1,7 +1,20 @@
 //! Keep VTK partitions independent: never weld coincident points or average
 //! values without an explicit ownership mapping.
-use fem_core::{FemMesh, ResultField, StepResult};
+use fem_core::{FemElement, FemMesh, FemNode, ResultField, StepResult};
 use std::collections::{HashMap, HashSet};
+
+/// Parsed geometry before the spatial/topology caches are built. Every frame
+/// is validated/ghost-filtered, but only the first needs a renderable FemMesh.
+pub(crate) struct PieceGeometry {
+    pub nodes: Vec<FemNode>,
+    pub elements: Vec<FemElement>,
+}
+
+impl PieceGeometry {
+    pub fn into_mesh(self) -> FemMesh {
+        FemMesh::new(self.nodes, self.elements)
+    }
+}
 
 fn flags(field: Option<&ResultField>, len: usize, allowed: u8) -> Result<Vec<u8>, String> {
     let Some(field) = field else {
@@ -36,9 +49,9 @@ fn flags(field: Option<&ResultField>, len: usize, allowed: u8) -> Result<Vec<u8>
 }
 
 pub(crate) fn filter_ghosts(
-    mesh: FemMesh,
+    mesh: PieceGeometry,
     mut step: StepResult,
-) -> Result<(FemMesh, StepResult), String> {
+) -> Result<(PieceGeometry, StepResult), String> {
     // VTK vtkDataSetAttributes: point duplicate=1, hidden=2;
     // cell duplicate=1, hidden=32. Other ghost semantics are not guessed.
     // https://vtk.org/doc/nightly/release/9.6/html/classvtkDataSetAttributes.html
@@ -96,13 +109,13 @@ pub(crate) fn filter_ghosts(
         }
     }
     Ok((
-        FemMesh::new(
-            node_indices
+        PieceGeometry {
+            nodes: node_indices
                 .iter()
                 .map(|&i| mesh.nodes[i].clone())
                 .collect(),
             elements,
-        ),
+        },
         step,
     ))
 }
@@ -117,7 +130,7 @@ fn kind(field: &ResultField) -> u8 {
 
 /// Per-frame common ranges prevent the same value having different colors on
 /// different ranks. Only the ranges change; the stored values stay untouched.
-pub(crate) fn validate_and_share_ranges(parts: &mut [(FemMesh, StepResult)]) -> Result<(), String> {
+pub(crate) fn validate_and_share_ranges<T>(parts: &mut [(T, StepResult)]) -> Result<(), String> {
     let first = &parts.first().ok_or("No VTK pieces")?.1;
     let schema: HashSet<_> = first
         .fields
