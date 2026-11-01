@@ -99,6 +99,7 @@ pub(crate) enum SolverProcessEvent {
 
 pub(crate) struct SolverProcessHandle {
     events: Mutex<Receiver<SolverProcessEvent>>,
+    terminal_seen: AtomicBool,
     stop_sender: Sender<()>,
     log_path: PathBuf,
     pub(crate) partition_prefix: Option<String>,
@@ -114,11 +115,51 @@ impl SolverProcessHandle {
             .events
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        receiver.try_iter().take(256).collect()
+        let mut events = Vec::new();
+        for _ in 0..256 {
+            match receiver.try_recv() {
+                Ok(event) => {
+                    if matches!(
+                        event,
+                        SolverProcessEvent::Finished(_)
+                            | SolverProcessEvent::Stopped
+                            | SolverProcessEvent::SpawnFailed(_)
+                    ) {
+                        self.terminal_seen.store(true, Ordering::Relaxed);
+                    }
+                    events.push(event);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    // A worker can end before sending its normal terminal
+                    // event. Unlock the UI once, after draining buffered logs.
+                    if !self.terminal_seen.swap(true, Ordering::Relaxed) {
+                        events.push(SolverProcessEvent::SpawnFailed(
+                            "Solver worker stopped unexpectedly. Review the saved log before retrying."
+                                .into(),
+                        ));
+                    }
+                    break;
+                }
+            }
+        }
+        events
     }
 
     pub(crate) fn request_stop(&self) {
         let _ = self.stop_sender.send(());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(events: Receiver<SolverProcessEvent>) -> Self {
+        let (stop_sender, _) = mpsc::channel();
+        Self {
+            events: Mutex::new(events),
+            terminal_seen: AtomicBool::new(false),
+            stop_sender,
+            log_path: "worker-test.log".into(),
+            partition_prefix: None,
+        }
     }
 }
 
@@ -148,6 +189,7 @@ pub(crate) fn spawn_solver_process(
 
     Ok(SolverProcessHandle {
         events: Mutex::new(event_receiver),
+        terminal_seen: AtomicBool::new(false),
         stop_sender,
         log_path,
         partition_prefix,

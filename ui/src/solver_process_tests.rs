@@ -2,6 +2,9 @@ use super::*;
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "solver_disconnect_tests.rs"]
+mod disconnect_tests;
+
 struct TempProject(PathBuf);
 impl TempProject {
     fn new() -> Self {

@@ -41,6 +41,7 @@ pub(crate) struct FrontistrProjectTarget {
 pub(crate) enum SolverRunPhase {
     Idle,
     Ready,
+    Blocked,
     Running,
     Succeeded,
     Failed,
@@ -52,6 +53,7 @@ impl SolverRunPhase {
         match self {
             Self::Idle => "Idle",
             Self::Ready => "Ready",
+            Self::Blocked => "Blocked",
             Self::Running => "Running",
             Self::Succeeded => "Completed",
             Self::Failed => "Failed",
@@ -240,8 +242,8 @@ impl FrontistrRunState {
         }
     }
 
-    fn report_preflight_error(&mut self, message: impl Into<String>) {
-        self.phase = SolverRunPhase::Failed;
+    fn report_error(&mut self, phase: SolverRunPhase, message: impl Into<String>) {
+        self.phase = phase;
         self.message = message.into();
         self.started_at = None;
         self.elapsed = Duration::ZERO;
@@ -646,7 +648,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                         },
                         TextColor(TEXT_MUTED),
                     ));
-                    for (delta, label) in [(-1, "−"), (1, "+")] {
+                    for (delta, label) in [(-1, "-"), (1, "+")] {
                         if delta > 0 {
                             row.spawn((
                                 Text::new("4"),
@@ -730,7 +732,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                         TextFont { font_size: FontSize::Px(10.5), ..default() },
                         TextColor(TEXT_MAIN), OpenMpThreadText,
                     ));
-                    for (delta, label) in [(-1, "−"), (1, "+")] {
+                    for (delta, label) in [(-1, "-"), (1, "+")] {
                         row.spawn((
                             Button,
                             Node {
@@ -993,7 +995,10 @@ pub(crate) fn run_frontistr_button_system(
         let enabled = !state.is_running();
         if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
             let Some(model) = model.as_deref() else {
-                state.report_preflight_error("No mesh is loaded.");
+                state.report_error(
+                    SolverRunPhase::Blocked,
+                    "Not started: no mesh is loaded.",
+                );
                 continue;
             };
             let stem = crate::run_output::project_stem(
@@ -1005,12 +1010,15 @@ pub(crate) fn run_frontistr_button_system(
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(error) => {
-                    state.report_preflight_error(error);
+                    state.report_error(
+                        SolverRunPhase::Blocked,
+                        format!("Not started: input preparation blocked.\n{error}"),
+                    );
                     continue;
                 }
             }
             if let Err(error) = state.start(version.as_deref().map_or(0, |v| v.value), setup.output.write_res.enabled) {
-                state.report_preflight_error(error);
+                state.report_error(SolverRunPhase::Failed, error);
             }
         }
 

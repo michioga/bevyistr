@@ -4,6 +4,51 @@ use super::*;
 mod solve_results_tests;
 
 #[test]
+fn disconnected_worker_releases_running_state_and_allows_retry_preparation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(SolverProcessEvent::Output(
+        ProcessOutputStream::Stderr,
+        "last diagnostic".into(),
+    ))
+    .unwrap();
+    drop(tx);
+    let mut state = FrontistrRunState::default();
+    state.register_export(dir.path().into(), "model".into());
+    state.phase = SolverRunPhase::Running;
+    state.process = Some(SolverProcessHandle::for_test(rx));
+    state.started_at = Some(Instant::now());
+    state.stop_requested = true;
+    state.results_source = Some(
+        crate::run_results::RunResultSource::capture(dir.path(), "model", 1, 0).unwrap(),
+    );
+    state.poll();
+    assert_eq!(state.phase, SolverRunPhase::Failed);
+    assert!(!state.is_running());
+    assert!(state.process.is_none());
+    assert!(state.started_at.is_none());
+    assert!(!state.stop_requested);
+    assert!(state.completed_results().is_none());
+    assert!(state.message.contains("stopped unexpectedly"));
+    assert!(
+        state.log_lines.iter().any(|line| line.contains("last diagnostic"))
+    );
+    assert!(
+        state
+            .prepare_inputs(
+                &FemModel::demo_hex8(),
+                &AnalysisSetup::default(),
+                "model",
+                |_| panic!("existing output folder should be reused"),
+            )
+            .unwrap()
+    );
+    assert_eq!(state.phase, SolverRunPhase::Ready);
+    assert!(state.results_source.is_none());
+    assert_eq!(state.project().unwrap().directory, dir.path());
+}
+
+#[test]
 fn export_target_controls_ready_state_and_can_be_cleared() {
     let mut state = FrontistrRunState::default();
     assert_eq!(state.phase, SolverRunPhase::Idle);
@@ -149,6 +194,51 @@ fn failed_input_write_does_not_remember_a_new_target() {
     );
     assert!(state.project().is_none());
     assert!(state.last_output_directory().is_none());
+}
+
+#[test]
+fn run_button_reports_blocked_import_without_starting_or_overwriting_inputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("heat.cnt");
+    std::fs::write(&source, "!SOLUTION, TYPE=HEAT\n!END\n").unwrap();
+    let model = FemModel::demo_hex8();
+    let mut setup = AnalysisSetup::default();
+    hecmw::load_cnt_file(&source, &model.meshes[0], 0)
+        .unwrap()
+        .merge_into(&mut setup);
+    let previous_input = dir.path().join("model.cnt");
+    std::fs::write(&previous_input, "original input").unwrap();
+    let mut state = FrontistrRunState::default();
+    state.register_export(dir.path().into(), "model".into());
+    let mut app = App::new();
+    app.insert_resource(state);
+    app.insert_resource(model);
+    app.insert_resource(setup);
+    let button = app.world_mut().spawn((
+        RunFrontistrButton,
+        Interaction::Pressed,
+        BackgroundColor::default(),
+        BorderColor::default(),
+    )).id();
+    app.add_systems(Update, run_frontistr_button_system);
+    app.update();
+    let state = app.world().resource::<FrontistrRunState>();
+    assert_eq!(state.phase, SolverRunPhase::Blocked);
+    assert!(state.status_label().starts_with("Status: Blocked\nNot started:"));
+    assert!(state.message.contains("TYPE=HEAT"));
+    assert!(state.process.is_none());
+    assert!(state.started_at.is_none());
+    assert!(state.completed_results().is_none());
+    assert_eq!(std::fs::read_to_string(previous_input).unwrap(), "original input");
+    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+    app.update();
+    assert_eq!(app.world().get::<BackgroundColor>(button).unwrap().0, RUN_NORMAL);
+
+    // Launch errors and worker failures keep the separate Failed state.
+    app.world_mut().resource_mut::<FrontistrRunState>()
+        .report_error(SolverRunPhase::Failed, "Could not start solver worker");
+    assert!(app.world().resource::<FrontistrRunState>().status_label()
+        .starts_with("Status: Failed\nCould not start solver worker"));
 }
 
 #[test]
