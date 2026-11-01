@@ -67,6 +67,7 @@ mod tests {
             .init_resource::<crate::results_ui::PlaybackState>()
             .init_resource::<crate::solve_results_ui::SolveResultsState>()
             .init_resource::<ResultOpenState>()
+            .init_resource::<crate::result_requests::ResultRequests>()
             .init_resource::<ResultLoadError>()
             .init_resource::<InputFocus>()
             .insert_resource(SidebarPage::Results)

@@ -2,6 +2,7 @@
 use crate::{
     layout::SidebarPage,
     result_loading::{MeshInput, ResultInput, ResultLoadTask},
+    result_requests::{ResultRequestId, ResultRequests},
     results_ui::{OpenResultButton, PlaybackState, ResultLoadError},
     slider::{SliderId, SliderState, SliderTrack},
 };
@@ -13,8 +14,26 @@ use std::path::{Path, PathBuf};
 #[derive(Resource, Default)]
 pub(crate) struct ResultOpenState {
     pending: Option<ResultLoadTask>,
+    request: Option<ResultRequestId>,
     path: PathBuf,
     pub status: String,
+}
+
+impl ResultOpenState {
+    pub(crate) fn begin(
+        &mut self,
+        path: PathBuf,
+        task: ResultLoadTask,
+        requests: &mut ResultRequests,
+    ) {
+        self.request = Some(requests.begin());
+        self.status = format!(
+            "Loading {} ...\nYour editable model is preserved.",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        self.path = path;
+        self.pending = Some(task);
+    }
 }
 
 #[derive(Component)]
@@ -105,7 +124,7 @@ pub(crate) fn open_result_button_system(
     mut state: ResMut<ResultOpenState>,
     mut error: ResMut<ResultLoadError>,
     mut playback: ResMut<PlaybackState>,
-    mut run_results: ResMut<crate::solve_results_ui::SolveResultsState>,
+    mut requests: ResMut<ResultRequests>,
 ) {
     for (entity, interaction, mut background, requested) in &mut buttons {
         *background = BackgroundColor(if state.pending.is_some() {
@@ -152,20 +171,15 @@ pub(crate) fn open_result_button_system(
                 continue;
             }
         };
-        run_results.cancel_pending();
         playback.playing = false;
         error.0 = None;
-        state.path = path.clone();
-        state.status = format!(
-            "Loading {} ...\nYour editable model is preserved.",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        );
-        state.pending = Some(pending);
+        state.begin(path, pending, &mut requests);
     }
 }
 
 pub(crate) fn poll_result_open(
     mut state: ResMut<ResultOpenState>,
+    requests: Res<ResultRequests>,
     mut error: ResMut<ResultLoadError>,
     mut geometry: ResMut<ResultGeometry>,
     mut results: ResMut<FemResultSet>,
@@ -175,6 +189,17 @@ pub(crate) fn poll_result_open(
     mut sliders: Query<&mut SliderState, With<SliderTrack>>,
     mut fit: ResMut<crate::project_io::CameraFitRequest>,
 ) {
+    if state
+        .request
+        .is_some_and(|request| !requests.is_current(request))
+    {
+        state.pending = None;
+        state.request = None;
+        // Discard the old request's status too, so an analysis handoff cannot
+        // retain the previous manual filename in the result description.
+        state.status.clear();
+        return;
+    }
     let Some(task) = &state.pending else {
         return;
     };

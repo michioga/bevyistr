@@ -9,6 +9,9 @@ use crate::{
 use fem_core::{FemModelVersion, FemResultSet, ResultField, StepResult};
 use visualization::VisualizationSettings;
 
+#[path = "result_request_tests.rs"]
+mod request_tests;
+
 #[test]
 fn res_disabled_run_does_not_load_existing_results_or_change_page() {
     let (_dir, mut app, _, _) = fixture(SolverRunPhase::Succeeded);
@@ -47,6 +50,8 @@ fn fixture(phase: SolverRunPhase) -> (tempfile::TempDir, App, Entity, Entity) {
     .init_resource::<FemModelVersion>()
     .init_resource::<fem_core::ResultGeometry>()
     .init_resource::<SolveResultsState>()
+    .init_resource::<crate::result_requests::ResultRequests>()
+    .init_resource::<crate::project_io::CameraFitRequest>()
     .init_resource::<VisualizationSettings>()
     .insert_resource(SidebarPage::Solve)
     .insert_resource(PlaybackState {

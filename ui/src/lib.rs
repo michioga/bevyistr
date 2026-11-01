@@ -17,6 +17,7 @@ mod project_io;
 mod results_ui;
 mod result_open;
 mod result_loading;
+mod result_requests;
 mod result_menu;
 mod result_range_ui;
 mod result_probe_ui;
@@ -201,10 +202,20 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::FemResultSet>();
         app.init_resource::<results_ui::ResultLoadError>();
         app.init_resource::<result_open::ResultOpenState>();
+        app.init_resource::<result_requests::ResultRequests>();
         app.init_resource::<fem_core::ResultGeometry>();
         app.add_systems(Update, (
-            result_open::poll_result_open.after(open_result_button_system),
-            result_open::sync_result_page.after(result_open::poll_result_open).after(sidebar_page_button_system),
+            result_open::poll_result_open
+                .after(open_result_button_system)
+                .after(solve_results_ui::open_run_results_system)
+                .after(playback_button_system)
+                .after(playback_advance_system)
+                .before(apply_slider_to_results)
+                .before(update_result_stats_text),
+            result_open::sync_result_page
+                .after(result_open::poll_result_open)
+                .after(solve_results_ui::poll_run_results_system)
+                .after(sidebar_page_button_system),
         ));
         app.init_resource::<fem_core::AnalysisSetup>();
         app.init_resource::<fem_core::HoverPreviewTargets>();
@@ -340,7 +351,7 @@ impl Plugin for UiPlugin {
                     .after(detect_contacts_button_system)
                     .after(contact_candidate_action_button_system)
                     .after(accept_contact_button_system),
-                open_result_button_system,
+                open_result_button_system.after(solve_results_ui::open_run_results_system),
                 playback_button_system,
                 playback_advance_system,
                 apply_pending_cnt_system.after(mesh_load_system),

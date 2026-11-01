@@ -1,5 +1,19 @@
 use super::*;
 use std::sync::mpsc;
+
+fn queued_state(
+    path: &str,
+    receiver: mpsc::Receiver<crate::result_loading::Loaded>,
+) -> (ResultOpenState, ResultRequests) {
+    let mut requests = ResultRequests::default();
+    let mut state = ResultOpenState::default();
+    state.begin(
+        path.into(),
+        ResultLoadTask::from_receiver(receiver),
+        &mut requests,
+    );
+    (state, requests)
+}
 #[test]
 fn opening_is_transactional_and_model_page_preserves_pre_geometry() {
     for piece_count in [1, 2] {
@@ -34,12 +48,10 @@ fn check_transactional_open(piece_count: usize) {
         scene.steps.push(scene.steps[0].clone());
     }
     tx.send(Ok(scene)).unwrap();
+    let (opening, requests) = queued_state("job.0005.pvtu", rx);
     app.insert_resource(pre.clone())
-        .insert_resource(ResultOpenState {
-            pending: Some(ResultLoadTask::from_receiver(rx)),
-            path: "job.0005.pvtu".into(),
-            status: String::new(),
-        })
+        .insert_resource(opening)
+        .insert_resource(requests)
         .init_resource::<ResultLoadError>()
         .init_resource::<ResultGeometry>()
         .init_resource::<FemResultSet>()
@@ -111,12 +123,10 @@ fn failed_or_empty_readers_keep_display_and_finish_the_loading_status() {
         };
         let (tx, rx) = mpsc::channel();
         let mut app = App::new();
+        let (opening, requests) = queued_state("new.0010.vtu", rx);
         app.insert_resource(pre.clone())
-            .insert_resource(ResultOpenState {
-                pending: Some(ResultLoadTask::from_receiver(rx)),
-                path: "new.0010.vtu".into(),
-                status: "Loading new.0010.vtu ...".into(),
-            })
+            .insert_resource(opening)
+            .insert_resource(requests)
             .init_resource::<ResultLoadError>()
             .insert_resource(ResultGeometry {
                 model: Some(pre.clone()),

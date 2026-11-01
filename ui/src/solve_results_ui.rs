@@ -2,6 +2,7 @@
 //! loading in the background; the Solve button remains available to reopen.
 use crate::{
     layout::SidebarPage,
+    result_requests::{ResultRequestId, ResultRequests},
     results_ui::PlaybackState,
     slider::{SliderId, SliderState, SliderTrack},
     solver_runner::FrontistrRunState,
@@ -16,6 +17,7 @@ use visualization::{ContourSettings, VisualizationSettings};
 
 type Loaded = Result<Vec<Vec<StepResult>>, String>;
 struct Pending {
+    request: ResultRequestId,
     run_id: u64,
     version: u64,
     receiver: Mutex<Receiver<Loaded>>,
@@ -25,6 +27,19 @@ pub(crate) struct SolveResultsState {
     pending: Option<Pending>,
     pub(crate) status: String,
     last_run: Option<u64>,
+}
+
+#[cfg(test)]
+impl SolveResultsState {
+    pub(crate) fn pending_for_test(
+        run_id: u64, version: u64, request: ResultRequestId, receiver: Receiver<Loaded>,
+    ) -> Self {
+        Self {
+            pending: Some(Pending { request, run_id, version, receiver: Mutex::new(receiver) }),
+            status: "Loading this run's results...".into(),
+            last_run: Some(run_id),
+        }
+    }
 }
 #[derive(Component)]
 pub(crate) struct OpenRunResultsButton;
@@ -66,17 +81,12 @@ pub(crate) fn spawn_results_handoff(panel: &mut ChildSpawnerCommands) {
     ));
 }
 
-impl SolveResultsState {
-    pub(crate) fn cancel_pending(&mut self) {
-        self.pending = None;
-    }
-}
-
 fn queue_results_load(
     source: &crate::run_results::RunResultSource,
     model: &FemModel,
     version: u64,
     state: &mut SolveResultsState,
+    requests: &mut ResultRequests,
 ) {
     let offsets = hecmw::assembly_id_offsets(model);
     let parts: Vec<Vec<NodeId>> = model
@@ -96,6 +106,7 @@ fn queue_results_load(
     let run_id = source.id;
     let (tx, rx) = mpsc::channel();
     state.pending = Some(Pending {
+        request: requests.begin(),
         run_id,
         version,
         receiver: Mutex::new(rx),
@@ -111,6 +122,7 @@ pub(crate) fn open_run_results_system(
     model: Option<Res<FemModel>>,
     version: Res<FemModelVersion>,
     mut state: ResMut<SolveResultsState>,
+    mut requests: ResMut<ResultRequests>,
     mut buttons: Query<(Ref<Interaction>, &mut BackgroundColor), With<OpenRunResultsButton>>,
     mut labels: Query<&mut Text, With<RunResultsText>>,
 ) {
@@ -126,7 +138,7 @@ pub(crate) fn open_run_results_system(
     if new_run {
         if let (Some(source), Some(model)) = (source, model.as_deref()) {
             if compatible {
-                queue_results_load(source, model, version.value, &mut state);
+                queue_results_load(source, model, version.value, &mut state, &mut requests);
             }
         }
     }
@@ -134,7 +146,7 @@ pub(crate) fn open_run_results_system(
     for (interaction, mut background) in &mut buttons {
         if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
             if let (Some(model), Some(source)) = (model.as_deref(), source) {
-                queue_results_load(source, model, version.value, &mut state);
+                queue_results_load(source, model, version.value, &mut state, &mut requests);
             }
         }
         background.set_if_neq(BackgroundColor(if enabled {
@@ -162,6 +174,7 @@ pub(crate) fn open_run_results_system(
 }
 
 pub(crate) fn poll_run_results_system(
+    requests: Res<ResultRequests>,
     run: Res<FrontistrRunState>,
     version: Res<FemModelVersion>,
     mut state: ResMut<SolveResultsState>,
@@ -171,10 +184,16 @@ pub(crate) fn poll_run_results_system(
     mut page: ResMut<SidebarPage>,
     mut playback: ResMut<PlaybackState>,
     mut sliders: Query<&mut SliderState, With<SliderTrack>>,
+    mut fit: ResMut<crate::project_io::CameraFitRequest>,
 ) {
     let Some(pending) = state.pending.as_ref() else {
         return;
     };
+    if !requests.is_current(pending.request) {
+        state.pending = None;
+        state.status = "Result loading cancelled: a newer result was requested.".into();
+        return;
+    }
     if version.value != pending.version
         || run.completed_results().map(|s| s.id) != Some(pending.run_id)
     {
@@ -192,7 +211,11 @@ pub(crate) fn poll_run_results_system(
     match loaded {
         Err(error) => state.status = format!("Could not open results: {error}"),
         Ok(by_mesh) => {
-            geometry.model=None;
+            // A manual result may have a different position/scale from the
+            // editable model used by this run. Fit when returning to it.
+            if geometry.model.take().is_some() {
+                fit.request();
+            }
             let steps = by_mesh.first().map_or(0, Vec::len);
             install_results(
                 by_mesh,
