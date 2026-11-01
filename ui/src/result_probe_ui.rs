@@ -1,14 +1,12 @@
 //! Non-mutating, paused-frame result probe. Geometry queries are cached, not
 //! rebuilt for every cursor move, and never reference the hidden pre-model.
+use crate::result_probe_cache::ProbeCache;
 use crate::{layout::SidebarPage, results_ui::PlaybackState};
 use bevy::{picking::Pickable, prelude::*, window::PrimaryWindow};
 use fem_core::{
     FemModel, FemModelVersion, FemResultSet, MainViewportCamera, ResultGeometry, UiPointerState,
 };
-use visualization::{
-    VisualizationSettings,
-    result_probe::{ProbeHit, ProbeSurface},
-};
+use visualization::{VisualizationSettings, result_probe::ProbeHit};
 
 #[derive(Component)]
 enum Overlay {
@@ -17,13 +15,10 @@ enum Overlay {
 }
 #[derive(Component)]
 struct ProbeText;
-#[derive(Default)]
-struct ProbeCache {
-    surfaces: Option<Vec<(usize, ProbeSurface)>>,
-}
 
 pub(crate) fn register(app: &mut App) {
     app.init_resource::<crate::result_probe_pin::ProbePin>()
+        .init_resource::<ProbeCache>()
         .init_resource::<Assets<Image>>()
         .init_resource::<crate::probe_history::HistoryCache>()
         .init_resource::<crate::probe_comparison::Comparison>()
@@ -127,7 +122,7 @@ fn update(
     version: Res<FemModelVersion>,
     results: Res<FemResultSet>,
     settings: Res<VisualizationSettings>,
-    mut cache: Local<ProbeCache>,
+    mut cache: ResMut<ProbeCache>,
     mut overlays: Query<(&Overlay, &mut Node)>,
     mut text: Query<&mut Text, With<ProbeText>>,
     mut pin: ResMut<crate::result_probe_pin::ProbePin>,
@@ -144,14 +139,13 @@ fn update(
     }
     // Invalidate even while playback/UI suppresses querying. Rebuild lazily on
     // the next eligible hover, so playback never constructs a per-frame BVH.
-    if results.is_changed()
-        || settings.is_changed()
-        || geometry.is_changed()
-        || version.is_changed()
-        || model.as_ref().is_some_and(|m| m.is_changed())
-    {
-        cache.surfaces = None;
-    }
+    cache.sync(
+        settings.contour.as_ref(),
+        results.is_changed()
+            || geometry.is_changed()
+            || version.is_changed()
+            || model.as_ref().is_some_and(|m| m.is_changed()),
+    );
     if *page != SidebarPage::Results
         || !geometry.visible
         || playback.playing
@@ -178,21 +172,8 @@ fn update(
     let Some(model) = geometry.model.as_ref().or(model.as_deref()) else {
         return;
     };
-    if cache.surfaces.is_none() {
-        cache.surfaces = Some(
-            model
-                .meshes
-                .iter()
-                .enumerate()
-                .filter_map(|(i, mesh)| {
-                    let step = results.by_mesh.get(i)?.get(contour.step_index)?;
-                    Some((i, ProbeSurface::build(mesh, step, contour)))
-                })
-                .collect(),
-        );
-    }
     let mut best: Option<(usize, ProbeHit)> = None;
-    for (i, surface) in cache.surfaces.as_ref().unwrap() {
+    for (i, surface) in cache.surfaces(model, &results, contour) {
         let Some(step) = results
             .by_mesh
             .get(*i)
@@ -367,6 +348,21 @@ mod tests {
             .single(app.world())
             .unwrap();
         assert!(label.0.contains("4.200000e1"));
+        assert_eq!(app.world().resource::<ProbeCache>().builds, 1);
+        // Idle frames and view-only changes must not rebuild mesh-sized BVHs.
+        app.update();
+        app.world_mut().resource_mut::<VisualizationSettings>().mode =
+            visualization::VisualizationMode::Wireframe;
+        app.update();
+        // Taking a mutable reference alone can mark a resource as changed.
+        app.world_mut()
+            .resource_mut::<VisualizationSettings>()
+            .contour
+            .as_mut()
+            .unwrap()
+            .deformation_scale = 1.0;
+        app.update();
+        assert_eq!(app.world().resource::<ProbeCache>().builds, 1);
         app.world_mut().resource_mut::<PlaybackState>().playing = true;
         app.update();
         assert_eq!(
@@ -438,6 +434,23 @@ mod tests {
         let label = pinned_label(&mut app).unwrap();
         assert!(label.contains("8.400000e1"));
         assert!(label.contains("Step 1 | Time 2.500000e-1"));
+        assert_eq!(app.world().resource::<ProbeCache>().builds, 1);
+        // Frame changes during playback invalidate lazily. Pausing builds once
+        // and samples the new frame rather than retaining the previous data.
+        app.world_mut().resource_mut::<PlaybackState>().playing = false;
+        app.world_mut().resource_mut::<UiPointerState>().over_ui = false;
+        app.update();
+        assert_eq!(app.world().resource::<ProbeCache>().builds, 2);
+        assert_eq!(
+            app.world()
+                .resource::<crate::result_probe_pin::ProbePin>()
+                .hovered
+                .as_ref()
+                .unwrap()
+                .1
+                .value,
+            Some(84.0)
+        );
         app.world_mut()
             .resource_mut::<VisualizationSettings>()
             .contour

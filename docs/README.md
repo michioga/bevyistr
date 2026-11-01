@@ -9,7 +9,9 @@
 - `src/`: 公開する日本語マニュアル。実装済みの操作と、未実装・制限を区別します。
 - `theme/manual.css`: 画像・動画の表示調整。
 - `verification.md`: アプリの手動確認項目。確認記録は対象コミット・データ・環境を添えます。
-- [roadmap-0.3.0.md](roadmap-0.3.0.md): 0.3.0の開発順序・受け入れ条件。未実装の計画であり、利用者向けの機能説明とは区別します。
+- [roadmap-0.4.0.md](roadmap-0.4.0.md): 次版の開発順序・受け入れ条件。利用者向けの対応機能とは区別します。
+- [roadmap-0.3.0.md](roadmap-0.3.0.md): 0.3.0開発当時の履歴。公開結果は[リリース記録](release-0.3.0.md)を参照します。
+- [performance.md](performance.md): 性能計測の範囲・再現コマンド・記録方法。
 - `media-requests.md`: 撮影依頼と素材の受け渡し方法。
 - `media-inbox/`: 未確認素材の受け渡し場所。Git管理・公開対象外です。
 - `book/`: 自動生成されるHTML。Git管理対象外で、直接編集しません。
@@ -65,19 +67,19 @@ Documentation CIは原本とマニュアル用コピーの一致を検査しま�
 
 ## GitHub Pages
 
-公開URLは[bevyistrマニュアル](https://michioga.github.io/bevyistr/)です。2026-10-01、メンテナーが0.3.0向け開発版の公開を確認しました。以降の更新も、pushだけでは公開されません。
+公開URLは[bevyistrマニュアル](https://michioga.github.io/bevyistr/)です。現在は公開済み0.3.0に対応します。pushだけでは公開されません。
 
 `.github/workflows/docs.yml`は、ドキュメント変更のpush／pull requestでHTMLをビルドします。公開は次の手動手順に限定します。
 
-1. 公開する開発ブランチの内容を確認し、コミット・pushします。mainへのマージは不要です。
+1. 公開するmainの内容を確認し、コミット・pushします。開発中の説明を先行公開する場合は対象版と未公開機能を明記します。
 2. GitHubのSettings → Pages → Build and deploymentでSourceを**GitHub Actions**に設定します。
 3. Settings → Environments → `github-pages`にブランチ制限がある場合は、公開するブランチを許可します。既存の保護ルールは一律に解除しません。
-4. Actions → Documentation → Run workflowで**公開するブランチ**を選び、`publish`を有効にして実行します。初回は`feat/eigen-result-metadata`の開発版を対象とします。
-5. deployジョブの成功後に公開ページの「0.3.0向け開発版」表示、目次・画像・検索を確認します。buildだけの成功は公開完了ではありません。
+4. Actions → Documentation → Run workflowで**main**を選び、`publish`を有効にして実行します。現在の`github-pages`環境はmainを許可しています。
+5. deployジョブの成功後に公開ページの対象版、目次・画像・検索を確認します。buildだけの成功は公開完了ではありません。
 
 push／pull request、または`publish`が無効の場合はビルドだけです。公開すると、このURLのマニュアル全体が選択したブランチの内容に置き換わります。ブランチ別サイトは作りません。実行履歴のブランチとコミットSHAで公開元を確認できます。Pagesの設定や環境保護ルールによっては管理者による許可が必要です。手順は[GitHub公式のカスタムPagesワークフロー](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)に基づきます。
 
-開発版には`book.toml`のタイトルと「はじめに」で対象版を明記し、公開済み0.2.0との違いを残します。0.3.0のリリース時に、実際の公開内容と合わせて表示を見直します。
+開発版には`book.toml`のタイトルと「はじめに」で対象版を明記し、公開済み0.3.0との違いを残します。公開版の機能説明に未実装の計画を混ぜません。
 
 `site-url`はプロジェクトサイト用の`/bevyistr/`です。公開先の変更時は`book.toml`も更新してください。[mdBook公式ガイド](https://rust-lang.github.io/mdBook/continuous-integration.html)も参照できます。
 

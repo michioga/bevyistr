@@ -9,7 +9,7 @@ description = "Finite-element mesh and result rendering for bevyistr"
 readme = "README.md"
 keywords = ["fem", "frontistr", "bevy", "visualization"]
 categories = ["science", "visualization"]
-include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+include = ["src/**", "examples/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [lib]
 name = "visualization"

@@ -19,6 +19,7 @@ mod result_open;
 mod result_menu;
 mod result_range_ui;
 mod result_probe_ui;
+mod result_probe_cache;
 mod result_probe_pin;
 mod probe_history;
 mod probe_comparison;
