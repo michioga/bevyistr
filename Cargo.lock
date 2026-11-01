@@ -2099,6 +2099,7 @@ version = "0.3.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
+ "bevyistr-hecmw",
  "bevyistr-interaction",
  "bevyistr-selection",
 ]

@@ -21,7 +21,10 @@ Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数
 ### 読み込んだ設定に未対応項目がある場合（0.3.0）
 
 Open Project／Open Setupで、再出力時に保持できないCNT設定を検出すると、
-画面上部に **Setup incomplete** を表示します。Solveには元ファイル名・行番号・
+画面上部に再出力の制限を表示します（公開版0.3.0では **Setup incomplete**、次版の開発中は
+**CNT re-export blocked**）。これはbevyistrが元の設定を保持して再出力できないという案内です。
+件数は検出したCNT記述の数で、解析エラーや不備の個数ではありません。
+Solveには元ファイル名・行番号・
 キーワードと理由を表示し、Export／Run FrontISTRを停止します。
 これはFrontISTRがその解析に対応していないという意味ではなく、bevyistrの入力編集範囲の制限です。
 
@@ -40,6 +43,11 @@ Open Project／Open Setupで、再出力時に保持できないCNT設定を検�
 新規作成でもDynamicは時間積分等の設定が未完成のためExport／Runを制限します。
 このチェックはCNTの保持可否の検査であり、MSHを含む全仕様・解析モデルの妥当性の保証ではありません。
 出力物理量のOUTPUT_RES／OUTPUT_VISカードは従来どおり未認識項目も保持します。
+
+例として`19_conrod`では、`PRECOND=3`、`GRPID`を省略したBOUNDARY書式、
+FrontISTR側の描画・可視化出力設定が再出力の制限に該当します。
+既存の結果を読むときは、Resultsのコンター・変形・プローブを使用できます。
+この通知だけから元の解析入力の不備や解析失敗を判断しないでください。
 
 ### 実行手順
 

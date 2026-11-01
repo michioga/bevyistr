@@ -1,5 +1,15 @@
 # 困ったとき
 
+## Setup incomplete／CNT re-export blockedが表示される
+
+元CNTにbevyistrが再出力時に保持できない記述があるため、Export／Runを止めています。
+件数は変換できない記述の数です。Solveでファイル名・行番号・理由を確認できます。
+保存済みの結果をOpen Resultsで閲覧することは可能です。
+
+例えば公式例題のconrodでは、前処理の`PRECOND=3`、BOUNDARYの`GRPID`省略書式、
+FrontISTR側の描画・可視化出力設定が該当します。元の解析入力の不備や解析失敗を示す
+件数ではありません。[設定保持の制限](solve/index.md)を確認し、再解析には元入力を保管してください。
+
 ## コンターが単色になる
 
 選択した物理量のMin／MaxとConstant field表示を確認します。一定値なら単色は正常です。例えば流体の初期フレームでは、一部の速度成分や圧力がすべて0の場合があります。[コンター・色範囲](results/contours.md)を参照してください。

@@ -67,3 +67,68 @@ Linuxで規模64を再現する場合も、上のcargoコマンドの末尾を64
 この例ではキャッシュ破棄後の構築コストが通常の照会より大きく、
 表示モード切替だけでBVHを作り直す経路を除く対象として妥当です。
 修正前後のアプリ全体の高速化率、実メッシュの応答性、快適に扱える上限は未計測です。
+
+## 実データの読込・コンター生成（2026-11-01）
+
+`visualization`の手動計測テストを追加しました。ASCII VTU／PVTUの**固定形状のソリッド系列**を
+対象にします。外部データの指定が必要なので通常のテストではスキップします。
+外部ファイルへの書込みやFrontISTRの実行は行いません。
+
+PowerShellでは、リポジトリのルートから次を実行します。パスは手元のデータへ置き換えます。
+
+```powershell
+$env:BEVYISTR_BENCH_RESULT = 'D:\Work\FrontISTR\tutorial\19_conrod\vis_out\conrod_psf.0000.pvtu'
+$env:BEVYISTR_BENCH_FIELD = 'NodalMISES'
+cargo +1.99.1 test -p bevyistr-visualization --release --lib real_result_pipeline_baseline --locked -- --ignored --nocapture
+```
+
+Linuxのシェルでは同じ環境変数をコマンドに渡せます。
+
+```sh
+BEVYISTR_BENCH_RESULT=/path/to/result.0000.pvtu BEVYISTR_BENCH_FIELD=NodalMISES \
+  cargo +1.99.1 test -p bevyistr-visualization --release --lib real_result_pipeline_baseline --locked -- --ignored --nocapture
+```
+
+`BEVYISTR_BENCH_FIELD`を指定しない場合は、最初の節点スカラー、なければ先頭のフィールドを使います。
+指定した物理量がなければエラーにします。通常は実ファイルの物理量名を明示してください。
+計測時は他のコンパイル・重いアプリを並行実行せず、入力ファイルを固定します。
+
+測る範囲は次のとおりです。
+
+- `LOAD`: 指定ファイルから検出した**系列全体**の読込・検証・トポロジー構築・結果モデルの登録。
+  初回の観測値と、その後5回の中央値。OSキャッシュは消していないため、コールドディスク測定ではありません。
+- `FRAME`: 各区画の先頭／最終フレームを対象に、変形OFF／倍率1／倍率5で面・ワイヤー・
+  プローブ探索データを個別に構築します。各5回の中央値で、破棄・GPU転送・描画は含みません。
+  変位のない熱解析では、倍率を指定しても`deformation=false`になります。
+- 面・ワイヤーの頂点数を出し、全ワイヤー頂点がコンター面に存在することを計測の外で検査します。
+  ビームを含む混合モデルではこの前提が成り立たないため、この計測例の対象外です。
+- `SELECTION`: 元形状の境界面BVHへ256本の固定レイを照会する候補取得だけを測ります。
+  三角形との厳密な交差、修飾キー、トポロジー成長、ハイライト等のUI全体の時間ではありません。
+
+### 読み込みの重複処理を削減
+
+conrodの読込がコンター生成より重かったため、VTKの結果モデル登録経路を点検しました。
+VTU解析／ゴースト除去で作成済みのトポロジーを、`FemModel::single_mesh`／`add_mesh`で
+再構築していました。VTKローダー内では検証済みメッシュを直接移し、二重構築を除きました。
+一般の編集可能なメッシュ登録の再構築処理は維持しています。
+後続フレームの形状／接続の照合、区画ローカルID、ゴースト除去、共通色範囲の仕様は維持します。
+
+ソースは`87ed246`からの未コミット変更。環境は上記初回計測と同じWindows・Rust 1.99.1・
+release profileです。実際のコマンドには`--offline`と、プロセス内のTEMP／TMP・PDB無効化を追加しました。
+
+| データ | 区画 | フレーム | 節点／要素（各区画） | 修正前の再読込中央値 ms | 修正後の再読込中央値 ms |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `19_conrod/vis_out/conrod_psf.0000.pvtu` | 1 | 2 | 94,047／56,115 | 855.835 | 673.305 |
+| `01_elastic_hinge/hinge_vis_psf.0000.pvtu` | 1 | 2 | 84,056／49,871 | 未計測 | 549.112 |
+| `16_heat_block/block_vis_psf.0001.pvtu` | 1 | 1 | 37,386／32,160 | 未計測 | 117.514 |
+
+conrodで観測した再読込中央値は約21%減りました。単一環境・一組の比較であり、アプリ全体の
+高速化率ではありません。hinge／heatは修正前を測っていないため、改善率は算出しません。
+修正後のコンター面構築はconrod／hingeで約6～11ms、heatで約4.2～4.3ms、
+ワイヤーは約2.3～5.3msでした。測定のばらつきもあり、FPSへの換算は行いません。
+3例題の面／ワイヤーの座標整合検査に成功しました。
+
+生ログはローカルの`target/conrod-performance-before.txt`、`target/conrod-performance-after.txt`、
+`target/hinge-performance-after.txt`、`target/heat-performance-after.txt`にあります（Git管理対象外）。
+RES読み込み、完全な選択操作、複数区画の実データ、GPU描画、最大メモリは今回未計測です。
+流体例題の再解析は保留を維持しています。

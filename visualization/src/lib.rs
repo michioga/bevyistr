@@ -6,6 +6,8 @@ pub use contour_range::ContourRangeMode;
 pub mod result_probe;
 mod demo_mesh;
 mod material_colors;
+#[cfg(test)]
+mod performance_tests;
 pub use material_colors::{
     INVALID_MATERIAL_COLOR, MaterialColorMode, UNASSIGNED_MATERIAL_COLOR, material_identity_color,
 };

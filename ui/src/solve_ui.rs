@@ -36,9 +36,10 @@ pub(crate) fn spawn_import_warning(parent: &mut ChildSpawnerCommands) {
 
 pub(crate) fn update_import_warning(
     setup: Res<fem_core::AnalysisSetup>,
+    page: Res<SidebarPage>,
     mut query: Query<(&mut Text, &mut Node), With<SetupImportWarningText>>,
 ) {
-    if !setup.is_changed() {
+    if !setup.is_changed() && !page.is_changed() {
         return;
     }
     for (mut text, mut node) in &mut query {
@@ -47,10 +48,21 @@ pub(crate) fn update_import_warning(
         } else {
             Display::Flex
         };
-        **text = format!(
-            "Setup incomplete: {} unsupported setting(s).\nExport / Run blocked. Viewing is available.\nSee Solve for details.",
-            setup.import_issues.len()
-        );
+        let viewing = if *page == SidebarPage::Results {
+            "Saved result viewing is available."
+        } else {
+            "Mesh / result viewing is available."
+        };
+        let details = if *page == SidebarPage::Solve {
+            "Details below."
+        } else {
+            "Details: Solve."
+        };
+        let count = setup.import_issues.len();
+        let entry_label = if count == 1 { "entry" } else { "entries" };
+        text.set_if_neq(Text::new(format!(
+            "CNT re-export blocked: {count} {entry_label}.\nSettings not preserved by bevyistr.\n{viewing}\nExport / Run blocked. {details}"
+        )));
     }
 }
 
@@ -211,11 +223,11 @@ pub(crate) fn update_analysis_setup_stats_text(
         )
     };
     if !setup.import_issues.is_empty() {
-        text.0.push_str("\n\nIMPORTED SETUP INCOMPLETE\nSolver controls show only the supported subset, not the full imported analysis.\n");
+        text.0.push_str("\n\nCNT RE-EXPORT LIMITATION\nbevyistr cannot preserve all imported CNT settings.\nShown solver controls cover only the supported subset.\nEntries below identify conversion limits in this editor.\n");
         for issue in &setup.import_issues {
             text.0.push_str(&format!("\n{issue}\n"));
         }
-        text.0.push_str("\nExport / Run blocked to prevent data loss. Existing results remain viewable. Keep the original input; changing a dropdown does not resolve omitted settings.");
+        text.0.push_str("\nExport / Run blocked to prevent settings loss. Mesh and saved results remain viewable. Keep the original input for external runs; changing a dropdown does not resolve omitted settings.");
     }
 }
 
@@ -226,7 +238,8 @@ mod tests {
     #[test]
     fn import_warning_is_visible_and_details_survive_solver_edits() {
         let mut app = App::new();
-        app.init_resource::<fem_core::AnalysisSetup>();
+        app.init_resource::<fem_core::AnalysisSetup>()
+            .init_resource::<SidebarPage>();
         app.add_systems(
             Update,
             (update_import_warning, update_analysis_setup_stats_text),
@@ -264,6 +277,34 @@ mod tests {
                 .unwrap()
                 .0
                 .contains("heat.cnt:4")
+        );
+        let message = &app.world().get::<Text>(notice).unwrap().0;
+        assert!(message.contains("CNT re-export blocked: 1 entry."));
+        assert!(message.contains("Settings not preserved by bevyistr"));
+        assert!(message.contains("Mesh / result viewing is available"));
+        // Changing pages updates the explanation without clearing blockers or
+        // implying that the loaded result failed.
+        *app.world_mut().resource_mut::<SidebarPage>() = SidebarPage::Results;
+        app.update();
+        let message = &app.world().get::<Text>(notice).unwrap().0;
+        assert!(message.contains("Saved result viewing is available"));
+        assert!(message.contains("Export / Run blocked"));
+        assert!(message.contains("Details: Solve"));
+        *app.world_mut().resource_mut::<SidebarPage>() = SidebarPage::Solve;
+        app.update();
+        assert!(
+            app.world()
+                .get::<Text>(notice)
+                .unwrap()
+                .0
+                .contains("Details below")
+        );
+        assert_eq!(
+            app.world()
+                .resource::<fem_core::AnalysisSetup>()
+                .import_issues
+                .len(),
+            1
         );
         app.world_mut()
             .resource_mut::<fem_core::AnalysisSetup>()

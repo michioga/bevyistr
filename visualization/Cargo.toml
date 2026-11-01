@@ -19,3 +19,6 @@ bevy.workspace = true
 fem_core.workspace = true
 interaction.workspace = true
 selection.workspace = true
+
+[dev-dependencies]
+hecmw.workspace = true

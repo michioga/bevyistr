@@ -244,13 +244,18 @@ pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
                 scene.steps[i].push(step);
             }
         } else {
-            let mut parts = parts.into_iter();
-            let (mesh, mut step) = parts.next().ok_or("No VTK geometry")?;
-            step.step = number;
-            let mut model = FemModel::single_mesh("VTK piece 1 (local IDs)", mesh);
-            let mut steps = vec![vec![step]];
-            for (i, (mesh, mut step)) in parts.enumerate() {
-                model.add_mesh(format!("VTK piece {} (local IDs)", i + 2), mesh);
+            let mut model = FemModel::default();
+            let mut steps = Vec::with_capacity(parts.len());
+            for (i, (mesh, mut step)) in parts.into_iter().enumerate() {
+                // Parsing/ghost filtering already built the final topology.
+                // Generic insertion rebuilds defensively for editable meshes;
+                // this read-only loader can move the validated cache as-is.
+                model.parts.push(fem_core::Part {
+                    name: format!("VTK piece {} (local IDs)", i + 1),
+                    mesh_index: i,
+                    original_node_positions: mesh.nodes.iter().map(|node| node.position).collect(),
+                });
+                model.meshes.push(mesh);
                 step.step = number;
                 steps.push(vec![step]);
             }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 fn main() {
     let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) else {
-        eprintln!("usage: cargo run -p bevyistr-hecmw --example inspect -- <mesh.msh>");
+        eprintln!("usage: cargo run -p bevyistr-hecmw --example inspect -- <mesh.msh> [setup.cnt]");
         std::process::exit(2);
     };
 
@@ -30,4 +30,20 @@ fn main() {
     println!("node_sets: {}", mesh.node_sets.len());
     println!("element_sets: {}", mesh.element_sets.len());
     println!("surface_sets: {}", mesh.surface_sets.len());
+    if let Some(path) = std::env::args_os().nth(2).map(PathBuf::from) {
+        let data = match hecmw::load_cnt_file(&path, &mesh, 0) {
+            Ok(data) => data,
+            Err(error) => {
+                eprintln!("failed to load {}: {error}", path.display());
+                std::process::exit(1);
+            }
+        };
+        println!(
+            "CNT entries not preserved by the editor: {}",
+            data.import_issues.len()
+        );
+        for issue in &data.import_issues {
+            println!("{issue}");
+        }
+    }
 }

@@ -60,6 +60,31 @@ fn scalar(step: &StepResult, name: &str) -> (Vec<f32>, f32, f32) {
 }
 
 #[test]
+fn scene_registration_preserves_piece_topology_and_original_positions() {
+    let f = Fixture::new();
+    f.file("a.vtu", &piece(1.0));
+    f.file("b.vtu", &piece(2.0));
+    let path = f.file("job.pvtu", &wrapper(&["a.vtu", "b.vtu"], 0.0));
+    let scene = load_scene(&path).unwrap();
+    assert_eq!(scene.model.parts.len(), 2);
+    for (i, part) in scene.model.parts.iter().enumerate() {
+        let mesh = &scene.model.meshes[part.mesh_index];
+        assert_eq!(part.mesh_index, i);
+        assert_eq!(part.name, format!("VTK piece {} (local IDs)", i + 1));
+        assert_eq!(part.original_node_positions,
+            mesh.nodes.iter().map(|node| node.position).collect::<Vec<_>>());
+        assert_eq!(mesh.cached_boundary_faces().len(), 4);
+        assert_eq!(mesh.cached_boundary_edges().len(), 6);
+        let (min, max) = mesh.bounds().unwrap();
+        let faces = mesh.boundary_face_indices_in_aabb(fem_core::Aabb { min, max });
+        assert_eq!(faces.len(), 4);
+        let nodes = mesh.node_indices_in_aabb(fem_core::Aabb { min, max });
+        assert_eq!(nodes.len(), 4);
+        assert_eq!(scalar(&scene.steps[i][0], "PRESSURE").0, vec![(i + 1) as f32; 4]);
+    }
+}
+
+#[test]
 fn wrapper_eigenvalues_reach_all_pieces_and_conflicts_are_rejected() {
     let f = Fixture::new();
     f.file("a.vtu", &piece(1.));
