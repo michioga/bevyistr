@@ -97,10 +97,18 @@ impl SelectionState {
         targets: &[FemEntityRef],
         operation: SelectionOperation,
     ) -> bool {
-        operation == SelectionOperation::Remove
-            || (operation == SelectionOperation::Toggle
-                && !targets.is_empty()
-                && targets.iter().all(|target| self.targets.contains(target)))
+        match operation {
+            SelectionOperation::Remove => true,
+            SelectionOperation::Toggle => match targets {
+                [] => false,
+                [target] => self.targets.contains(target),
+                _ => {
+                    let selected: HashSet<_> = self.targets.iter().copied().collect();
+                    targets.iter().all(|target| selected.contains(target))
+                }
+            },
+            _ => false,
+        }
     }
 
     pub fn apply_group(
@@ -115,12 +123,12 @@ impl SelectionState {
             self.clear();
         }
 
+        let mut incoming: HashSet<_> = targets.iter().copied().collect();
+        let mut incoming_highlights: HashSet<_> = highlight_targets.iter().copied().collect();
         if remove {
-            let removed: HashSet<_> = targets.iter().copied().collect();
-            let removed_highlights: HashSet<_> = highlight_targets.iter().copied().collect();
-            self.targets.retain(|target| !removed.contains(target));
+            self.targets.retain(|target| !incoming.contains(target));
             self.highlight_targets.retain(|target| {
-                !removed.contains(target) && !removed_highlights.contains(target)
+                !incoming.contains(target) && !incoming_highlights.contains(target)
             });
             return;
         }
@@ -128,22 +136,28 @@ impl SelectionState {
         // A grown Element group replaces the direct whole-element overlay
         // with boundary Face highlights. This matters when Ctrl+double-click
         // expands an Element that was added by the first click.
-        for target in targets {
-            if !highlight_targets.contains(target) {
-                self.highlight_targets.retain(|highlight| highlight != target);
-            }
+        self.highlight_targets.retain(|highlight| {
+            !incoming.contains(highlight) || incoming_highlights.contains(highlight)
+        });
+        for selected in &self.targets {
+            incoming.remove(selected);
         }
-
-        for &target in targets {
-            if !self.targets.contains(&target) {
-                self.targets.push(target);
-            }
+        for highlight in &self.highlight_targets {
+            incoming_highlights.remove(highlight);
         }
-        for &target in highlight_targets {
-            if !self.highlight_targets.contains(&target) {
-                self.highlight_targets.push(target);
-            }
-        }
+        // Follow the input order while consuming each remaining ID once.
+        self.targets.extend(
+            targets
+                .iter()
+                .copied()
+                .filter(|target| incoming.remove(target)),
+        );
+        self.highlight_targets.extend(
+            highlight_targets
+                .iter()
+                .copied()
+                .filter(|highlight| incoming_highlights.remove(highlight)),
+        );
     }
 }
 
@@ -232,5 +246,24 @@ mod tests {
         selection.apply_group(&[element], &[face], SelectionOperation::Remove);
         assert!(selection.targets.is_empty());
         assert!(selection.highlight_targets.is_empty());
+    }
+
+    #[test]
+    fn batched_selection_keeps_first_occurrence_order_and_distinct_part_ids() {
+        let a = FemEntityRef::face(0, FaceId(10));
+        let b = FemEntityRef::face(0, FaceId(2));
+        let c = FemEntityRef::face(1, FaceId(10));
+        let mut selection = SelectionState::default();
+        selection.apply_group(&[a, b, a], &[b, a, b], SelectionOperation::Replace);
+        assert_eq!(selection.targets, [a, b]);
+        assert_eq!(selection.highlight_targets, [b, a]);
+
+        selection.apply_group(&[c, a, c], &[a, c, c], SelectionOperation::Toggle);
+        assert_eq!(selection.targets, [a, b, c]);
+        assert_eq!(selection.highlight_targets, [b, a, c]);
+
+        selection.apply_group(&[c, a, c], &[a, c, c], SelectionOperation::Toggle);
+        assert_eq!(selection.targets, [b]);
+        assert_eq!(selection.highlight_targets, [b]);
     }
 }

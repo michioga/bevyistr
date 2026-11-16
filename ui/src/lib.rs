@@ -34,6 +34,8 @@ mod widget_test_input;
 mod output_ui;
 mod output_interval;
 mod selection_ui;
+#[cfg(test)]
+mod selection_performance_tests;
 pub mod slider;
 mod solve_ui;
 mod solver_editor;

@@ -166,6 +166,104 @@ RES読み込み、完全な選択操作、複数区画の実データ、GPU描�
 複数区画の形状保持は合成fixtureで検証しました。複数区画の実データの性能、RES、GPU、
 ピークメモリ、GUIでの操作感は今回の比較の対象外です。
 
+## 並列弾性ヒンジのPVTUとメモリ（2026-11-16）
+
+`1bdb9ec`のWindows・Rust 1.99.1・Releaseで、既存の`real_result_pipeline_baseline`を
+`02_elastic_hinge_parallel/hinge_vis_psf.0000.pvtu`に対して実行しました。物理量は`NodalMISES`です。
+Windows NT 10.0.26300.0、論理CPU 16、AMD64 Family 25 Model 97 Stepping 2。
+試験には保存済みファイルを使いました。
+
+| 区画 | 節点 | 要素 | 境界面 |
+| ---: | ---: | ---: | ---: |
+| 1 | 21,943 | 12,726 | 4,960 |
+| 2 | 22,469 | 13,236 | 4,832 |
+| 3 | 21,961 | 12,751 | 4,942 |
+| 4 | 22,168 | 12,924 | 4,936 |
+| 合計 | 88,541 | 51,637 | 19,670 |
+
+節点・要素数は読込後の区画別ローカルIDの合計です。共有境界を含むので、全体の一意ID数とは異なります。
+2フレームの初回読込は618.880 ms、続く5回の中央値は398.458 msでした。
+区画ごとの構築中央値は面1.120～2.241 ms、ワイヤー0.711～1.320 ms、プローブ探索用データ1.240～2.292 msです。
+先頭／末尾、変形なし／倍率1／倍率5の全組合せで、ワイヤー頂点がコンター面に含まれることを確認しました。
+生ログはローカルの`target/hinge-parallel-performance.txt`にあります。
+
+別に、上記テストの実行ファイルだけを例題ごとに新規プロセスで3回起動し、取得できた
+Windowsの`PeakWorkingSet64`の最大を各回で記録しました。これはその時点までにプロセスが使用した
+物理メモリのピークです。最初の結果と、読み直し時の一時データ、面／ワイヤー／プローブの生成と検証も含みます。
+OSキャッシュは消していません。
+
+| PVTU | 区画／フレーム | 再読込中央値の範囲 ms | 観測ピークの中央値 MiB（最小～最大） |
+| --- | ---: | ---: | ---: |
+| `01_elastic_hinge/hinge_vis_psf.0000.pvtu` | 1／2 | 411.019～415.295 | 116.28（116.12～116.40） |
+| `02_elastic_hinge_parallel/hinge_vis_psf.0000.pvtu` | 4／2 | 391.267～393.021 | 101.94（101.93～102.17） |
+
+入力ファイル・区画境界・要素数が異なります。この表から分割自体でメモリや読込時間が減るとは判断できません。
+GPUメモリとGUI全体の常駐メモリは未計測です。
+
+再測定時は上記の手動計測コマンドでビルドした実行ファイルを使います。
+`$env:BEVYISTR_BENCH_RESULT`と`$env:BEVYISTR_BENCH_FIELD`を設定し、`$exe`を
+Cargo出力の`Running unittests`に表示された実行ファイルの絶対パスに置き換えてください。
+
+```powershell
+$proc = Start-Process -FilePath $exe -ArgumentList @(
+    'real_result_pipeline_baseline', '--ignored', '--nocapture'
+) -WindowStyle Hidden -PassThru
+$peak = 0L
+while (!$proc.WaitForExit(20)) {
+    $proc.Refresh()
+    try { $peak = [Math]::Max($peak, $proc.PeakWorkingSet64) }
+    catch [System.InvalidOperationException] { break }
+}
+$proc.WaitForExit()
+if ($proc.ExitCode -ne 0 -or $peak -eq 0) { throw 'Measurement failed' }
+$peak / 1MB
+```
+
+サンプリングしたWindowsのピークカウンターなので、終了間際の更新は取り逃す場合があります。
+Linuxで同じ試験を行う場合はテスト実行ファイルをGNU `time -v`で起動し、
+`Maximum resident set size`を記録できます。OSの異なる値は直接比較しません。
+
+## 実メッシュでの選択操作のCPU計測（2026-11-16）
+
+`real_selection_pipeline_baseline`は、FrontISTRのソリッドMSHを使って、通常のホバー、
+選択プレビュー、クリック確定をBevyのスケジュールで実行します。固定のカメラと
+800×600の仮想ウィンドウを使うため、GPUやOSのウィンドウは不要です。元ファイルは読み取り専用です。
+
+```powershell
+$env:BEVYISTR_BENCH_MESH = 'D:\Work\FrontISTR\tutorial\02_elastic_hinge_parallel\hinge.msh'
+cargo +1.99.1 test -p bevyistr-ui --release --lib real_selection_pipeline_baseline --locked -- --ignored --nocapture
+```
+
+LinuxではMSHパスを変更し、`BEVYISTR_BENCH_MESH=... cargo ...`の形式で実行できます。
+`HOVER`は各選択レベルに対し同じ256座標を走査し、命中と外れを別々に記録します。
+`Face Smooth`の既定角度は15度です。`DOUBLE_CLICK`はFaceの同じ命中位置で、
+二度目のクリックにかかる時間と確定した面数を25回記録します。
+中央値と95パーセンタイルの単位はµsです。命中時に選択レベルとプレビューを検査し、
+ダブルクリックでは毎回同じ面数が選択されることを確かめます。
+
+測るのは最小構成の`App::update`のCPU時間です。選択範囲の描画、GPU転送、ウィンドウ入力の処理、
+ドラッグによる範囲選択、アプリ全体のフレーム時間は未計測です。
+
+`02_elastic_hinge_parallel/hinge.msh`は84,056節点、49,871要素、境界17,866面です。
+計測コードを加えた`1bdb9ec`の実行ファイルを保存し、選択確定の修正前後を同じ入力・Release設定で
+交互に3回ずつ実行しました。表は各実行で得た中央値の範囲です。
+
+| 操作 | 修正前 ms | 修正後 ms |
+| --- | ---: | ---: |
+| Face Singleのホバー（命中195点） | 0.192～0.199 | 0.189～0.197 |
+| Face Smoothのホバー（命中195点） | 10.169～10.839 | 10.337～10.880 |
+| Faceのダブルクリック（17,866面、各25回） | 228.511～232.851 | 11.133～12.193 |
+
+ダブルクリック時、選択とハイライトの一覧を対象ごとに走査して重複を除いていました。
+グループ内のIDをハッシュ集合で照合し、並び順は入力順を使うよう変更しました。
+ダブルクリックの3回分の中央値を比較すると231.680 msから11.312 msとなり、選択面数は全試行で同じでした。
+選択クレート9件とUI229件の通常テストが成功しました。追加テストでは重複した入力、
+既存選択との重複、同じローカルIDを持つ別部品、追加と解除での並び順を確認します。
+
+生ログはローカルの`target/hinge-selection-{before,after}-{1,2,3}.txt`にあります。
+滑らかな面のプレビューは毎回、面法線と共有辺の対応表を組み直しています。
+再利用とモデル編集時の無効化が、次の計測と改善の候補です。
+
 ## ネイティブASCII RESの解析（2026-11-01）
 
 `e237f56`を基準に、`NativeResult`の通常数値の文字列確保と、本文／セクションのコピーを削減しました。
