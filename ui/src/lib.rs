@@ -154,7 +154,7 @@ use solver_runner::{
     openmp_thread_adjust_button_system,
     run_frontistr_button_system, select_frontistr_executable_system,
     solver_launch_mode_button_system, stop_frontistr_button_system, update_frontistr_run_ui_system,
-    update_mpi_rank_controls_system,
+    update_mpi_rank_controls_system, update_mpi_tools,
     update_openmp_thread_controls_system,
 };
 
@@ -513,10 +513,12 @@ impl Plugin for UiPlugin {
             (
                 select_frontistr_executable_system,
                 solver_launch_mode_button_system,
+                update_mpi_tools.after(solver_launch_mode_button_system),
                 mpi_rank_adjust_button_system.after(solver_launch_mode_button_system),
                 openmp_thread_adjust_button_system,
                 run_frontistr_button_system
                     .after(solver_launch_mode_button_system)
+                    .after(update_mpi_tools)
                     .after(mpi_rank_adjust_button_system)
                     .after(openmp_thread_adjust_button_system)
                     .after(select_frontistr_executable_system)

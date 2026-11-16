@@ -553,6 +553,11 @@ fn validate_analysis_setup(
             "maximum iterations must be in 1..=2147483647",
         );
     }
+    if setup.solver.preconditioner_iterations == 0
+        || setup.solver.preconditioner_iterations > i32::MAX as u32
+    {
+        report.error("Linear solver", "iterPREmax must be in 1..=2147483647");
+    }
     if !setup.solver.convergence_tol.is_finite() || setup.solver.convergence_tol <= 0.0 {
         report.error(
             "Linear solver",

@@ -444,6 +444,12 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 {
                     solver.max_iterations = value;
                 }
+                if let Some(value) = rows.first()
+                    .and_then(|row| row.split(',').nth(1))
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                {
+                    solver.preconditioner_iterations = value;
+                }
                 if let Some(value) = rows
                     .get(1)
                     .and_then(|row| row.split(',').next())

@@ -95,7 +95,7 @@ fn unsupported_step_features_and_invalid_values_remain_blocked() {
     let data = parsed("!SOLUTION, TYPE=NLSTATIC\n!BOUNDARY, GRPID=1\n1,1,3,0\n!STEP\n!END");
     assert!(!data.import_issues.is_empty());
     for row in [
-        "100,2\n1e-8,1,0",
+        "100,0\n1e-8,1,0",
         "100,1,30\n1e-8,1,0",
         "100.0,1\n1e-8,1,0",
         "100,1\n1e-8,1.1,0",
@@ -107,6 +107,37 @@ fn unsupported_step_features_and_invalid_values_remain_blocked() {
             .import_issues
             .is_empty()
         );
+    }
+}
+
+#[test]
+fn hinge_solver_options_and_implicit_group_one_survive_export() {
+    let text = concat!(
+        "!SOLUTION, TYPE=STATIC\n!BOUNDARY\n1,1,3,0\n!CLOAD\n2,1,10\n",
+        "!SOLVER,METHOD=CG,PRECOND=1,ITERLOG=YES,TIMELOG=YES\n",
+        "10000,2\n1e-8,1,0\n!END\n",
+    );
+    let data = parsed(text);
+    assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+    let mut setup = AnalysisSetup::default();
+    data.merge_into(&mut setup);
+    assert_eq!(setup.solver.preconditioner_iterations, 2);
+    let output = crate::cnt_writer::build_cnt(&setup, &[]);
+    assert!(output.contains("!BOUNDARY, GRPID=1"));
+    assert!(output.contains("!CLOAD, GRPID=1"));
+    assert!(output.contains("10000, 2"));
+    let reloaded = parsed(&output);
+    assert!(
+        reloaded.import_issues.is_empty(),
+        "{:?}",
+        reloaded.import_issues
+    );
+    assert_eq!(reloaded.solver.unwrap(), setup.solver);
+    for invalid in [
+        text.replace("TIMELOG=YES", "TIMELOG=YES,DUMPTYPE=MM,DUMPEXIT=YES"),
+        text.replace("!CLOAD", "!CLOAD,GRPID=2"),
+    ] {
+        assert!(!parsed(&invalid).import_issues.is_empty());
     }
 }
 

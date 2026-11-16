@@ -164,21 +164,19 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 )
             } else if solver.max_iterations == 0
                 || solver.max_iterations > i32::MAX as u32
+                || solver.preconditioner_iterations == 0
+                || solver.preconditioner_iterations > i32::MAX as u32
                 || !solver.convergence_tol.is_finite()
                 || solver.convergence_tol <= 0.0
             {
                 Some("Linear iterations/tolerance must be valid positive values")
             } else if body.len() != 2
-                || body[0]
-                    .split(',')
-                    .next()
-                    .and_then(|s| s.trim().parse::<u32>().ok())
-                    != Some(solver.max_iterations)
-                || !numbers(body[0], &[solver.max_iterations as f32, 1.0])
+                || !body[0].split(',').map(|field| field.trim().parse::<u32>().ok())
+                    .eq([Some(solver.max_iterations), Some(solver.preconditioner_iterations)])
                 || !numbers(body[1], &[solver.convergence_tol, 1.0, 0.0])
             {
                 Some(
-                    "Only NITER/RESID with iterPREmax=1, SIGMA_DIAG=1 and OMEGA=0 are currently preserved; missing/extra options remain blocked",
+                    "Only NITER, iterPREmax and RESID with SIGMA_DIAG=1 and OMEGA=0 are currently preserved; missing/extra options remain blocked",
                 )
             } else {
                 None
@@ -248,8 +246,8 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "VERSION" if body.len() != 1 || !numbers(body[0], &[3.0]) => {
             Some("Only VERSION 3 is emitted")
         }
-        "BOUNDARY" | "CLOAD" | "DLOAD" if !is("GRPID", "1") => {
-            Some("Only explicit GRPID=1 is preserved for boundary/load groups")
+        "BOUNDARY" | "CLOAD" | "DLOAD" if value("GRPID").is_some_and(|group| group != "1") => {
+            Some("Only GRPID=1 (including the FrontISTR default) is preserved for boundary/load groups")
         }
         "BOUNDARY" | "CLOAD"
             if body.is_empty()

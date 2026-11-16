@@ -204,7 +204,7 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
         s.solver_method.frontistr_method()
     )
     .unwrap();
-    writeln!(o, " {}, 1", s.max_iterations).unwrap();
+    writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
     writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
 
     writeln!(o).unwrap();

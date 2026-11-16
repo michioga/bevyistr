@@ -16,6 +16,10 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+#[path = "mpi_tools_ui.rs"]
+mod mpi_tools_ui;
+pub(crate) use mpi_tools_ui::update_mpi_tools;
+
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
@@ -700,6 +704,8 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                         ));
                     }
                 });
+
+            mpi_tools_ui::spawn(panel);
 
             panel
                 .spawn((

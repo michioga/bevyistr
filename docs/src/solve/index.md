@@ -44,8 +44,9 @@ Solveには元ファイル名・行番号・
 このチェックはCNTの保持可否の検査であり、MSHを含む全仕様・解析モデルの妥当性の保証ではありません。
 出力物理量のOUTPUT_RES／OUTPUT_VISカードは従来どおり未認識項目も保持します。
 
-例として`19_conrod`では、`PRECOND=3`、`GRPID`を省略したBOUNDARY書式、
-FrontISTR側の描画・可視化出力設定が再出力の制限に該当します。
+例として`19_conrod`では、`PRECOND=3`とFrontISTR側の描画・可視化出力設定が再出力の制限に該当します。
+0.4.0向けの開発版では、拘束・荷重で省略した`GRPID`をFrontISTRの既定値1として扱い、
+`!SOLVER`の前処理反復数`iterPREmax`も保持します。
 既存の結果を読むときは、Resultsのコンター・変形・プローブを使用できます。
 この通知だけから元の解析入力の不備や解析失敗を判断しないでください。
 
@@ -57,6 +58,13 @@ FrontISTR側の描画・可視化出力設定が再出力の制限に該当し�
 4. 事前検査と入力ファイル出力後、実行ログをSolve内で確認します。
 
 MPIでは`hecmw_part_ctrl.dat`を生成して`hecmw_part1`で領域分割し、`mpiexec -n N fistr1 -t T`で実行します。Nは領域分割数、TはOpenMPスレッド数で、独立した設定です。
+
+0.4.0向けの開発版では **Solve → FRONTISTR EXECUTION → MPI** に実行ファイルの選択欄が表示されます。
+**Choose hecmw_part1...** と **Choose mpiexec / mpirun...** で指定し、**Auto** で自動検索に戻せます。
+分割ツールは`fistr1`と同じフォルダを先に調べ、その後PATHを検索します。ランチャーはPATHを検索します。
+MPI ranksは新しい`hecmw_part_ctrl.dat`の`DOMAIN`に反映され、分割方式は`NODE-BASED / PMETIS`です。
+出力先フォルダに、分割と実行に必要な制御ファイルを生成します。
+参照 [FrontISTRの並列処理手順](https://source-docs.frontistr.com/execution_guide/procedure/02_parallel.html)
 
 実行ファイルなどのアプリ設定はTOMLに保持します。Windows／Linuxで実行ファイルとMPIランタイムをそれぞれの環境に合わせてください。設定例はリポジトリの`bevyistr.example.toml`を参照してください。
 
