@@ -1,5 +1,40 @@
 # 動作確認チェックリスト
 
+## 0.4.0向け: 解析入力から結果表示まで
+
+- [x] 自動: 4要素・20節点の弾性棒のプロジェクトを読み込み、材料・拘束・荷重付きの入力を書き出してテスト用の子プロセスを実行する。RESの節点IDで変位を対応付け、Resultsの最終フレームと変位コンターを選ぶ。
+- [x] 自動: 実行中にStopを押すと中止ログが残り、直前の結果が保持される。同じ出力先で荷重を2倍にして実行すると変位が0.016から0.032に変わり、古いステップは表示に混ざらない。
+- [x] 実ソルバー: Windowsの通常のPowerShellでDirectを確認（2026-11-16）。初回と荷重を2倍にした再実行で、全20節点の変位が理論値と一致し、最大変位は0.016000／0.032000。最新の最終フレームが自動表示され、旧ステップは除外された。
+- [x] 実ソルバー: Windowsの通常のPowerShellでIntel MPIの2ランクを確認（2026-11-16）。`hecmw_part1`による分割から実行し、Directと同じく全20節点の変位が理論値と一致した。最大変位は初回0.016000、荷重を2倍にした再実行で0.032000。最新結果だけを自動表示した。
+- [ ] 実機操作: ネイティブのファイル選択、画面描画、実ソルバーをStopした後の復帰を確認する。
+
+自動テストの子プロセスは、書き出されたCNTの荷重から期待するRESを生成します。
+Direct／MPIの実ソルバー用テストは別々に起動できるようにしました。
+Windowsの実行環境ではoneAPIの自動初期化がアクセス拒否になり、Intel MPI環境を継承した試行でも
+Directの`fistr1.exe`とMPIの`hecmw_part1.exe`の起動がWindowsエラー623で止まりました。
+メンテナーの通常のPowerShellではFrontISTRが起動し、ヘッダーを出した後に終了コード21363464で終了しました。
+生成された単一メッシュに、HEC-MWが拒否する予約名のグループ宣言
+`!EGROUP,EGRP=ALL`が含まれていたため、組み込みグループを参照する形へ修正しました。
+修正版は、メンテナーの通常のPowerShellでDirectとIntel MPIの2ランクの両テストに合格しました。
+
+FrontISTRが動くPowerShellで、リポジトリのルートから実行します。
+既にPATH上に対応する実行ファイルがあれば、指定は省略できます。
+
+```powershell
+$env:FRONTISTR_EXECUTABLE = Join-Path $env:USERPROFILE 'FrontISTR\bin\fistr1.exe'
+$env:FRONTISTR_PARTITIONER = Join-Path $env:USERPROFILE 'FrontISTR\bin\hecmw_part1.exe'
+$env:FRONTISTR_MPI_LAUNCHER = 'C:\Program Files (x86)\Intel\oneAPI\2026.1\bin\mpiexec.exe'
+cargo test -p bevyistr-ui --lib --locked installed_frontistr_workflow -- --ignored --nocapture --test-threads=1
+```
+
+一方だけを試す場合はフィルターを`installed_frontistr_workflow_direct`または
+`installed_frontistr_workflow_mpi`にします。MPIテストは2ランクを指定して
+`hecmw_part1`による分割から実行するため、手動で分割する必要はありません。
+Linuxでも同じフィルターで起動でき、必要に応じて環境変数の実行ファイルパスを変更します。
+入力・出力はテストが作る一時ディレクトリに置きます。実ソルバーテストが失敗すると出力フォルダを
+残し、`Solver input and full diagnostics retained at ...`でパスを表示します。
+そこから生成したMSH／CNTと、保存されたソルバーログ、FrontISTRが作った診断ファイルを確認できます。
+
 ## 0.4.0向け: タッチパッド操作（2026-11-16）
 
 - [x] 自動: Alt／Spaceによる回転・平行移動・ズームと、左ボタンを離すフレームまでの操作保護を確認する。

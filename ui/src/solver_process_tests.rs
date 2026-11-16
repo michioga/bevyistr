@@ -26,7 +26,7 @@ impl Drop for TempProject {
     }
 }
 
-fn fixture() -> &'static Path {
+pub(crate) fn fixture() -> &'static Path {
     static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let dir = TempProject::new();

@@ -3,6 +3,9 @@ use super::*;
 #[path = "solve_results_tests.rs"]
 mod solve_results_tests;
 
+#[path = "solver_workflow_tests.rs"]
+mod solver_workflow_tests;
+
 #[test]
 fn disconnected_worker_releases_running_state_and_allows_retry_preparation() {
     let dir = tempfile::tempdir().unwrap();

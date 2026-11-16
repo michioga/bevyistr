@@ -13,7 +13,7 @@ use fem_core::{
     RotationCenter, SectionKind,
 };
 
-use crate::msh_writer::{element_type_code, part_group_prefix};
+use crate::msh_writer::{element_type_code, part_group_prefix, validate_single_mesh_all_groups};
 use crate::{
     HecmwCtrlParams, assembly_id_offsets, remap_element, remap_node, write_cnt_file_with_contacts,
     write_hecmw_ctrl, write_msh_assembly_with_setup, write_msh_file_with_setup,
@@ -175,6 +175,11 @@ pub fn validate_frontistr_project(
 
     for (mesh_index, mesh) in model.meshes.iter().enumerate() {
         let location = format!("Mesh[{}]", mesh_index + 1);
+        if model.meshes.len() == 1
+            && let Err(error) = validate_single_mesh_all_groups(mesh)
+        {
+            report.error(&location, error.to_string());
+        }
         if mesh.nodes.is_empty() {
             report.error(&location, "contains no nodes");
         }
@@ -1198,12 +1203,28 @@ mod tests {
         let mesh_text = std::fs::read_to_string(dir.join("solid.msh")).unwrap();
         let control_text = std::fs::read_to_string(dir.join("solid.cnt")).unwrap();
 
-        assert!(mesh_text.contains("!EGROUP,EGRP=ALL"));
+        assert!(!mesh_text.contains("!EGROUP,EGRP=ALL"));
         assert!(mesh_text.contains("!MATERIAL,NAME=STEEL,ITEM=2"));
         assert!(mesh_text.contains("!SECTION,TYPE=SOLID,EGRP=ALL,MATERIAL=STEEL"));
         assert!(control_text.contains("!MATERIAL, NAME=STEEL"));
         assert!(!control_text.contains("!SECTION"));
         assert!(control_text.contains("!output_type=VTK"));
+
+        // Implicit ALL must survive the same import/export sequence used by Run.
+        let (mesh, materials, sections) =
+            crate::load_mesh_file_with_setup(dir.join("solid.msh")).unwrap();
+        assert!(mesh.element_sets.is_empty());
+        assert_eq!(sections[0].element_set_name, None);
+        let mut reloaded = FemModel::single_mesh("solid", mesh);
+        let imported = AnalysisSetup { materials, sections, ..Default::default() };
+        assert!(!validate_frontistr_project(&reloaded, &imported).has_errors());
+        reloaded.meshes[0].element_sets.push(fem_core::FemElementSet {
+            name: "all".into(),
+            elements: vec![],
+        });
+        let report = validate_frontistr_project(&reloaded, &imported);
+        assert!(report.has_errors());
+        assert!(report.summary(10).contains("EGRP ALL is reserved"));
 
         for file in ["hecmw_ctrl.dat", "solid.msh", "solid.cnt"] {
             std::fs::remove_file(dir.join(file)).unwrap();

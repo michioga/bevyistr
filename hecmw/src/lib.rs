@@ -168,7 +168,14 @@ pub fn load_mesh_file_with_setup_and_contacts(
     let path = path.as_ref();
     let source = fs::read_to_string(path)?;
     let mesh = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
-    let (materials, sections) = parse_msh_setup(&source, 0);
+    let (materials, mut sections) = parse_msh_setup(&source, 0);
+    if !mesh.element_sets.iter().any(|group| group.name.eq_ignore_ascii_case("ALL")) {
+        for section in &mut sections {
+            if section.element_set_name.as_deref().is_some_and(|name| name.eq_ignore_ascii_case("ALL")) {
+                section.element_set_name = None;
+            }
+        }
+    }
     let contacts = parse_msh_contact_pairs(&source);
     let equation_source = expand_msh_equation_inputs(&source, path)?;
     let equations = parse_msh_equations(&equation_source, &mesh);

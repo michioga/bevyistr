@@ -57,7 +57,7 @@ fn main() {
             let status = Command::new(&args[2]).args(&args[3..]).status().unwrap();
             std::process::exit(status.code().unwrap_or(1));
         }
-        "fistr1" => {
+        "fistr1" | "bar-solver" => {
             fs::write("solver-called", b"yes").unwrap();
             if Path::new("live-output").exists() {
                 println!("running-before-completion");
@@ -66,6 +66,9 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 eprintln!("diagnostic-at-completion");
+            }
+            if role == "bar-solver" {
+                write_bar_results();
             }
             println!("solver-ok");
         }
@@ -84,5 +87,30 @@ fn main() {
             std::thread::sleep(Duration::from_secs(30));
         }
         _ => panic!("unknown fixture role: {role}"),
+    }
+}
+
+fn write_bar_results() {
+    let cnt = fs::read_to_string("bar.cnt").unwrap();
+    let mut loads = Vec::new();
+    let mut in_load = false;
+    for line in cnt.lines().map(str::trim) {
+        if line.starts_with('!') {
+            in_load = line.starts_with("!CLOAD");
+        } else if in_load && !line.is_empty() {
+            let force: f32 = line.rsplit(',').next().unwrap().trim().parse().unwrap();
+            loads.push(force);
+        }
+    }
+    assert_eq!(loads.len(), 4);
+    for step in 0..=1 {
+        let mut result = fs::File::create(format!("bar.res.0.{step}")).unwrap();
+        writeln!(result, "*fstrresult\n20 0\n1 0\n3\nDISPLACEMENT").unwrap();
+        // Reverse file order to exercise the actual node-ID remapping.
+        for id in (1..=20).rev() {
+            let x = (id - 1) / 4;
+            let ux = loads.iter().sum::<f32>() * x as f32 * step as f32 / 1000.0;
+            writeln!(result, "{id}\n{ux:.8e} 0 0").unwrap();
+        }
     }
 }

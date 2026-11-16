@@ -26,6 +26,7 @@
 //! exported as `TYPE=NODE-SURF` or `TYPE=SURF-SURF` after their referenced
 //! groups. Their interaction law is written to the analysis `.cnt` file.
 
+use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 use std::io;
 use std::path::Path;
@@ -85,11 +86,44 @@ fn write_msh_file_impl(
         .get(mesh_index)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "mesh index out of range"))?;
 
+    validate_single_mesh_all_groups(mesh)?;
     let contacts = resolve_contact_pairs(model, Some(mesh_index), false)?;
     let text = build_msh(mesh, mesh_index, &contacts, setup);
     std::fs::write(path, text.as_bytes())?;
 
     Ok((mesh.nodes.len(), mesh.elements.len()))
+}
+
+pub(crate) fn validate_single_mesh_all_groups(mesh: &FemMesh) -> io::Result<()> {
+    // HEC-MW defines ALL itself. Suppressing a partial legacy declaration
+    // would redirect its references to every node or element.
+    fn whole_group<T: Copy + Eq + std::hash::Hash>(
+        members: &[T],
+        all: impl Iterator<Item = T>,
+    ) -> bool {
+        members.iter().copied().collect::<HashSet<_>>() == all.collect()
+    }
+    for group in &mesh.node_sets {
+        if group.name.eq_ignore_ascii_case("ALL")
+            && !whole_group(&group.nodes, mesh.nodes.iter().map(|node| node.id))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "NGRP ALL is reserved for all nodes. Rename the partial group before export.",
+            ));
+        }
+    }
+    for group in &mesh.element_sets {
+        if group.name.eq_ignore_ascii_case("ALL")
+            && !whole_group(&group.elements, mesh.elements.iter().map(|element| element.id))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "EGRP ALL is reserved for all elements. Rename the partial group before export.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Writes **every** mesh in `model` to `path` as one flattened HECMW
@@ -696,7 +730,7 @@ fn build_msh(
     }
 
     // ── NGROUP ──
-    for nset in &mesh.node_sets {
+    for nset in mesh.node_sets.iter().filter(|set| !set.name.eq_ignore_ascii_case("ALL")) {
         write_id_group(
             &mut out,
             "NGROUP",
@@ -707,7 +741,7 @@ fn build_msh(
     }
 
     // ── EGROUP ──
-    for eset in &mesh.element_sets {
+    for eset in mesh.element_sets.iter().filter(|set| !set.name.eq_ignore_ascii_case("ALL")) {
         write_id_group(
             &mut out,
             "EGROUP",
@@ -716,25 +750,6 @@ fn build_msh(
             eset.elements.iter().map(|e| e.0),
         );
     }
-    if setup.is_some_and(|setup| {
-        setup
-            .sections
-            .iter()
-            .any(|section| section.mesh_index == mesh_index && section.element_set_name.is_none())
-            && !mesh
-                .element_sets
-                .iter()
-                .any(|group| group.name.eq_ignore_ascii_case("ALL"))
-    }) {
-        write_id_group(
-            &mut out,
-            "EGROUP",
-            "EGRP",
-            "ALL",
-            mesh.elements.iter().map(|element| element.id.0),
-        );
-    }
-
     // ── SGROUP (surface groups) ──
     for sset in &mesh.surface_sets {
         writeln!(out, "!SGROUP,SGRP={}", sset.name).unwrap();

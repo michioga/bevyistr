@@ -754,3 +754,6 @@ fn configure_command(_command: &mut Command) {}
 #[cfg(test)]
 #[path = "solver_process_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::fixture as subprocess_fixture;
