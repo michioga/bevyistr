@@ -388,7 +388,7 @@ pub(crate) fn assembly_viewport_hover_system(
     ui_pointer: Res<UiPointerState>,
     mut state: ResMut<AssemblyEditorState>,
 ) {
-    if *tool != ViewportTool::Assembly || ui_pointer.over_ui {
+    if *tool != ViewportTool::Assembly || ui_pointer.blocks_viewport_tools() {
         state.hovered_part = None;
         state.hovered_axis = None;
         return;
@@ -492,7 +492,7 @@ pub(crate) fn assembly_viewport_input_system(
         return;
     };
 
-    if buttons.just_pressed(MouseButton::Left) && !ui_pointer.over_ui {
+    if buttons.just_pressed(MouseButton::Left) && !ui_pointer.blocks_viewport_tools() {
         if let (Some(part_index), Some(axis)) = (state.selected_part, state.hovered_axis) {
             let Some(mesh_index) = model.parts.get(part_index).map(|part| part.mesh_index) else {
                 return;

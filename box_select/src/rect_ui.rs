@@ -58,7 +58,7 @@ pub fn begin_box_select(
 ) {
     if !buttons.just_pressed(MouseButton::Left)
         || result_geometry.as_ref().is_some_and(|g|g.visible && g.model.is_some())
-        || ui_pointer.over_ui
+        || ui_pointer.blocks_viewport_tools()
         || *viewport_tool != ViewportTool::Selection
     {
         return;
@@ -178,7 +178,7 @@ pub fn perform_box_selection(
 ) {
     if !buttons.just_released(MouseButton::Left)
         || result_geometry.as_ref().is_some_and(|g|g.visible && g.model.is_some())
-        || ui_pointer.over_ui
+        || ui_pointer.blocks_viewport_tools()
         || *viewport_tool != ViewportTool::Selection
     {
         return;

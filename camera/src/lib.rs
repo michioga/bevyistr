@@ -20,13 +20,14 @@ impl Plugin for CameraPlugin {
         app.init_resource::<fem_core::UiPointerState>();
         app.init_resource::<fem_core::UiKeyboardState>();
         app.init_resource::<NavigationCubeState>();
+        app.init_resource::<NavigationScheme>();
         app.add_systems(Startup, spawn_navigation_cube);
         app.add_systems(
             Update,
             (
                 orbit_camera_system,
                 focus_selected_system,
-                navigation_cube_input_system,
+                navigation_cube_input_system.after(orbit_camera_system),
                 animate_navigation_cube_view
                     .after(orbit_camera_system)
                     .after(navigation_cube_input_system),

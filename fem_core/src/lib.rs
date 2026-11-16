@@ -94,6 +94,14 @@ impl SelectionFilter {
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct UiPointerState {
     pub over_ui: bool,
+    /// Navigation owns this left-button gesture, including its release frame.
+    pub navigating: bool,
+}
+
+impl UiPointerState {
+    pub fn blocks_viewport_tools(&self) -> bool {
+        self.over_ui || self.navigating
+    }
 }
 
 /// Whether an editable UI text field currently owns keyboard input.

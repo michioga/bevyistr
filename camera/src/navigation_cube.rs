@@ -277,6 +277,7 @@ pub(crate) fn update_navigation_cube_viewport(
 
 pub(crate) fn navigation_cube_input_system(
     buttons: Res<ButtonInput<MouseButton>>,
+    pointer: Res<fem_core::UiPointerState>,
     windows: Query<&Window>,
     hit_areas: Query<&Interaction, With<NavigationCubeHitArea>>,
     nav_camera: Query<(&Camera, &GlobalTransform), With<NavigationCubeCamera>>,
@@ -286,7 +287,7 @@ pub(crate) fn navigation_cube_input_system(
     let pointer_is_over = hit_areas
         .single()
         .is_ok_and(|interaction| *interaction != Interaction::None);
-    if !pointer_is_over {
+    if !pointer_is_over || pointer.navigating {
         state.hovered = None;
         return;
     }
@@ -330,10 +331,11 @@ pub(crate) fn navigation_cube_input_system(
 pub(crate) fn animate_navigation_cube_view(
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
+    pointer: Res<fem_core::UiPointerState>,
     mut state: ResMut<NavigationCubeState>,
     mut main_camera: Query<(&mut Transform, &OrbitCamera), With<MainViewportCamera>>,
 ) {
-    if buttons.pressed(MouseButton::Middle) {
+    if buttons.pressed(MouseButton::Middle) || pointer.navigating {
         state.animation = None;
         return;
     }

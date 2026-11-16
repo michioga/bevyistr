@@ -218,7 +218,7 @@ pub(crate) fn update(
     let allowed = *page == SidebarPage::Results
         && geometry.visible
         && !playback.playing
-        && !pointer.over_ui
+        && !pointer.blocks_viewport_tools()
         && !mouse.pressed(MouseButton::Middle)
         && !mouse.pressed(MouseButton::Right);
     let cursor = windows.single().ok().and_then(|w| w.cursor_position());

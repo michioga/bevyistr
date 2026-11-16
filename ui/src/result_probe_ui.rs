@@ -149,7 +149,7 @@ fn update(
     if *page != SidebarPage::Results
         || !geometry.visible
         || playback.playing
-        || pointer.over_ui
+        || pointer.blocks_viewport_tools()
         || mouse.get_pressed().next().is_some()
     {
         return;

@@ -52,7 +52,7 @@ pub(crate) fn material_assignment_hover(
     mut hover: ResMut<MaterialViewportHover>,
 ) {
     let hit = || -> Option<usize> {
-        if *tool != ViewportTool::MaterialAssignment || pointer.over_ui {
+        if *tool != ViewportTool::MaterialAssignment || pointer.blocks_viewport_tools() {
             return None;
         }
         let cursor = windows.single().ok()?.cursor_position()?;
@@ -87,7 +87,7 @@ pub(crate) fn material_assignment_click(
     }
     if !keyboard.text_editing && keys.just_pressed(KeyCode::Escape) {
         choose_assignment_target(&mut target, None, &mut material, &mut library);
-    } else if !pointer.over_ui && buttons.just_pressed(MouseButton::Left) {
+    } else if !pointer.blocks_viewport_tools() && buttons.just_pressed(MouseButton::Left) {
         let next = hover.0.map(|mesh_index| AssignmentTarget {
             mesh_index,
             group: None,

@@ -2,6 +2,7 @@
 use crate::solver_process::SolverLaunchMode;
 use crate::solver_runner::FrontistrRunState;
 use bevy::prelude::*;
+use camera::NavigationScheme;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, value};
@@ -122,6 +123,8 @@ impl SolverPreferences {
 pub(crate) struct AppSettings {
     path: Option<PathBuf>,
     pub(crate) solver: SolverPreferences,
+    pub(crate) navigation: NavigationScheme,
+    pub(crate) navigation_warning: Option<String>,
     warning: Option<String>,
 }
 
@@ -132,6 +135,8 @@ impl AppSettings {
             Err(error) => Self {
                 path: None,
                 solver: Default::default(),
+                navigation: Default::default(),
+                navigation_warning: Some(error.clone()),
                 warning: Some(error),
             },
         };
@@ -140,17 +145,21 @@ impl AppSettings {
     }
 
     fn load(path: PathBuf) -> Self {
-        match read_document(&path).and_then(|doc| SolverPreferences::read(&doc)) {
-            Ok(solver) => Self {
-                path: Some(path),
-                solver,
-                warning: None,
-            },
-            Err(error) => Self {
-                path: Some(path),
-                solver: Default::default(),
-                warning: Some(error),
-            },
+        let document = read_document(&path);
+        let solver = document
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(SolverPreferences::read);
+        let navigation = document
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(read_navigation);
+        Self {
+            path: Some(path),
+            warning: solver.as_ref().err().cloned(),
+            solver: solver.unwrap_or_default(),
+            navigation_warning: navigation.as_ref().err().cloned(),
+            navigation: navigation.unwrap_or_default(),
         }
     }
 
@@ -238,6 +247,41 @@ fn save_preferences(path: &Path, settings: &SolverPreferences) -> Result<(), Str
     });
     doc["frontistr"]["mpi_ranks"] = value(i64::from(settings.mpi_ranks));
     doc["frontistr"]["openmp_threads"] = value(i64::from(settings.openmp_threads));
+    write_document(path, &doc)
+}
+
+fn read_navigation(doc: &DocumentMut) -> Result<NavigationScheme, String> {
+    let Some(table) = doc.get("navigation") else {
+        return Ok(NavigationScheme::Mouse);
+    };
+    if !table.is_table() {
+        return Err("[navigation] must be a TOML table".into());
+    }
+    match table.get("scheme").map(Item::as_str) {
+        None | Some(Some("mouse")) => Ok(NavigationScheme::Mouse),
+        Some(Some("touchpad_alt")) => Ok(NavigationScheme::TouchpadAlt),
+        Some(Some("touchpad_space")) => Ok(NavigationScheme::TouchpadSpace),
+        _ => Err("Invalid navigation.scheme. Use mouse, touchpad_alt or touchpad_space.".into()),
+    }
+}
+
+fn save_navigation(path: &Path, scheme: NavigationScheme) -> Result<(), String> {
+    let mut doc = read_document(path)?;
+    if doc.get("navigation").is_none() {
+        doc["navigation"] = Item::Table(Default::default());
+    }
+    if !doc["navigation"].is_table() {
+        return Err("[navigation] must be a TOML table".into());
+    }
+    doc["navigation"]["scheme"] = value(match scheme {
+        NavigationScheme::Mouse => "mouse",
+        NavigationScheme::TouchpadAlt => "touchpad_alt",
+        NavigationScheme::TouchpadSpace => "touchpad_space",
+    });
+    write_document(path, &doc)
+}
+
+fn write_document(path: &Path, doc: &DocumentMut) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or("Settings path has no parent directory")?;
@@ -257,10 +301,20 @@ pub(crate) struct AppSettingsText;
 
 pub(crate) fn save_settings_system(
     state: Res<FrontistrRunState>,
+    navigation: Option<Res<NavigationScheme>>,
     mut settings: ResMut<AppSettings>,
 ) {
     if state.is_changed() {
         settings.save_changed(state.preferences());
+    }
+    if let Some(scheme) = navigation.as_deref().copied()
+        && scheme != settings.navigation
+    {
+        settings.navigation = scheme;
+        settings.navigation_warning = match &settings.path {
+            Some(path) => save_navigation(path, scheme).err(),
+            None => Some("No user configuration directory available".into()),
+        };
     }
 }
 
@@ -276,6 +330,63 @@ pub(crate) fn update_settings_text_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_buttons_save_preferences_without_rewriting_solver_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bevyistr.toml");
+        std::fs::write(
+            &path,
+            "[frontistr]\nmpi_ranks = 8\n[navigation]\ncustom = 'keep'\n",
+        )
+        .unwrap();
+        let settings = AppSettings::load(path.clone());
+        assert_eq!(settings.navigation, NavigationScheme::Mouse);
+        let mut app = App::new();
+        app.insert_resource(settings.navigation);
+        app.insert_resource(FrontistrRunState::from_preferences(&settings.solver));
+        app.insert_resource(settings);
+        app.add_systems(Startup, |mut commands: Commands| {
+            commands
+                .spawn(Node::default())
+                .with_children(crate::navigation_ui::spawn);
+        });
+        app.add_systems(
+            Update,
+            (crate::navigation_ui::update, save_settings_system).chain(),
+        );
+        app.update();
+        for (scheme, label) in [
+            (NavigationScheme::TouchpadAlt, "Touchpad (Alt)"),
+            (NavigationScheme::TouchpadSpace, "Touchpad (Space)"),
+            (NavigationScheme::Mouse, "Mouse"),
+        ] {
+            let world = app.world_mut();
+            let button = world
+                .query_filtered::<(Entity, &Children), With<Button>>()
+                .iter(world)
+                .find(|(_, children)| {
+                    children.iter().any(|child| {
+                        world
+                            .get::<Text>(child)
+                            .is_some_and(|text| text.as_str() == label)
+                    })
+                })
+                .unwrap()
+                .0;
+            *world.get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+            app.update();
+            assert_eq!(*app.world().resource::<NavigationScheme>(), scheme);
+            let reloaded = AppSettings::load(path.clone());
+            assert_eq!(reloaded.navigation, scheme);
+            assert_eq!(reloaded.solver.mpi_ranks, 8);
+            assert_eq!(
+                read_document(&path).unwrap()["navigation"]["custom"].as_str(),
+                Some("keep")
+            );
+            *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+        }
+    }
 
     #[test]
     fn save_and_reload_paths_modes_and_output_hint() {

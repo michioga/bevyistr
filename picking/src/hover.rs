@@ -27,7 +27,7 @@ pub fn hover_system(
         return;
     }
 
-    if ui_pointer.over_ui {
+    if ui_pointer.blocks_viewport_tools() {
         clear_hovered(&mut commands, &hovered_query);
         hover_result.clear();
 

@@ -93,7 +93,7 @@ pub fn click_selection_system(
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    if ui_pointer.over_ui {
+    if ui_pointer.blocks_viewport_tools() {
         click_sequence.reset();
         return;
     }

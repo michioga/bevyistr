@@ -255,7 +255,7 @@ pub(crate) fn load_direction_picker_hover_system(
     ui_pointer: Res<UiPointerState>,
     mut state: ResMut<LoadDirectionPickerState>,
 ) {
-    if *tool != ViewportTool::LoadDirection || ui_pointer.over_ui {
+    if *tool != ViewportTool::LoadDirection || ui_pointer.blocks_viewport_tools() {
         state.hovered = None;
         return;
     }
@@ -308,7 +308,7 @@ pub(crate) fn load_direction_picker_input_system(
         state.hovered = None;
         return;
     }
-    if ui_pointer.over_ui || !buttons.just_pressed(MouseButton::Left) {
+    if ui_pointer.blocks_viewport_tools() || !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     let Some(choice) = state.hovered else {

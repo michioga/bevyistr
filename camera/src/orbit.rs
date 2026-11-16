@@ -2,6 +2,24 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use fem_core::{InteractionMode, UiPointerState};
 
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationScheme {
+    #[default]
+    Mouse,
+    TouchpadAlt,
+    TouchpadSpace,
+}
+
+impl NavigationScheme {
+    fn modifier_pressed(self, keyboard: &ButtonInput<KeyCode>) -> bool {
+        match self {
+            Self::Mouse => false,
+            Self::TouchpadAlt => keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
+            Self::TouchpadSpace => keyboard.pressed(KeyCode::Space),
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct OrbitCamera {
     pub focus: Vec3,
@@ -70,8 +88,20 @@ pub fn orbit_camera_system(
     mut wheel_evr: MessageReader<MouseWheel>,
     mut query: Query<(&mut Transform, &mut OrbitCamera)>,
     mut mode: ResMut<InteractionMode>,
-    ui_pointer: Res<UiPointerState>,
+    mut ui_pointer: ResMut<UiPointerState>,
+    scheme: Res<NavigationScheme>,
+    mut emulating_middle: Local<bool>,
 ) {
+    let over_ui = ui_pointer.over_ui;
+    let was_emulating = *emulating_middle;
+    let starts_emulation =
+        buttons.just_pressed(MouseButton::Left) && !over_ui && scheme.modifier_pressed(&keyboard);
+    *emulating_middle = (starts_emulation || was_emulating) && buttons.pressed(MouseButton::Left);
+    let navigating = starts_emulation || was_emulating;
+    if ui_pointer.navigating != navigating {
+        ui_pointer.navigating = navigating;
+    }
+
     let Ok((mut transform, mut orbit)) = query.single_mut() else {
         return;
     };
@@ -82,10 +112,14 @@ pub fn orbit_camera_system(
         rotation_move += ev.delta;
     }
 
-    if !ui_pointer.over_ui && buttons.pressed(MouseButton::Middle) {
-        let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if !over_ui && (buttons.pressed(MouseButton::Middle) || *emulating_middle) {
+        let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
-        if shift {
+        if *emulating_middle && ctrl {
+            let factor = (-rotation_move.y * 0.01).exp();
+            orbit.radius = (orbit.radius * factor).clamp(orbit.min_radius, orbit.max_radius);
+        } else if shift {
             // Pan: slide the focus (and target_focus) along the camera's
             // local right/up plane. Speed is proportional to `radius` so
             // the scene moves at roughly the same rate as the cursor
@@ -97,6 +131,7 @@ pub fn orbit_camera_system(
 
             let delta = -right * rotation_move.x * pan_scale + up * rotation_move.y * pan_scale;
 
+            transform.translation += delta;
             orbit.focus += delta;
             orbit.target_focus += delta;
         } else {
@@ -113,7 +148,7 @@ pub fn orbit_camera_system(
         }
     }
 
-    if !ui_pointer.over_ui && buttons.just_pressed(MouseButton::Right) {
+    if !over_ui && buttons.just_pressed(MouseButton::Right) {
         *mode = InteractionMode::Orbit;
     }
 
@@ -129,7 +164,7 @@ pub fn orbit_camera_system(
     const ZOOM_SPEED: f32 = 0.15;
 
     for ev in wheel_evr.read() {
-        if ui_pointer.over_ui {
+        if over_ui {
             continue;
         }
 
@@ -162,8 +197,10 @@ mod tests {
         app.init_resource::<ButtonInput<MouseButton>>();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.init_resource::<InteractionMode>();
+        app.init_resource::<NavigationScheme>();
         app.insert_resource(UiPointerState {
             over_ui: pointer_over_ui,
+            ..default()
         });
         app.add_message::<MouseMotion>();
         app.add_message::<MouseWheel>();
@@ -197,6 +234,91 @@ mod tests {
                 window,
                 phase: TouchPhase::Moved,
             });
+    }
+
+    fn drag(app: &mut App, delta: Vec2) {
+        app.world_mut()
+            .write_message(MouseMotion { delta })
+            .unwrap();
+        app.update();
+    }
+
+    #[test]
+    fn touchpad_modes_orbit_pan_and_zoom_and_own_the_left_button_release() {
+        for (scheme, key) in [
+            (NavigationScheme::TouchpadAlt, KeyCode::AltLeft),
+            (NavigationScheme::TouchpadSpace, KeyCode::Space),
+        ] {
+            let (mut app, _, camera) = test_app(false);
+            app.insert_resource(scheme);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(MouseButton::Left);
+            drag(&mut app, Vec2::new(30.0, 0.0));
+            assert!(
+                app.world()
+                    .resource::<UiPointerState>()
+                    .blocks_viewport_tools()
+            );
+            let orbit_position = app.world().get::<Transform>(camera).unwrap().translation;
+            assert_ne!(orbit_position, Vec3::Z * 10.0);
+
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .clear_just_pressed(MouseButton::Left);
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(key);
+            keys.press(KeyCode::ShiftLeft);
+            drag(&mut app, Vec2::new(30.0, 0.0));
+            let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+            assert!(orbit.focus.length() > 0.1);
+            let pan_position = app.world().get::<Transform>(camera).unwrap().translation;
+            assert!((pan_position - orbit.focus).abs_diff_eq(orbit_position, 1.0e-5));
+
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::ShiftLeft);
+            keys.press(KeyCode::ControlLeft);
+            drag(&mut app, Vec2::new(0.0, 20.0));
+            assert!(app.world().get::<OrbitCamera>(camera).unwrap().radius < 10.0);
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .release(MouseButton::Left);
+            app.update();
+            assert!(app.world().resource::<UiPointerState>().navigating);
+            app.update();
+            assert!(!app.world().resource::<UiPointerState>().navigating);
+        }
+    }
+
+    #[test]
+    fn mouse_mode_and_ui_origin_do_not_claim_alt_left_drag() {
+        for (scheme, over_ui) in [
+            (NavigationScheme::Mouse, false),
+            (NavigationScheme::TouchpadAlt, true),
+        ] {
+            let (mut app, _, camera) = test_app(over_ui);
+            app.insert_resource(scheme);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::AltLeft);
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(MouseButton::Left);
+            drag(&mut app, Vec2::new(30.0, 0.0));
+            assert!(!app.world().resource::<UiPointerState>().navigating);
+            app.world_mut().resource_mut::<UiPointerState>().over_ui = false;
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .clear_just_pressed(MouseButton::Left);
+            drag(&mut app, Vec2::new(30.0, 0.0));
+            assert_eq!(
+                app.world().get::<Transform>(camera).unwrap().translation,
+                Vec3::Z * 10.0
+            );
+        }
     }
 
     #[test]

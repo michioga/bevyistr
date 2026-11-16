@@ -566,6 +566,7 @@ fn spawn_view_toolbar(parent: &mut ChildSpawnerCommands) {
                     }
                 });
             spawn_material_color_controls(toolbar);
+            crate::navigation_ui::spawn(toolbar);
         });
 }
 
