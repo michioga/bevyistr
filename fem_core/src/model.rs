@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, OnceLock};
 
 use crate::SelectionLevel;
 use crate::spatial::{Aabb, Bvh};
@@ -230,6 +231,7 @@ impl FemMesh {
         mesh
     }
 
+    /// Call after editing node positions or element connectivity.
     pub fn rebuild_topology_cache(&mut self) {
         self.topology = TopologyCache::build(&self.nodes, &self.elements);
     }
@@ -522,6 +524,9 @@ pub struct TopologyCache {
     /// against the boundary surface.
     pub boundary_face_bvh: Bvh,
 
+    /// Built on first Coplanar or Smooth query and discarded on topology rebuild.
+    pub(crate) surface_growth: OnceLock<Arc<crate::planar::SurfaceGrowthTopology>>,
+
     /// Degenerate (point) AABB of each mesh node, in the same order as the
     /// `nodes` slice passed to [`TopologyCache::build`].
     pub node_bounds: Vec<Aabb>,
@@ -611,6 +616,7 @@ impl TopologyCache {
             feature_edge_ids,
             boundary_face_bounds,
             boundary_face_bvh,
+            surface_growth: OnceLock::new(),
             node_bounds,
             node_bvh,
             boundary_edge_bounds,

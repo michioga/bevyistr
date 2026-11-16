@@ -8,7 +8,7 @@
 //! - **Smooth** compares each candidate with its immediate predecessor, so a
 //!   gently faceted curved surface can be followed step by step.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{collections::HashMap, sync::Arc};
 
 use bevy::math::Vec3;
 
@@ -31,12 +31,7 @@ pub fn expand_coplanar_from_face(
     seed_face: FaceId,
     threshold_deg: f32,
 ) -> (Vec<FaceId>, Vec<ElementId>) {
-    expand_faces(
-        mesh,
-        seed_face,
-        threshold_deg,
-        NormalReference::Seed,
-    )
+    expand_faces(mesh, seed_face, threshold_deg, NormalReference::Seed)
 }
 
 /// Selects a connected smooth surface patch.
@@ -48,12 +43,58 @@ pub fn expand_smooth_from_face(
     seed_face: FaceId,
     threshold_deg: f32,
 ) -> (Vec<FaceId>, Vec<ElementId>) {
-    expand_faces(
-        mesh,
-        seed_face,
-        threshold_deg,
-        NormalReference::Predecessor,
-    )
+    expand_faces(mesh, seed_face, threshold_deg, NormalReference::Predecessor)
+}
+
+/// Data shared between successive Coplanar and Smooth queries on a mesh.
+#[derive(Debug)]
+pub(crate) struct SurfaceGrowthTopology {
+    face_indices: HashMap<FaceId, usize>,
+    normals: Vec<Option<Vec3>>,
+    face_edges: Vec<Vec<usize>>,
+    edge_faces: Vec<Vec<usize>>,
+}
+
+impl SurfaceGrowthTopology {
+    fn build(mesh: &FemMesh) -> Self {
+        let faces = mesh.cached_boundary_faces();
+        let mut edge_indices = HashMap::new();
+        let mut edge_faces = Vec::<Vec<usize>>::new();
+        let mut face_edges = Vec::with_capacity(faces.len());
+        let mut normals = Vec::with_capacity(faces.len());
+
+        for (face_index, face) in faces.iter().enumerate() {
+            let points: Vec<_> = face
+                .nodes
+                .iter()
+                .filter_map(|&node| mesh.node_position(node))
+                .collect();
+            normals.push(face_normal(&points));
+
+            let mut edges = Vec::with_capacity(face.nodes.len());
+            for i in 0..face.nodes.len() {
+                let edge = sort_pair(face.nodes[i], face.nodes[(i + 1) % face.nodes.len()]);
+                let index = *edge_indices.entry(edge).or_insert_with(|| {
+                    edge_faces.push(Vec::new());
+                    edge_faces.len() - 1
+                });
+                edge_faces[index].push(face_index);
+                edges.push(index);
+            }
+            face_edges.push(edges);
+        }
+
+        Self {
+            face_indices: faces
+                .iter()
+                .enumerate()
+                .map(|(i, face)| (face.id, i))
+                .collect(),
+            normals,
+            face_edges,
+            edge_faces,
+        }
+    }
 }
 
 fn expand_faces(
@@ -62,109 +103,72 @@ fn expand_faces(
     threshold_deg: f32,
     normal_reference: NormalReference,
 ) -> (Vec<FaceId>, Vec<ElementId>) {
-    if threshold_deg < 0.0 {
+    let faces = mesh.cached_boundary_faces();
+    if threshold_deg < 0.0 || faces.is_empty() {
         return (vec![seed_face], vec![]);
     }
 
     let cos_threshold = threshold_deg.to_radians().cos().abs();
-
-    let faces = mesh.cached_boundary_faces();
-    if faces.is_empty() {
+    let topology = mesh
+        .topology
+        .surface_growth
+        .get_or_init(|| Arc::new(SurfaceGrowthTopology::build(mesh)));
+    let Some(&seed) = topology.face_indices.get(&seed_face) else {
         return (vec![seed_face], vec![]);
-    }
-
-    // ── Build face-lookup and edge→faces adjacency ──────────────────────────
-    let face_by_id: HashMap<FaceId, &_> = faces.iter().map(|f| (f.id, f)).collect();
-
-    // Normals cached per face (unit, or None for degenerate faces)
-    let normals: HashMap<FaceId, Vec3> = faces.iter().filter_map(|f| {
-        let pts: Vec<Vec3> = f.nodes.iter().filter_map(|&n| mesh.node_position(n)).collect();
-        face_normal(&pts).map(|n| (f.id, n))
-    }).collect();
-
-    // Bail out early if the seed itself has no usable normal (degenerate
-    // face) — nothing sensible to compare against.
-    let Some(&seed_normal) = normals.get(&seed_face) else {
+    };
+    let Some(seed_normal) = topology.normals[seed] else {
         return (vec![seed_face], vec![]);
     };
 
-    // Edge (pair of sorted NodeIds) → list of face IDs sharing that edge
-    let mut edge_to_faces: HashMap<(NodeId, NodeId), Vec<FaceId>> = HashMap::new();
-    for face in faces {
-        let nodes = &face.nodes;
-        for i in 0..nodes.len() {
-            let a = nodes[i];
-            let b = nodes[(i + 1) % nodes.len()];
-            let edge = sort_pair(a, b);
-            edge_to_faces.entry(edge).or_default().push(face.id);
-        }
-    }
+    let mut visited = vec![false; faces.len()];
+    let mut selected = vec![seed];
+    visited[seed] = true;
+    let mut next = 0;
 
-    // ── BFS from seed face ──────────────────────────────────────────────────
-    let mut visited: HashSet<FaceId> = HashSet::new();
-    let mut queue: VecDeque<FaceId> = VecDeque::new();
-    visited.insert(seed_face);
-    queue.push_back(seed_face);
+    while let Some(&current) = selected.get(next) {
+        next += 1;
+        let Some(current_normal) = topology.normals[current] else {
+            continue;
+        };
+        let reference_normal = match normal_reference {
+            NormalReference::Seed => seed_normal,
+            NormalReference::Predecessor => current_normal,
+        };
 
-    while let Some(current_id) = queue.pop_front() {
-        let Some(current_face) = face_by_id.get(&current_id) else { continue; };
-        // Every visited face has a normal (guaranteed by the check below,
-        // before it was ever inserted into `visited`), so this always hits.
-        let Some(&current_normal) = normals.get(&current_id) else { continue; };
-
-        // Collect neighbour faces via shared edges
-        let nodes = &current_face.nodes;
-        let mut neighbours: HashSet<FaceId> = HashSet::new();
-        for i in 0..nodes.len() {
-            let edge = sort_pair(nodes[i], nodes[(i + 1) % nodes.len()]);
-            if let Some(sharing) = edge_to_faces.get(&edge) {
-                for &fid in sharing {
-                    if fid != current_id { neighbours.insert(fid); }
+        for &edge in &topology.face_edges[current] {
+            for &neighbour in &topology.edge_faces[edge] {
+                if visited[neighbour] {
+                    continue;
+                }
+                let cos = topology.normals[neighbour]
+                    .map(|normal| reference_normal.dot(normal).abs())
+                    .unwrap_or(0.0);
+                if cos >= cos_threshold {
+                    visited[neighbour] = true;
+                    selected.push(neighbour);
                 }
             }
         }
-
-        for neighbour_id in neighbours {
-            if visited.contains(&neighbour_id) { continue; }
-
-            let reference_normal = match normal_reference {
-                NormalReference::Seed => seed_normal,
-                NormalReference::Predecessor => current_normal,
-            };
-            let cos = normals.get(&neighbour_id)
-                .map(|normal| reference_normal.dot(*normal).abs())
-                .unwrap_or(0.0);
-
-            if cos >= cos_threshold {
-                visited.insert(neighbour_id);
-                queue.push_back(neighbour_id);
-            }
-        }
     }
 
-    // Collect element IDs from the selected faces.
-    let mut face_ids: Vec<FaceId> = visited.into_iter().collect();
+    let mut face_ids: Vec<_> = selected.iter().map(|&i| faces[i].id).collect();
     face_ids.sort_unstable();
-
-    let mut element_ids: Vec<ElementId> = face_ids.iter()
-        .filter_map(|fid| face_by_id.get(fid)?.element)
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    let mut element_ids: Vec<_> = selected.iter().filter_map(|&i| faces[i].element).collect();
     element_ids.sort_unstable();
+    element_ids.dedup();
 
     (face_ids, element_ids)
 }
-
 /// Same as [`expand_coplanar_from_face`] but starts from the first
 /// boundary face that belongs to `seed_element`, useful when the user
 /// is in Element filter mode and clicks an element rather than a face.
 pub fn expand_coplanar_from_element(
-    mesh:          &FemMesh,
-    seed_element:  ElementId,
+    mesh: &FemMesh,
+    seed_element: ElementId,
     threshold_deg: f32,
 ) -> (Vec<FaceId>, Vec<ElementId>) {
-    let seed_face = mesh.cached_boundary_faces()
+    let seed_face = mesh
+        .cached_boundary_faces()
         .iter()
         .find(|f| f.element == Some(seed_element))
         .map(|f| f.id);
@@ -181,7 +185,8 @@ pub fn expand_smooth_from_element(
     seed_element: ElementId,
     threshold_deg: f32,
 ) -> (Vec<FaceId>, Vec<ElementId>) {
-    let seed_face = mesh.cached_boundary_faces()
+    let seed_face = mesh
+        .cached_boundary_faces()
         .iter()
         .find(|face| face.element == Some(seed_element))
         .map(|face| face.id);
@@ -201,7 +206,9 @@ fn sort_pair(a: NodeId, b: NodeId) -> (NodeId, NodeId) {
 /// Newell's method for a polygon normal (handles non-planar polys gracefully).
 /// Returns `None` for degenerate (zero-area) faces.
 fn face_normal(pts: &[Vec3]) -> Option<Vec3> {
-    if pts.len() < 3 { return None; }
+    if pts.len() < 3 {
+        return None;
+    }
     let mut n = Vec3::ZERO;
     for i in 0..pts.len() {
         let a = pts[i];
@@ -270,5 +277,52 @@ mod tests {
         assert_eq!(coplanar_faces.len(), 2);
         assert_eq!(strict_coplanar_faces.len(), 1);
         assert_eq!(smooth_faces.len(), 3);
+    }
+
+    #[test]
+    fn surface_growth_rebuilds_after_geometry_and_connectivity_edits() {
+        let mesh = three_patch_strip();
+        let seed = mesh
+            .cached_boundary_faces()
+            .iter()
+            .find(|face| face.element == Some(ElementId(0)))
+            .unwrap()
+            .id;
+        assert!(mesh.topology.surface_growth.get().is_none());
+        assert_eq!(
+            expand_coplanar_from_face(&mesh, seed, 0.5).1,
+            [ElementId(0)]
+        );
+        let initial_cache = mesh.topology.surface_growth.get().unwrap();
+        assert_eq!(
+            expand_smooth_from_face(&mesh, seed, 12.0).1,
+            [ElementId(0), ElementId(1), ElementId(2)]
+        );
+        assert!(Arc::ptr_eq(
+            initial_cache,
+            mesh.topology.surface_growth.get().unwrap()
+        ));
+
+        let mut edited = mesh.clone();
+        for node in &mut edited.nodes {
+            node.position.z = 0.0;
+        }
+        edited.rebuild_topology_cache();
+        assert!(edited.topology.surface_growth.get().is_none());
+        assert_eq!(
+            expand_coplanar_from_element(&edited, ElementId(0), 0.5).1,
+            [ElementId(0), ElementId(1), ElementId(2)]
+        );
+
+        edited.elements.remove(1);
+        edited.rebuild_topology_cache();
+        assert_eq!(
+            expand_smooth_from_element(&edited, ElementId(0), 12.0).1,
+            [ElementId(0)]
+        );
+        assert_eq!(
+            expand_smooth_from_face(&mesh, seed, 12.0).1,
+            [ElementId(0), ElementId(1), ElementId(2)]
+        );
     }
 }
