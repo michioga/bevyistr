@@ -11,6 +11,7 @@
 - [x] 全11クレートの版番号と内部依存、`Cargo.lock`、README、Windows ZIPのREADME、mdBookの表記を0.4.0にそろえた。 [GitHub Releaseノート案](../distribution/release-notes-0.4.0.md)
 - [x] Windowsで0.4.0候補のライブラリテスト429件が成功した。外部例題・手動計測などの11件は通常実行でスキップ。mdBookのビルドも成功した。
 - [x] 版番号更新後にローカル候補ZIPを再作成した。ZIPのチェックサム、同梱682ファイル、EXEのバージョン情報`0.4.0`を照合し、展開後の起動を短時間確認した。ビルド記録は`source_dirty=true`。候補ZIPのSHA-256は`2c04a23f93f991434924be277708eab6875037e3b4d200bb56aed63f612057a6`。
+- [x] 2026-11-17のRustSec DB `f1ef79c9`で`rustix 1.1.4`の健全性の問題を検出し、`1.1.6`へ更新した。更新後に全プラットフォームの依存解決と`cargo audit --deny unsound`が成功した。脆弱性・unsoundは0件、保守終了の警告は5件。正式候補のZIPとCIは修正を含むコミットから作る。 [RUSTSEC-2026-0486](https://rustsec.org/advisories/RUSTSEC-2026-0486.html)
 
 ## 検証から公開まで
 
