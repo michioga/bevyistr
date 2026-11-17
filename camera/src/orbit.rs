@@ -81,6 +81,15 @@ pub fn orbit_camera_up(direction_from_focus: Vec3) -> Vec3 {
     }
 }
 
+fn orbit_rotation(rotation: Quat, drag: Vec2) -> Quat {
+    const RADIANS_PER_PIXEL: f32 = 0.005;
+
+    // World Y may point into the screen. A horizontal drag must still
+    // turn around screen up so the visible base of a part stays below it.
+    let screen_rotation = Vec3::new(-drag.y, -drag.x, 0.0) * RADIANS_PER_PIXEL;
+    (rotation * Quat::from_scaled_axis(screen_rotation)).normalize()
+}
+
 pub fn orbit_camera_system(
     buttons: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -131,20 +140,10 @@ pub fn orbit_camera_system(
 
             let delta = -right * rotation_move.x * pan_scale + up * rotation_move.y * pan_scale;
 
-            transform.translation += delta;
             orbit.focus += delta;
             orbit.target_focus += delta;
-        } else {
-            // Orbit
-            let yaw = -rotation_move.x * 0.005;
-            let pitch = -rotation_move.y * 0.005;
-
-            let rot = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
-            let offset = transform.translation - orbit.focus;
-            let rotated_offset = rot * offset;
-
-            transform.translation = orbit.focus + rotated_offset;
-            transform.look_at(orbit.focus, orbit_camera_up(rotated_offset));
+        } else if rotation_move != Vec2::ZERO {
+            transform.rotation = orbit_rotation(transform.rotation, rotation_move);
         }
     }
 
@@ -171,19 +170,10 @@ pub fn orbit_camera_system(
         let factor = (1.0 - ev.y * ZOOM_SPEED).max(0.05);
 
         orbit.radius = (orbit.radius * factor).clamp(orbit.min_radius, orbit.max_radius);
-
-        let dir = (transform.translation - orbit.focus).normalize();
-
-        transform.translation = orbit.focus + dir * orbit.radius;
     }
 
     orbit.focus = orbit.focus.lerp(orbit.target_focus, 0.15);
-
-    let dir = (transform.translation - orbit.focus).normalize();
-
-    transform.translation = orbit.focus + dir * orbit.radius;
-
-    transform.look_at(orbit.focus, orbit_camera_up(dir));
+    transform.translation = orbit.focus + transform.rotation * Vec3::Z * orbit.radius;
 }
 
 #[cfg(test)]
@@ -343,5 +333,33 @@ mod tests {
         assert!(orbit_camera_up(Vec3::Y).dot(Vec3::Y).abs() < 1.0e-6);
         assert!(orbit_camera_up(-Vec3::Y).dot(Vec3::Y).abs() < 1.0e-6);
         assert_eq!(orbit_camera_up(Vec3::Z), Vec3::Y);
+    }
+
+    #[test]
+    fn horizontal_drag_from_top_view_faces_the_side_and_preserves_screen_up() {
+        let (mut app, _, camera) = test_app(false);
+        let top_view = Transform::from_translation(Vec3::Y * 10.0).looking_at(Vec3::ZERO, Vec3::Z);
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() = top_view;
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Middle);
+
+        let quarter_turn_pixels = std::f32::consts::FRAC_PI_2 / 0.005;
+        drag(&mut app, Vec2::new(quarter_turn_pixels, 0.0));
+        let turned = app.world().get::<Transform>(camera).unwrap();
+        assert!((turned.rotation * Vec3::Y).abs_diff_eq(Vec3::Z, 1.0e-5));
+        assert!(turned.translation.abs_diff_eq(Vec3::X * 10.0, 1.0e-5));
+    }
+
+    #[test]
+    fn vertical_drag_crosses_world_poles_without_flipping_the_screen() {
+        for sign in [-1.0, 1.0] {
+            let near_pole = orbit_rotation(Quat::IDENTITY, Vec2::new(0.0, sign * 280.0));
+            let past_pole = orbit_rotation(near_pole, Vec2::new(0.0, sign * 70.0));
+            assert!((near_pole * Vec3::Z).z > 0.0);
+            assert!((past_pole * Vec3::Z).z < 0.0);
+            assert!((near_pole * Vec3::Y).dot(past_pole * Vec3::Y) > 0.9);
+            assert!((past_pole * Vec3::X).abs_diff_eq(Vec3::X, 1.0e-5));
+        }
     }
 }

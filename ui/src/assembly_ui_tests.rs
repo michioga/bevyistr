@@ -187,6 +187,89 @@ fn signed_move_buttons_change_only_the_selected_part_along_the_named_axis() {
 }
 
 #[test]
+fn moving_a_part_invalidates_contact_candidates_until_detected_again() {
+    use crate::contact_ui::{
+        ContactDefinitionSettings, accept_contact_button_system, detect_contacts_button_system,
+        spawn_contact_detection_ui, spawn_contact_review_ui,
+    };
+    use fem_core::{ContactSlaveRef, RigidSpiderCandidateState};
+
+    let mut app = assembly_app();
+    app.insert_resource(SidebarPage::Contact)
+        .init_resource::<RigidSpiderCandidateState>()
+        .init_resource::<ContactDefinitionSettings>()
+        .add_systems(
+            Update,
+            (detect_contacts_button_system, accept_contact_button_system).chain(),
+        );
+    app.world_mut()
+        .commands()
+        .spawn(Node::default())
+        .with_children(|parent| {
+            spawn_contact_detection_ui(parent);
+            spawn_contact_review_ui(parent);
+        });
+    app.world_mut().flush();
+    // The two Hex8 parts have width 2 along X. Leave a gap of 0.02.
+    assert!(
+        app.world_mut()
+            .resource_mut::<FemModel>()
+            .translate_part(1, Vec3::X * -3.98)
+    );
+    let mut sliders = app.world_mut().query::<&mut SliderState>();
+    for mut slider in sliders.iter_mut(app.world_mut()) {
+        if slider.id == SliderId::AssemblyMovePercent {
+            slider.value = 5.0;
+        }
+    }
+
+    press(&mut app, "AssemblyTool_Move");
+    press(&mut app, "DetectContactsButton");
+    let state = app.world().resource::<ContactCandidateState>();
+    assert_eq!(state.candidates.len(), 1);
+    let initial = state.selected_candidate().unwrap().clone();
+    assert!((initial.average_gap - 0.02).abs() < 1.0e-5);
+
+    press(&mut app, "AssemblyStep_-X");
+    let state = app.world().resource::<ContactCandidateState>();
+    assert!(state.selected_candidate().is_none());
+    assert!(state.candidates.is_empty());
+    press(&mut app, "AcceptContactButton");
+    assert!(app.world().resource::<FemModel>().contacts.is_empty());
+    press(&mut app, "DetectContactsButton");
+    assert!(
+        app.world()
+            .resource::<ContactCandidateState>()
+            .candidates
+            .is_empty()
+    );
+
+    press(&mut app, "AssemblyStep_+X");
+    press(&mut app, "DetectContactsButton");
+    let state = app.world().resource::<ContactCandidateState>();
+    assert_eq!(state.candidates.len(), 1);
+    let candidate = state.selected_candidate().unwrap();
+    assert_eq!(candidate.faces_a, initial.faces_a);
+    assert_eq!(candidate.faces_b, initial.faces_b);
+    assert!((candidate.average_gap - initial.average_gap).abs() < 1.0e-5);
+    press(&mut app, "AcceptContactButton");
+    let model = app.world().resource::<FemModel>();
+    assert_eq!(model.contacts.len(), 1);
+    let pair = &model.contacts[0];
+    assert_eq!(pair.master.mesh_index, initial.mesh_a);
+    assert!(
+        matches!(pair.slave, ContactSlaveRef::Surface(side) if side.mesh_index == initial.mesh_b)
+    );
+    press(&mut app, "DetectContactsButton");
+    assert!(
+        app.world()
+            .resource::<ContactCandidateState>()
+            .candidates
+            .is_empty()
+    );
+}
+
+#[test]
 fn signed_rotation_buttons_follow_the_right_hand_rule_about_part_center() {
     for (axis, label) in [Vec3::X, Vec3::Y, Vec3::Z]
         .into_iter()

@@ -27,7 +27,7 @@ fstrRES/STEP1/conrod.res.0.1
 
 FrontISTRのピースVTUを直接選んだ場合は、そのファイルを参照するPVTUが見つかればPVTUの系列を使用します。MPIランク番号は時系列の番号として扱いません。
 
-## 固有値解析（開発版・0.3.0向け）
+## 固有値解析
 
 RESのグローバルデータ／VTU・PVTUの`FieldData`に`EIGENVALUE`がある場合は、
 **Timeの代わりにModeとEigenvalue**を表示します。Frameは読み込み順、Modeは元の出力番号です。

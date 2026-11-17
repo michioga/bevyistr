@@ -8,6 +8,10 @@
 
 MSHだけを開くことと、解析設定を含むプロジェクトを開くことは異なります。既存チュートリアルの設定も確認したい場合はOpen Projectを使用します。
 
+FrontISTRの`hecmw_ctrl.dat`は、メッシュと解析制御データの入力先、結果の出力先を指定します。MPIでは`part_in`が分割前のメッシュ、`part_out`が分割時の出力先、`fstrMSH`がソルバーの入力です。`HECMW-DIST`の指定にはランク番号を除いたファイル名を使います。 [全体制御データの例](https://source-docs.frontistr.com/execution_guide/procedure/02_parallel.html) · [メッシュの指定 `!MESH`](https://source-docs.frontistr.com/keyword_reference/dat/mesh.html)
+
+HEC-MWの`.msh`は、節点・要素の接続、節点／要素／面グループ、材料・断面などを定義します。接触ペアと多点拘束の書式も、公式サイトの「キーワード → メッシュデータ (msh)」で確認できます。 [FrontISTR公式ドキュメント](https://source-docs.frontistr.com/index.html) · [要素 `!ELEMENT`](https://source-docs.frontistr.com/keyword_reference/msh/element.html) · [接触ペア `!CONTACT PAIR`](https://source-docs.frontistr.com/keyword_reference/msh/contactpair.html) · [多点拘束 `!EQUATION`](https://source-docs.frontistr.com/keyword_reference/msh/equation.html)
+
 ## 部品を配置する
 
 1. PART POSITIONで対象部品を選びます。

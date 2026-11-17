@@ -6,9 +6,9 @@ A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
-This source tree targets **0.3.0**. See the [release notes](docs/src/release-notes.md),
+This source tree targets **0.4.0**. See the [release notes](docs/src/release-notes.md),
 [crates.io packages](https://crates.io/crates/bevyistr), and
-[release checklist](docs/release-0.3.0.md).
+[release checklist](docs/release-0.4.0.md).
 See the [release record and maintainer procedures](docs/releasing.md) for verification
 results and the exact source commit.
 
@@ -20,8 +20,10 @@ bevyistr is under active development. It can currently assemble meshes, author a
 
 ## Install from crates.io
 
+Once 0.4.0 is available on crates.io, install it with:
+
 ```sh
-cargo install bevyistr --version 0.3.0 --locked
+cargo install bevyistr --version 0.4.0 --locked
 bevyistr
 ```
 
@@ -35,9 +37,11 @@ icon and default material library are embedded.
 
 The [Japanese user manual](docs/src/introduction.md) is organized as an mdBook; see its [table of contents](docs/src/SUMMARY.md). It covers viewport operation, setup, execution, and result viewing, with current limitations kept explicit.
 
-Read the manual on [GitHub Pages](https://michioga.github.io/bevyistr/). It documents the **0.3.0** feature set. Build locally with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Authoring and GitHub Pages instructions](docs/README.md) and [requested screenshots/videos](docs/media-requests.md) are maintained separately. Pages deployment is manual from the selected branch; pushing changes alone does not publish the site.
+Read the manual for the published version on GitHub Pages. Build the manual for this source tree with `mdbook build docs`, or preview with `mdbook serve docs --open` (mdBook 0.5.4). [Published manual](https://michioga.github.io/bevyistr/) · [Authoring instructions](docs/README.md) · [Media requests](docs/media-requests.md)
 
 ## Current capabilities
+
+**0.4.0** improves loading of VTU/PVTU and native RES, speeds up large selection groups, and adds screen-axis orbit and configurable touchpad navigation. Solve can set the MPI partitioner and launcher paths separately. [Release notes](docs/src/release-notes.md)
 
 **0.3.0** adds **Export pinned history CSV...** below the pinned probe's
 history plot. It saves all loaded frames of the selected part-local node/element

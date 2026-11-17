@@ -902,8 +902,8 @@ fn prefix_rotation_center_group(center: Option<&mut RotationCenter>, model: &Fem
 mod tests {
     use fem_core::{
         BoundaryCondition, ContactPair, ContactType, DistributedLoad, DistributedLoadKind,
-        DistributedLoadTarget, ElementFaceRef, ElementId, FemMesh, FemSurfaceSet, LocalFaceId,
-        MpcEquation, MpcTerm, NodalLoad, NodeId, SectionKind, SurfaceSetRef,
+        DistributedLoadTarget, ElementFaceRef, ElementId, FemSurfaceSet, LocalFaceId, MpcEquation,
+        MpcTerm, NodalLoad, NodeId, SectionKind, SurfaceSetRef,
     };
 
     use super::*;
@@ -1150,21 +1150,44 @@ mod tests {
     }
 
     #[test]
-    fn assembly_export_offsets_mpc_nodes_exactly_once() {
+    fn assembly_export_round_trips_groups_contact_and_mpc() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "bevyistr_frontistr_mpc_{}_{}",
+            "bevyistr_frontistr_assembly_{}_{}",
             std::process::id(),
             unique
         ));
         std::fs::create_dir(&dir).unwrap();
 
-        let mut model = FemModel::demo_hex8();
-        model.add_mesh("SECOND", FemMesh::demo_hex8());
+        let mesh = crate::parse_mesh_str(concat!(
+            "!NODE\n1,0,0,0\n2,1,0,0\n3,0,1,0\n4,0,0,1\n",
+            "!ELEMENT,TYPE=341\n1,1,2,3,4\n",
+            "!NGROUP,NGRP=FIX\n1\n!EGROUP,EGRP=BODY\n1\n!SGROUP,SGRP=SIDE\n1,1\n"
+        ))
+        .unwrap();
+        let mut model = FemModel::single_mesh("FIRST", mesh.clone());
+        model.add_mesh("SECOND", mesh);
+        model.contacts.push(ContactPair::new(
+            "PAIR",
+            SurfaceSetRef::new(0, 0),
+            SurfaceSetRef::new(1, 0),
+            ContactType::Tied,
+        ));
         let mut setup = AnalysisSetup::default();
+        setup.solver.analysis_type = AnalysisType::NlStatic;
+        setup.boundary_conditions.push(BoundaryCondition {
+            name: "fixed".into(),
+            mesh_index: 1,
+            nodes: vec![NodeId(1)],
+            ngrp_name: Some("FIX".into()),
+            rotation_center: None,
+            dof_start: 1,
+            dof_end: 3,
+            value: 0.0,
+        });
         setup.mpc_equations.push(MpcEquation::new(
             "PART_LINK",
             0.0,
@@ -1174,13 +1197,56 @@ mod tests {
             ],
         ));
 
-        let summary = write_frontistr_project(&dir, "mpc", &model, &setup).unwrap();
-        let mesh_text = std::fs::read_to_string(dir.join("mpc.msh")).unwrap();
-
+        let summary = write_frontistr_project(&dir, "assembly", &model, &setup).unwrap();
+        assert_eq!(summary.contact_count, 1);
         assert_eq!(summary.mpc_equation_count, 1);
-        assert!(mesh_text.contains(" 1,1,1.000000000e0,9,1,-1.000000000e0"));
+        let (mesh, _, _, contacts, equations) =
+            crate::load_mesh_file_with_setup_and_contacts(dir.join("assembly.msh")).unwrap();
+        let control = crate::load_cnt_file(dir.join("assembly.cnt"), &mesh, 0).unwrap();
 
-        for file in ["hecmw_ctrl.dat", "mpc.msh", "mpc.cnt"] {
+        assert_eq!((mesh.nodes.len(), mesh.elements.len()), (8, 2));
+        for (index, prefix, node, element) in [
+            (0, "FIRST", NodeId(1), ElementId(1)),
+            (1, "SECOND", NodeId(6), ElementId(3)),
+        ] {
+            let nodes = &mesh.node_sets[index];
+            assert_eq!(nodes.name, format!("{prefix}_FIX"));
+            assert_eq!(nodes.nodes, [node]);
+            let elements = &mesh.element_sets[index];
+            assert_eq!(elements.name, format!("{prefix}_BODY"));
+            assert_eq!(elements.elements, [element]);
+            let faces = &mesh.surface_sets[index];
+            assert_eq!(faces.name, format!("{prefix}_SIDE"));
+            assert_eq!(
+                faces.surfaces,
+                [ElementFaceRef::new(element, LocalFaceId(1))]
+            );
+        }
+
+        assert_eq!(control.boundary_conditions.len(), 1);
+        let fixed = &control.boundary_conditions[0];
+        assert_eq!(fixed.ngrp_name.as_deref(), Some("SECOND_FIX"));
+        assert_eq!(fixed.nodes, [NodeId(6)]);
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(
+            contacts[0].pair_type,
+            crate::HecmwContactPairType::SurfaceSurface
+        );
+        assert_eq!(contacts[0].slave_group_name, "SECOND_SIDE");
+        assert_eq!(contacts[0].master_surface_name, "FIRST_SIDE");
+        assert_eq!(control.contact_settings.len(), 1);
+        assert_eq!(control.contact_settings[0].pair_name, contacts[0].name);
+        assert_eq!(control.contact_settings[0].contact_type, ContactType::Tied);
+        assert_eq!(equations.len(), 1);
+        assert_eq!(
+            equations[0].terms,
+            [
+                MpcTerm::new(0, NodeId(1), 1, 1.0),
+                MpcTerm::new(0, NodeId(6), 1, -1.0)
+            ]
+        );
+
+        for file in ["hecmw_ctrl.dat", "assembly.msh", "assembly.cnt"] {
             std::fs::remove_file(dir.join(file)).unwrap();
         }
         std::fs::remove_dir(dir).unwrap();
@@ -1221,12 +1287,18 @@ mod tests {
         assert!(mesh.element_sets.is_empty());
         assert_eq!(sections[0].element_set_name, None);
         let mut reloaded = FemModel::single_mesh("solid", mesh);
-        let imported = AnalysisSetup { materials, sections, ..Default::default() };
+        let imported = AnalysisSetup {
+            materials,
+            sections,
+            ..Default::default()
+        };
         assert!(!validate_frontistr_project(&reloaded, &imported).has_errors());
-        reloaded.meshes[0].element_sets.push(fem_core::FemElementSet {
-            name: "all".into(),
-            elements: vec![],
-        });
+        reloaded.meshes[0]
+            .element_sets
+            .push(fem_core::FemElementSet {
+                name: "all".into(),
+                elements: vec![],
+            });
         let report = validate_frontistr_project(&reloaded, &imported);
         assert!(report.has_errors());
         assert!(report.summary(10).contains("EGRP ALL is reserved"));

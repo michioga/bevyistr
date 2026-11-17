@@ -342,3 +342,32 @@ Windows／CPU／Rust 1.99.1・release profileは前節と同じです。
 
 これらは特定入力・単一環境でのCPU計測です。アプリ全体の高速化率、GPU描画、ピークメモリ、
 実機MPIの速度、GUIでの操作感の測定ではありません。
+
+## 4ランクのネイティブRES統合（2026-11-17）
+
+保存済みの`02_elastic_hinge_parallel`を使います。`hinge.msh`、`hinge_4.0`～`hinge_4.3`、
+Step 0／1の`hinge.res.<rank>.<step>`が必要です。テストはSolveが使う実行結果ローダーで、
+各ランクの所有IDを取り出し、重複境界を除いて統合した後、元メッシュのID順に結果を配置します。
+最終フレームの時刻と全節点の変位が有限であることを検査します。例題は読み取り専用です。
+
+```powershell
+$env:BEVYISTR_TUTORIAL_DIR = 'D:\Work\FrontISTR\tutorial'
+cargo +1.99.1 test -p bevyistr-ui --release --lib --locked real_mpi_res_baseline -- --ignored --nocapture
+```
+
+`first_ms`は初回、`repeat_median_ms`は続く5回の中央値です。所有ID読込、RESのファイルI/O・解析、
+統合、配列化、ファイル変更検査を含みます。MSHの読込とトポロジー構築、ソルバー、GPU描画、GUIは測定区間の外です。
+OSキャッシュは消していません。ピークメモリは、複数区画PVTUの節と同じ方法で
+テスト名を`real_mpi_res_baseline`に置き換えて取得できます。プロセス全体の値には最初のMSH読込も含まれます。
+
+Windows・Ryzen 7 7800X3D、Rust 1.99.1のReleaseビルドで、独立したプロセスを3回起動しました。
+入力は84,056節点・49,871要素、4ランク・2フレームのRES計44,651,902バイトです。
+
+| 実行 | 初回 ms | 続く5回の中央値 ms | 観測した物理メモリピーク MiB |
+| ---: | ---: | ---: | ---: |
+| 1 | 266.016 | 260.998 | 64.80 |
+| 2 | 267.192 | 262.775 | 64.98 |
+| 3 | 262.158 | 265.567 | 64.09 |
+
+最終フレームの最大変位は3回とも`3.95155661e-2`でした。ロード時間の代表値は262.775 ms、
+観測したメモリピークの中央値は64.80 MiBです。生ログは`target/hinge-mpi-res-{1,2,3}.txt`にあります。

@@ -202,6 +202,10 @@ impl RunResultSource {
 }
 
 #[cfg(test)]
+#[path = "run_results_benchmark.rs"]
+mod benchmark;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn record(id: u32, value: f32) -> String {

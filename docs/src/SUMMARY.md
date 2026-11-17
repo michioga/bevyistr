@@ -28,7 +28,7 @@
 
 # 付録
 
-- [0.3.0リリースノート](release-notes.md)
+- [リリースノート](release-notes.md)
 - [困ったとき](troubleshooting.md)
 - [対応範囲と今後の予定](limitations.md)
 - [公式資料とライセンス](references.md)

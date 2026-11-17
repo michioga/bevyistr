@@ -2,7 +2,7 @@
 
 ## 準備
 
-パッケージは[crates.io](https://crates.io/crates/bevyistr)で確認できます。本書の対象版は0.3.0です。
+本書の対象版は0.4.0です。入手できる版はcrates.ioで確認できます。 [bevyistrのパッケージ](https://crates.io/crates/bevyistr)
 Cargoからのインストールもソースのコンパイルを行うため、Rust、ネイティブのビルド環境、
 Bevy/wgpuに対応するグラフィックス環境が必要です。Windows MSVCではWindows SDK、
 LinuxではBevyが必要とするウィンドウ・音声関連の開発ライブラリも用意してください。
@@ -10,8 +10,10 @@ LinuxではBevyが必要とするウィンドウ・音声関連の開発ライ�
 
 ## 公開版をインストールする
 
+0.4.0の公開後は、次のコマンドでインストールできます。
+
 ```text
-cargo install bevyistr --version 0.3.0 --locked
+cargo install bevyistr --version 0.4.0 --locked
 bevyistr
 ```
 
@@ -22,7 +24,7 @@ bevyistr
 
 ## ソースから実行する
 
-0.3.0と同じソースを使う場合は、公開時のタグ`v0.3.0`を選びます。
+0.4.0と同じソースを使う場合は、公開時のタグ`v0.4.0`を選びます。
 mainや開発ブランチには、その後の変更が含まれる場合があります。
 
 リポジトリのルートで実行します。

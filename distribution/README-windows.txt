@@ -1,4 +1,4 @@
-bevyistr 0.3.0 — Windows x86_64
+bevyistr 0.4.0 — Windows x86_64
 FrontISTR Pre/Post
 Michio Ogawa (michioga)
 

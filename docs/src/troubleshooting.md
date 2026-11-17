@@ -30,7 +30,7 @@ RESに形状が含まれないためです。結果と対応するMSHを選び�
 
 Solveの状態・内部ログ・実行ファイル・MPIランタイムを確認します。実行方式と線形ソルバーの種類は別の設定です。
 
-次期版では、起動前に入力の準備・検査で止まった場合は`Status: Blocked`と`Not started`を表示します。
+起動前に入力の準備・検査で止まった場合は`Status: Blocked`と`Not started`を表示します。
 公開済み0.3.0では、この場合も`Failed`と表示されます。`Preflight`や`Setup compatibility`の詳細が
 出ている場合、FrontISTRの解析が失敗したという意味ではありません。
 `CNT re-export blocked`の場合は、bevyistrが元設定を保持して再出力できないための停止です。

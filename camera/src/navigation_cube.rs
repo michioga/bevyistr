@@ -44,9 +44,34 @@ pub(crate) struct NavigationCubePiece {
 
 #[derive(Debug, Clone, Copy)]
 struct ViewAnimation {
-    start_direction: Vec3,
-    target_direction: Vec3,
+    start_rotation: Quat,
+    direction_arc: Quat,
+    end_roll: Quat,
     elapsed: f32,
+}
+
+impl ViewAnimation {
+    fn new(start_rotation: Quat, direction: Vec3) -> Self {
+        let direction_arc = Quat::from_rotation_arc(start_rotation * Vec3::Z, direction);
+        let target_rotation = Transform::IDENTITY
+            .looking_to(-direction, orbit_camera_up(direction))
+            .rotation;
+        // Follow the shortest path between view directions and ease the
+        // remaining roll around that direction into the snapped orientation.
+        let end_roll = (direction_arc * start_rotation).inverse() * target_rotation;
+        Self {
+            start_rotation,
+            direction_arc,
+            end_roll,
+            elapsed: 0.0,
+        }
+    }
+
+    fn rotation_at(self, t: f32) -> Quat {
+        let turn = Quat::IDENTITY.slerp(self.direction_arc, t);
+        let roll = Quat::IDENTITY.slerp(self.end_roll, t);
+        (turn * self.start_rotation * roll).normalize()
+    }
 }
 
 #[derive(Resource, Debug, Default)]
@@ -281,7 +306,7 @@ pub(crate) fn navigation_cube_input_system(
     windows: Query<&Window>,
     hit_areas: Query<&Interaction, With<NavigationCubeHitArea>>,
     nav_camera: Query<(&Camera, &GlobalTransform), With<NavigationCubeCamera>>,
-    main_camera: Query<(&Transform, &OrbitCamera), With<MainViewportCamera>>,
+    main_camera: Query<&Transform, With<MainViewportCamera>>,
     mut state: ResMut<NavigationCubeState>,
 ) {
     let pointer_is_over = hit_areas
@@ -314,18 +339,13 @@ pub(crate) fn navigation_cube_input_system(
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Ok((transform, orbit)) = main_camera.single() else {
+    let Ok(transform) = main_camera.single() else {
         return;
     };
-    let start_direction = normalized_or(
-        transform.translation - orbit.focus,
+    state.animation = Some(ViewAnimation::new(
+        transform.rotation,
         direction.as_vec3().normalize(),
-    );
-    state.animation = Some(ViewAnimation {
-        start_direction,
-        target_direction: direction.as_vec3().normalize(),
-        elapsed: 0.0,
-    });
+    ));
 }
 
 pub(crate) fn animate_navigation_cube_view(
@@ -350,30 +370,25 @@ pub(crate) fn animate_navigation_cube_view(
     animation.elapsed += time.delta_secs();
     let linear_t = (animation.elapsed / SNAP_ANIMATION_SECONDS).clamp(0.0, 1.0);
     let eased_t = linear_t * linear_t * (3.0 - 2.0 * linear_t);
-    let direction = slerp_direction(
-        animation.start_direction,
-        animation.target_direction,
-        eased_t,
-    );
-    transform.translation = orbit.focus + direction * orbit.radius;
-    transform.look_at(orbit.focus, orbit_camera_up(direction));
+    transform.rotation = animation.rotation_at(eased_t);
+    transform.translation = orbit.focus + transform.rotation * Vec3::Z * orbit.radius;
 
     state.animation = (linear_t < 1.0).then_some(animation);
 }
 
 pub(crate) fn sync_navigation_cube_camera(
-    main_camera: Query<(&Transform, &OrbitCamera), MainCameraFilter>,
+    main_camera: Query<&Transform, MainCameraFilter>,
     mut nav_camera: Query<&mut Transform, NavigationCameraFilter>,
 ) {
-    let Ok((main_transform, orbit)) = main_camera.single() else {
+    let Ok(main_transform) = main_camera.single() else {
         return;
     };
     let Ok(mut nav_transform) = nav_camera.single_mut() else {
         return;
     };
-    let direction = normalized_or(main_transform.translation - orbit.focus, Vec3::Z);
-    *nav_transform = Transform::from_translation(direction * CUBE_CAMERA_DISTANCE)
-        .looking_at(Vec3::ZERO, orbit_camera_up(direction));
+    let rotation = main_transform.rotation;
+    *nav_transform = Transform::from_translation(rotation * Vec3::Z * CUBE_CAMERA_DISTANCE)
+        .with_rotation(rotation);
 }
 
 pub(crate) fn update_navigation_cube_highlight(
@@ -454,21 +469,6 @@ fn snap_direction_from_cube_hit(hit: Vec3, half_extent: f32) -> IVec3 {
     }
 }
 
-fn normalized_or(value: Vec3, fallback: Vec3) -> Vec3 {
-    if value.is_finite() && value.length_squared() > 1.0e-12 {
-        value.normalize()
-    } else {
-        fallback
-    }
-}
-
-fn slerp_direction(start: Vec3, target: Vec3, t: f32) -> Vec3 {
-    let start = normalized_or(start, Vec3::Z);
-    let target = normalized_or(target, Vec3::Z);
-    let rotation = Quat::from_rotation_arc(start, target);
-    normalized_or(Quat::IDENTITY.slerp(rotation, t) * start, target)
-}
-
 fn direction_label(direction: IVec3) -> String {
     let mut labels = Vec::with_capacity(3);
     if direction.y > 0 {
@@ -520,9 +520,12 @@ mod tests {
     }
 
     #[test]
-    fn direction_slerp_stays_normalized() {
-        let middle = slerp_direction(Vec3::Z, Vec3::X, 0.5);
-        assert!((middle.length() - 1.0).abs() < 1.0e-6);
-        assert!(middle.x > 0.0 && middle.z > 0.0);
+    fn cube_snap_to_top_follows_the_view_arc_and_eases_the_roll() {
+        let animation = ViewAnimation::new(Quat::IDENTITY, Vec3::Y);
+        let middle = animation.rotation_at(0.5) * Vec3::Z;
+        assert!(middle.abs_diff_eq((Vec3::Y + Vec3::Z).normalize(), 1.0e-5));
+        let target = animation.rotation_at(1.0);
+        assert!((target * Vec3::Z).abs_diff_eq(Vec3::Y, 1.0e-5));
+        assert!((target * Vec3::Y).abs_diff_eq(Vec3::Z, 1.0e-5));
     }
 }

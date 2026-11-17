@@ -1983,7 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-box-select",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-box-select"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-camera",
@@ -2014,7 +2014,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-camera"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
@@ -2023,14 +2023,14 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-fem-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
 ]
 
 [[package]]
 name = "bevyistr-gmsh"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-hecmw"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-interaction"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
@@ -2055,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-picking"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
@@ -2065,7 +2065,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-selection"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-ui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "avian3d",
  "bevy",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "bevyistr-visualization"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
