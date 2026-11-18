@@ -12,6 +12,10 @@
 - [x] Windowsで0.4.0候補のライブラリテスト429件が成功した。外部例題・手動計測などの11件は通常実行でスキップ。mdBookのビルドも成功した。
 - [x] 版番号更新後にローカル候補ZIPを再作成した。ZIPのチェックサム、同梱682ファイル、EXEのバージョン情報`0.4.0`を照合し、展開後の起動を短時間確認した。ビルド記録は`source_dirty=true`。候補ZIPのSHA-256は`2c04a23f93f991434924be277708eab6875037e3b4d200bb56aed63f612057a6`。
 - [x] 2026-11-17のRustSec DB `f1ef79c9`で`rustix 1.1.4`の健全性の問題を検出し、`1.1.6`へ更新した。更新後に全プラットフォームの依存解決と`cargo audit --deny unsound`が成功した。脆弱性・unsoundは0件、保守終了の警告は5件。正式候補のZIPとCIは修正を含むコミットから作る。 [RUSTSEC-2026-0486](https://rustsec.org/advisories/RUSTSEC-2026-0486.html)
+- [x] `09c63bb`でDependency security、Documentation、Windows／UbuntuのRelease checks、Windows候補ZIPの作成と検証が成功した。CIのZIPのSHA-256は`45f53834eb55c63878acb5306c905bbea51c9c2896b90aa3dff99f3994b23288`。 [依存監査](https://github.com/michioga/bevyistr/actions/runs/44059537410) · [Release checks](https://github.com/michioga/bevyistr/actions/runs/44059699966) · [Windows package](https://github.com/michioga/bevyistr/actions/runs/44059732736)
+- [x] 2026-11-18にCIが報告した`async-executor 1.14.0`の取り下げ警告を確認した。上流がメモリ安全性の回帰を修正した`1.14.1`へ更新した。再監査では脆弱性・unsound・取り下げ警告が0件で、保守終了の警告が5件だった。 [async-executor v1.14.1のリリース](https://github.com/smol-rs/async-executor/releases/tag/v1.14.1)
+- [x] 更新後のWindows Releaseテストは432件成功、13件スキップ。0.4.0の11クレートを再梱包し、アプリの配布アーカイブに両方の修正版が入ることを確認した。
+- [ ] `async-executor`の修正を含むコミットで、Release checks、Dependency security、Windows packageを確認する。
 
 ## 検証から公開まで
 
