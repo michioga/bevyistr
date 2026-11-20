@@ -1,6 +1,7 @@
 //! Discrete solver choices: click to commit, native menu dismissal to cancel.
+use bevy::ui_widgets::ScrollArea;
 use crate::InteractionButton;
-use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
+use crate::layout::{SidebarPage, UiInputCapture};
 use bevy::{
     input_focus::{
         FocusCause, InputFocus,
@@ -8,10 +9,10 @@ use bevy::{
     },
     picking::{Pickable, hover::Hovered},
     prelude::*,
-    ui::ScrollPosition,
+    ui::{ScrollPosition, Selected},
     ui_widgets::{
-        Activate, Button as WidgetButton, MenuAction, MenuButton, MenuEvent, MenuFocusState,
-        MenuItem, MenuPopup,
+        ActiveDescendant, Button as WidgetButton, ListItem, MenuAction, MenuButton,
+        MenuEvent, MenuFocusState, MenuPopup, ValueChange,
         popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
     },
 };
@@ -26,6 +27,8 @@ enum Kind {
 struct Label(Kind);
 #[derive(Component)]
 struct Selector;
+#[derive(Component)]
+struct SolverChoices;
 #[derive(Component)]
 struct Popup {
     original: SolverSettings,
@@ -197,7 +200,7 @@ fn menu_event(
                     GlobalZIndex(200),
                     OverrideClip,
                     UiInputCapture,
-                    ScrollableList,
+                    ScrollArea,
                     ScrollPosition::default(),
                     Node {
                         position_type: PositionType::Absolute,
@@ -232,13 +235,13 @@ fn menu_event(
                         "{} | click to apply; Esc cancels",
                         kind.title()
                     )));
-                    for choice in kind.choices() {
-                        popup
-                            .spawn((
-                                MenuItem,
+                    crate::popup_select::list(popup, nav, |list| {
+                        kind.choices().into_iter().map(|choice| {
+                            let selected = choice.selected(&setup.solver);
+                            let mut row = list.spawn((
+                                ListItem,
                                 choice,
                                 Hovered::default(),
-                                TabIndex(0),
                                 Node {
                                     min_height: px(40),
                                     flex_shrink: 0.0,
@@ -246,41 +249,44 @@ fn menu_event(
                                     ..default()
                                 },
                                 BackgroundColor(Color::srgb(0.10, 0.14, 0.17)),
-                            ))
-                            .observe(choose)
-                            .observe(crate::popup_keyboard::handle)
-                            .with_child(text(format!(
+                            ));
+                            if selected {
+                                row.insert(Selected);
+                            }
+                            row.with_child(text(format!(
                                 "{} {}\n{}",
-                                if choice.selected(&setup.solver) {
-                                    "[x]"
-                                } else {
-                                    "[ ]"
-                                },
+                                if selected { "[x]" } else { "[ ]" },
                                 choice.label(),
                                 choice.keyword()
-                            )));
-                    }
+                            )))
+                            .id()
+                        }).collect()
+                    })
+                    .insert(SolverChoices)
+                    .observe(choose);
                 });
         }
     }
 }
 
 fn choose(
-    event: On<Activate>,
+    event: On<ValueChange<Entity>>,
     choices: Query<&Choice>,
     parents: Query<&ChildOf>,
     popups: Query<&Popup>,
     page: Res<SidebarPage>,
     mut setup: ResMut<AnalysisSetup>,
+    mut commands: Commands,
 ) {
+    crate::popup_select::dismiss(event.source, &mut commands);
     if *page != SidebarPage::Solve {
         return;
     }
-    let Ok(choice) = choices.get(event.entity) else {
+    let Ok(choice) = choices.get(event.value) else {
         return;
     };
     let Some(popup) = parents
-        .iter_ancestors(event.entity)
+        .iter_ancestors(event.value)
         .find_map(|e| popups.get(e).ok())
     else {
         return;
@@ -311,7 +317,8 @@ fn sync(
     mut labels: Query<(&Label, &mut Text)>,
     mut items: Query<(Entity, &Choice, &Hovered, &mut BackgroundColor)>,
     mut focus: ResMut<InputFocus>,
-    menu_focus: Query<(), Or<(With<Selector>, With<Choice>)>>,
+    lists: Query<&ActiveDescendant>,
+    menu_focus: Query<(), Or<(With<Selector>, With<SolverChoices>)>>,
 ) {
     if *page != SidebarPage::Solve && focus.get().is_some_and(|e| menu_focus.contains(e)) {
         focus.clear();
@@ -331,8 +338,9 @@ fn sync(
             label.0.current(&setup.solver).label()
         )));
     }
+    let active_row = crate::popup_select::active_row(&focus, &lists);
     for (entity, choice, hovered, mut color) in &mut items {
-        *color = BackgroundColor(if hovered.0 || focus.get() == Some(entity) {
+        *color = BackgroundColor(if hovered.0 || active_row == Some(entity) {
             Color::srgb(0.22, 0.40, 0.47)
         } else if choice.selected(&setup.solver) {
             Color::srgb(0.18, 0.45, 0.55)

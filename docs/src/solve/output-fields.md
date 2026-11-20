@@ -1,5 +1,7 @@
 # Solveで出力する物理量を選ぶ
 
+出力項目は **Materials／Solve → OUTPUT FIELDS** で指定します。`COMPLETE_MICROAVS`を指定したCNTを読み込むと、可視化側のラベルは **MicroAVS** になります。
+
 ## 保存するファイルと間隔（0.3.0）
 
 **SAVE RESULTS | next analysis** でRES／VTKをそれぞれON/OFFにし、
@@ -31,7 +33,7 @@ FILE、LOG、FEMAPなどの追加指定や、不正な間隔・重複パラメ�
 
 Solveの解析方式は **Analysis type: ...**、連立方程式ソルバーは **Linear solver: ...** のポップアップから選べます。MUMPSは先頭に表示しますが、メニューを開くだけでは現在値を変更しません。選択中の項目は`[x]`で示し、項目をクリックすると確定します。矢印キー／Enterでも選択でき、Escや外側へのフォーカス移動では変更せず閉じます。Ctrl+Z／Ctrl+Yで取消・やり直しができます。数値欄は独立して保持します。ソルバーのDirectと、下部の実行方式Direct／MPIは別の設定です。
 
-Solveの **OUTPUT FIELDS** から **RES** または **VTK** のメニューを開きます。それぞれCNTの`!OUTPUT_RES`、`!OUTPUT_VIS`に対応し、独立した設定です。
+MaterialsまたはSolveの **OUTPUT FIELDS** から **RES** または **VTK** のメニューを開きます。それぞれCNTの`!OUTPUT_RES`、`!OUTPUT_VIS`に対応し、独立した設定です。
 
 1. 各項目の **Default／ON／OFF** を選びます。複数項目を続けて選べます。
 2. メニュー上部の **Apply output fields** で確定します。Esc、外側のクリック、別ページへの移動は未確定の変更を取り消します。

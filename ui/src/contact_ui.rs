@@ -1,7 +1,8 @@
 //! Contact definition, automatic candidate detection, and review UI.
 
+use bevy::ui_widgets::ScrollArea;
 use crate::{ButtonInteraction, InteractionButton};
-use crate::layout::{ScrollableList, SidebarPage};
+use crate::layout::{SidebarPage};
 use crate::measurement::{MeasurementBoxState, MeasurementTarget};
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
 use bevy::prelude::*;
@@ -191,7 +192,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
             ..default()
         },
         ScrollPosition::default(),
-        ScrollableList,
+        ScrollArea,
         ContactDefinitionsListContainer,
         Name::new("ContactDefinitionsListContainer"),
     ));

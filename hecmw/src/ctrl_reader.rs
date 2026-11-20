@@ -21,6 +21,8 @@ pub struct HecmwCtrlContent {
     /// Editable entire mesh. For a distributed solve, this is `part_in`,
     /// not the rank-file prefix used by `fstrMSH`.
     pub mesh_path: Option<String>,
+    /// Rank mesh prefix for a solve using HECMW-DIST.
+    pub distributed_mesh_path: Option<String>,
     pub cnt_path: Option<String>,
     pub result_path: Option<String>,
 }
@@ -100,6 +102,11 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
             // Identify the block role by NAME parameter or keyword
             let role = if candidate_priority > 0 {
                 Some("mesh")
+            } else if keyword.eq_ignore_ascii_case("!MESH")
+                && name.eq_ignore_ascii_case("fstrMSH")
+                && parameter("TYPE").is_some_and(|kind| kind.eq_ignore_ascii_case("HECMW-DIST"))
+            {
+                Some("distributed")
             } else if name.eq_ignore_ascii_case("fstrCNT")
                 || keyword.eq_ignore_ascii_case("!CONTROL")
             {
@@ -127,6 +134,7 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                             c.mesh_path = Some(next.to_string());
                             mesh_priority = candidate_priority;
                         }
+                        "distributed" => c.distributed_mesh_path = Some(next.to_string()),
                         "cnt" => c.cnt_path = Some(next.to_string()),
                         "res" => c.result_path = Some(next.to_string()),
                         _ => {}

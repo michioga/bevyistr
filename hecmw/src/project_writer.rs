@@ -547,6 +547,9 @@ fn validate_analysis_setup(
     if setup.solver.substeps == 0 || setup.solver.substeps > i32::MAX as u32 {
         report.error("Solver", "substeps must be in 1..=2147483647");
     }
+    if !matches!(setup.solver.preconditioner, 1..=3) {
+        report.error("Linear solver", "PRECOND must be 1, 2 or 3 for the supported SOLVER card");
+    }
     if setup.solver.max_iterations == 0 || setup.solver.max_iterations > i32::MAX as u32 {
         report.error(
             "Linear solver",

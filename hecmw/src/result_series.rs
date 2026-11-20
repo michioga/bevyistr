@@ -1,5 +1,8 @@
 //! Discover temporal files without confusing a VTK/MPI rank with a step.
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, PartialEq)]
 enum Pattern {
@@ -149,6 +152,9 @@ pub fn load_mesh_result_series(
     path: &Path,
     mesh: &fem_core::FemMesh,
 ) -> Result<Vec<fem_core::StepResult>, String> {
+    if let Some(steps) = load_distributed_series(path, mesh)? {
+        return Ok(steps);
+    }
     let files = detect_result_series(path);
     if files.windows(2).any(|p| p[0].0 == p[1].0) {
         return Err("Ambiguous duplicate result steps".into());
@@ -184,6 +190,133 @@ pub fn load_mesh_result_series(
         .collect()
 }
 
+/// A rank result has no geometry. When the control file identifies this
+/// result stem as distributed, recover all rank files using that exact mesh
+/// prefix, never by guessing from other partitions in the directory.
+fn load_distributed_series(
+    path: &Path,
+    mesh: &fem_core::FemMesh,
+) -> Result<Option<Vec<fem_core::StepResult>>, String> {
+    let Some((Pattern::Native { base }, step)) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(pattern)
+    else {
+        return Ok(None);
+    };
+    let Some((stem, selected_rank)) = base.rsplit_once(".res.") else {
+        return Ok(None);
+    };
+    let result_name = format!("{stem}.res");
+    let Some((dir, prefix)) = path
+        .parent()
+        .into_iter()
+        .flat_map(|parent| parent.ancestors().take(4))
+        .find_map(|dir| {
+            let ctrl = crate::load_hecmw_ctrl(dir.join("hecmw_ctrl.dat")).ok()?;
+            let result = Path::new(ctrl.result_path.as_deref()?)
+                .file_name()?
+                .to_str()?;
+            (result == result_name).then_some(())?;
+            Some((dir, dir.join(ctrl.distributed_mesh_path?)))
+        })
+    else {
+        return Ok(None);
+    };
+    let partition_dir = prefix.parent().ok_or("No MPI partition directory")?;
+    let name = prefix
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("Invalid MPI mesh prefix")?;
+    let mut ranks = BTreeMap::new();
+    let rank_prefix = format!("{name}.");
+    for entry in partition_dir
+        .read_dir()
+        .map_err(|e| format!("{}: {e}", partition_dir.display()))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if let Some(rank) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.strip_prefix(&rank_prefix))
+            .and_then(|s| s.parse::<u16>().ok())
+            && entry.path().is_file()
+            && ranks.insert(rank, entry.path()).is_some()
+        {
+            return Err(format!("Ambiguous MPI mesh files for rank {rank}"));
+        }
+    }
+    let declared = std::fs::read_to_string(dir.join("hecmw_part_ctrl.dat"))
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let mut fields = line.split('#').next()?.split(',');
+                if !fields.next()?.trim().eq_ignore_ascii_case("!PARTITION") {
+                    return None;
+                }
+                fields.find_map(|field| {
+                    let (key, value) = field.split_once('=')?;
+                    key.trim().eq_ignore_ascii_case("DOMAIN").then_some(())?;
+                    value.trim().parse::<usize>().ok()
+                })
+            })
+        });
+    if ranks.is_empty()
+        || declared.is_some_and(|count| ranks.len() != count)
+        || !ranks.keys().copied().map(usize::from).eq(0..ranks.len())
+    {
+        return Err(format!(
+            "Incomplete MPI mesh files for {}; keep all rank meshes with the results.",
+            prefix.display()
+        ));
+    }
+
+    if !selected_rank
+        .parse::<u16>()
+        .is_ok_and(|rank| ranks.contains_key(&rank))
+    {
+        return Err("Selected result rank does not belong to the MPI mesh set.".into());
+    }
+    let mut frames = BTreeMap::<u32, Vec<PathBuf>>::new();
+    for &rank in ranks.keys() {
+        let rank_result = path.with_file_name(format!("{result_name}.{rank}.{step}"));
+        for (number, file) in detect_result_series(&rank_result) {
+            if !file.is_file() {
+                continue;
+            }
+            let files = frames.entry(number).or_default();
+            if files.len() != usize::from(rank) {
+                return Err(format!(
+                    "Step {number}: missing or duplicate MPI rank result."
+                ));
+            }
+            files.push(file);
+        }
+    }
+    if !frames.contains_key(&step) {
+        return Err(format!("No MPI result set for selected step {step}"));
+    }
+    let count = ranks.len();
+    let owners =
+        crate::distributed_nodes::read_partition_owners(&ranks.into_values().collect::<Vec<_>>())?;
+    frames
+        .into_iter()
+        .map(|(number, paths)| {
+            if paths.len() != count {
+                return Err(format!(
+                    "Step {number}: expected {count} MPI rank results, found {}.",
+                    paths.len()
+                ));
+            }
+            let files: Vec<_> = paths.iter().map(PathBuf::as_path).collect();
+            crate::distributed_nodes::read_partitioned_step(&files, Some(&owners))?
+                .step_for_mesh(mesh, number)
+                .map_err(|e| format!("Step {number}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +350,62 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn opens_complete_distributed_res_from_any_rank_with_exact_owners() {
+        let fixture = Fixture::new();
+        let ctrl = "!MESH,NAME=part_in,TYPE=HECMW-ENTIRE\nmodel.msh\n\
+                    !MESH,NAME=fstrMSH,TYPE=HECMW-DIST\nmesh\n\
+                    !RESULT,NAME=fstrRES,IO=OUT\njob.res\n";
+        fixture.file("hecmw_ctrl.dat", ctrl);
+        fixture.file("hecmw_part_ctrl.dat", "!PARTITION,DOMAIN=2\n");
+        for rank in [0, 1] {
+            fixture.file(
+                &format!("mesh.{rank}"),
+                &format!(
+                    "!HECMW-DMD-ASCII version=5\n0\n0\n1\n1\n5\n0\nmesh\n0\n0\n0.0\n\
+                 2 2 2 1\n1 0\n2 1\n10 20\n0 0 0 1 0 0\n3 1\n0 3\n3\n0 0 0\n"
+                ),
+            );
+        }
+        let mut mesh = FemMesh::default();
+        mesh.nodes = [10, 20, 30]
+            .map(|id| FemNode::from_xyz(NodeId(id), id as f32, 0.0, 0.0))
+            .into();
+        for step in [2, 10] {
+            fixture.file(
+                &format!("job.res.0.{step}"),
+                &format!("*fstrresult\n2 0\n1 0\n1\nTEMP\n10 {step}\n20 -1\n"),
+            );
+            fixture.file(
+                &format!("job.res.1.{step}"),
+                &format!("*fstrresult\n2 0\n1 0\n1\nTEMP\n10 -1\n20 {}\n", step + 3),
+            );
+        }
+        let selected = fixture.0.join("job.res.1.10");
+        let steps = load_mesh_result_series(&selected, &mesh).unwrap();
+        assert_eq!(
+            steps.iter().map(|step| step.step).collect::<Vec<_>>(),
+            [2, 10]
+        );
+        let Some(ResultField::NodeScalar { values, .. }) = steps[1].field_by_name("TEMP") else {
+            panic!("missing temperature")
+        };
+        assert_eq!(&values[..2], &[10.0, 13.0]);
+        assert!(values[2].is_nan());
+        std::fs::remove_file(fixture.0.join("job.res.0.2")).unwrap();
+        assert!(
+            load_mesh_result_series(&selected, &mesh)
+                .unwrap_err()
+                .contains("missing")
+        );
+        std::fs::remove_file(fixture.0.join("mesh.1")).unwrap();
+        assert!(
+            load_mesh_result_series(&selected, &mesh)
+                .unwrap_err()
+                .contains("Incomplete MPI mesh")
+        );
     }
 
     #[test]

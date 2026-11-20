@@ -464,6 +464,8 @@ fn object_material_and_confirmation_follow_reading_order() {
 #[test]
 fn material_editor_integrates_with_the_full_ui_schedule() {
     let mut app = App::new();
+    app.add_plugins((bevy::app::TaskPoolPlugin::default(), bevy::asset::AssetPlugin::default()))
+        .init_asset::<bevy::shader::Shader>();
     app.add_plugins((
         interaction::InteractionPlugin,
         visualization::VisualizationPlugin,

@@ -107,6 +107,20 @@ pub struct OutputSettings {
     pub vis: OutputControl,
     pub write_res: WriteControl,
     pub write_vis: WriteControl,
+    /// Imported surface rendering options reproduced in their original order.
+    pub visual: Option<PsrVisualControl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PsrVisualControl {
+    pub lines: Vec<String>,
+    pub format: VisualOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualOutputFormat {
+    Vtk,
+    CompleteMicroAvs,
 }
 
 /// Whether to request a file, independently of the quantities in that file.
@@ -143,8 +157,16 @@ impl OutputSettings {
             vis: OutputControl::default(),
             write_res: WriteControl::default(),
             write_vis: WriteControl::default(),
+            visual: None,
         }
     }
+    pub fn label(&self, target: OutputTarget) -> &'static str {
+        match (target, self.visual.as_ref().map(|visual| visual.format)) {
+            (OutputTarget::Vis, Some(VisualOutputFormat::CompleteMicroAvs)) => "MicroAVS",
+            _ => target.label(),
+        }
+    }
+
     pub fn write(&self, target: OutputTarget) -> &WriteControl {
         match target {
             OutputTarget::Res => &self.write_res,

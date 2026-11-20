@@ -2,7 +2,7 @@
 use crate::{ButtonInteraction, InteractionButton};
 use super::*;
 use crate::assembly_clearance::spawn_assembly_clearance_ui;
-use crate::layout::ScrollableList;
+use bevy::ui_widgets::ScrollArea;
 use crate::slider::{SliderConfig, spawn_slider};
 use bevy::ui::ScrollPosition;
 
@@ -16,7 +16,7 @@ pub(crate) fn spawn_assembly_ui(parent: &mut ChildSpawnerCommands) {
             ..default()
         },
         ScrollPosition::default(),
-        ScrollableList,
+        ScrollArea,
         AssemblyPartsContainer,
         Name::new("AssemblyPartsContainer"),
     ));

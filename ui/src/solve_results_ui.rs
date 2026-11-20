@@ -104,6 +104,10 @@ fn queue_results_load(
     let source = source.clone();
     let elements: Vec<Vec<fem_core::ElementId>> = model.meshes.iter().enumerate()
         .map(|(mi,mesh)|mesh.elements.iter().map(|e|hecmw::remap_element(&offsets,mi,e.id)).collect()).collect();
+    let used_nodes: Vec<std::collections::HashSet<NodeId>> = model.meshes.iter().enumerate()
+        .map(|(mi, mesh)| mesh.elements.iter().flat_map(|element| &element.nodes)
+            .map(|&id| hecmw::remap_node(&offsets, mi, id)).collect())
+        .collect();
     let run_id = source.id;
     let (tx, rx) = mpsc::channel();
     state.pending = Some(Pending {
@@ -114,7 +118,7 @@ fn queue_results_load(
     });
     state.status = "Loading this run's results...".into();
     std::thread::spawn(move || {
-        let _ = tx.send(source.load_with_elements(&parts, &elements));
+        let _ = tx.send(source.load_with_mesh_ids(&parts, &elements, Some(&used_nodes)));
     });
 }
 

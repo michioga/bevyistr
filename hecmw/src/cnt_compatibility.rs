@@ -3,14 +3,18 @@
 //! be reported. Expand this allow-list only with round-trip regression tests.
 
 use super::{CntData, KeywordHeader, parse_keyword_header, strip_comment};
-use fem_core::{AnalysisType, SetupImportIssue, SolverSettings};
+use fem_core::{AnalysisType, PsrVisualControl, SetupImportIssue, SolverSettings};
 use std::collections::HashSet;
 
-pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
+pub(super) fn audit(
+    text: &str,
+    data: &CntData,
+) -> (Vec<SetupImportIssue>, Option<PsrVisualControl>) {
     let lines: Vec<_> = text.lines().collect();
     let mut issues = Vec::new();
     let mut seen = HashSet::new();
     let mut material = false;
+    let mut visual = None;
     let mut i = 0;
     while i < lines.len() {
         let raw = strip_comment(lines[i]);
@@ -20,6 +24,31 @@ pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
         }
         let line = i + 1;
         let header = parse_keyword_header(raw);
+        if header.name == "VISUAL" {
+            let (end, block) = super::visual::read_block(&lines, i, &header);
+            i = end;
+            material = false;
+            let problem = if !seen.insert(header.name) {
+                Some("Repeated VISUAL blocks cannot be preserved".to_string())
+            } else {
+                match block {
+                    Ok(block) => {
+                        visual = block;
+                        None
+                    }
+                    Err(reason) => Some(reason),
+                }
+            };
+            if let Some(message) = problem {
+                issues.push(SetupImportIssue {
+                    source: "CNT".into(),
+                    line,
+                    keyword: raw.into(),
+                    message,
+                });
+            }
+            continue;
+        }
         i += 1;
         let mut body = Vec::new();
         while i < lines.len() {
@@ -78,7 +107,7 @@ pub(super) fn audit(text: &str, data: &CntData) -> Vec<SetupImportIssue> {
                     .into(),
         });
     }
-    issues
+    (issues, visual)
 }
 
 fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) -> Option<String> {
@@ -96,10 +125,8 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "MATERIAL" => &["NAME"],
         "NGROUP" | "NGRP" => &["NGRP"],
         "WRITE" => &["RESULT", "VISUAL", "FREQUENCY"],
-        "VISUAL" => &["METHOD"],
         "ELASTIC" => &["TYPE"],
-        "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "SURFACE_NUM=1" | "SURFACE 1"
-        | "OUTPUT_TYPE=VTK" | "ITEM=1" | "ITEM=2" => &[],
+        "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "ITEM=1" | "ITEM=2" => &[],
         "STEP" => &["TYPE", "INC_TYPE", "SUBSTEPS", "MAXITER", "CONVERG"],
         "DYNAMIC" => return Some("Dynamic integration settings cannot yet be regenerated".into()),
         "SECTION" => {
@@ -158,9 +185,11 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
             ) {
                 Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
-            } else if !is("PRECOND", "1") || !is("ITERLOG", "YES") || !is("TIMELOG", "YES") {
+            } else if !matches!(value("PRECOND").as_deref(), Some("1" | "2" | "3"))
+                || !is("ITERLOG", "YES") || !is("TIMELOG", "YES")
+            {
                 Some(
-                    "Solver options/defaults are not preserved (writer uses PRECOND=1, ITERLOG=YES, TIMELOG=YES)",
+                    "Only explicit PRECOND=1, 2 or 3 with ITERLOG=YES and TIMELOG=YES is preserved",
                 )
             } else if solver.max_iterations == 0
                 || solver.max_iterations > i32::MAX as u32
@@ -354,12 +383,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 super::write_settings::parse(h).err()
             }
         }
-        "VISUAL" if !is("METHOD", "PSR") || !body.is_empty() => {
-            Some("Only the default PSR/VTK visualization is regenerated")
-        }
-        "MATERIAL" | "END" | "SURFACE_NUM=1" | "SURFACE 1" | "OUTPUT_TYPE=VTK"
-            if !body.is_empty() =>
-        {
+        "MATERIAL" | "END" if !body.is_empty() => {
             Some("Unexpected data would be omitted")
         }
         _ => None,
@@ -460,6 +484,54 @@ mod tests {
             .remove(0);
         assert_eq!(issue.line, 3);
         assert_eq!(issue.keyword, "!SOLUTION, TYPE=HEAT");
+    }
+
+    #[test]
+    fn conrod_solver_and_rendering_options_survive_output_field_edits() {
+        for (format, label) in [("VTK", "VTK"), ("COMPLETE_MICROAVS", "MicroAVS")] {
+            let visual = format!(
+                "!VISUAL, method=PSR\n!surface_num = 1\n!surface 1\n!surface_style = 1\n\
+                 !group_name = boundary\n!display_method  1\n!color_comp_name = STRESS\n\
+                 !color_subcomp       7\n!initial_style = 1\n!deform_style = 3\n\
+                 !output_type  = {format}\n!x_resolution = 500\n!y_resolution = 500\n\
+                 !position_of_lights = 100 100 50\n!up_direction = 0.0 0.0 1.0\n\
+                 !font_color = 1.0 1.0 1.0\n"
+            );
+            let input = format!(
+                "!SOLUTION, TYPE=static\n!SOLVER,METHOD=CG,PRECOND=3,ITERLOG=YES,TIMELOG=YES\n\
+                 50000, 1\n1.0e-8, 1.0, 0.0\n!WRITE,RESULT\n!WRITE,VISUAL,\n{visual}!END\n"
+            );
+            let data = read(&input);
+            assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+            let mut setup = AnalysisSetup::default();
+            data.merge_into(&mut setup);
+            assert_eq!(setup.solver.preconditioner, 3);
+            assert_eq!(setup.output.label(fem_core::OutputTarget::Vis), label);
+            assert!(setup.output.vis.set(fem_core::OutputTarget::Vis, "NSTRESS", Some(true)));
+            let written = crate::cnt_writer::build_cnt(&setup, &[]);
+            assert!(written.contains("PRECOND=3"));
+            assert!(written.contains(&visual));
+            let reloaded = read(&written);
+            assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+            assert_eq!(reloaded.output, setup.output);
+            assert_eq!(reloaded.solver.as_ref(), Some(&setup.solver));
+        }
+    }
+
+    #[test]
+    fn only_one_supported_psr_boundary_and_format_are_preserved() {
+        let prefix = "!VISUAL, METHOD=PSR\n!surface_num=1\n!surface 1\n";
+        for options in [
+            "!group_name=SEAT\n!output_type=VTK",
+            "!surface_style=2\n!output_type=VTK",
+            "!output_type=AVS",
+            "!output_type=VTK\n!output_type=COMPLETE_MICROAVS",
+            "!output_type=VTK\n!RESTART, READ",
+            "!output_type=VTK\n!UNKNOWN_VISUAL=1",
+        ] {
+            assert!(!read(&format!("{prefix}{options}\n!END\n")).import_issues.is_empty(), "{options}");
+        }
+        assert!(!read("!surface_num=1\n!END\n").import_issues.is_empty());
     }
 
     #[test]

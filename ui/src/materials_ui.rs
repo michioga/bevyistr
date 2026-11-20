@@ -1,5 +1,6 @@
+use bevy::ui_widgets::ScrollArea;
 use crate::{ButtonInteraction, InteractionButton};
-use crate::layout::{DeleteSetupEntry, ScrollableList, SidebarPage, SidebarPageContent};
+use crate::layout::{DeleteSetupEntry, SidebarPage, SidebarPageContent};
 use crate::material_editor::spawn_material_exact_editor;
 use crate::material_library::{
     MaterialLibraryState, resolved_material_name, spawn_material_library, use_material,
@@ -235,7 +236,7 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                     ..default()
                 },
                 ScrollPosition::default(),
-                ScrollableList,
+                ScrollArea,
                 SectionDefEgrpRow,
                 Name::new("SectionDefEgrpRow"),
             ));
@@ -382,7 +383,7 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
             ..default()
         },
         ScrollPosition::default(),
-        ScrollableList,
+        ScrollArea,
         MaterialsSectionsListContainer,
         SidebarPageContent::page(SidebarPage::Materials),
         Name::new("MaterialsSectionsListContainer"),

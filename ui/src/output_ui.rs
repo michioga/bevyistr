@@ -1,6 +1,7 @@
 //! Draft-based multi-select popup for project output controls, not contours.
+use bevy::ui_widgets::ScrollArea;
 use crate::InteractionButton;
-use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
+use crate::layout::{SidebarPage, SidebarPageContent, UiInputCapture};
 use bevy::{
     input_focus::{
         FocusCause, InputFocus,
@@ -23,6 +24,7 @@ struct OutputMenu(OutputTarget);
 struct OutputLabel(OutputTarget);
 #[derive(Component)]
 struct Draft {
+    page: SidebarPage,
     target: OutputTarget,
     original: OutputSettings,
     control: OutputControl,
@@ -92,6 +94,7 @@ fn menu_event(
     choices: Query<&Choice>,
     buttons: Query<(), With<MenuButton>>,
     setup: Res<AnalysisSetup>,
+    page: Res<SidebarPage>,
     mut focus: ResMut<InputFocus>,
     mut commands: Commands,
 ) {
@@ -123,6 +126,9 @@ fn menu_event(
             }
         }
         MenuAction::Open(_) | MenuAction::Toggle => {
+            if !SidebarPageContent::analysis().contains(*page) {
+                return;
+            }
             if let Some(e) = existing {
                 if matches!(event.action, MenuAction::Toggle) {
                     commands.entity(e).despawn();
@@ -141,6 +147,7 @@ fn menu_event(
                 .spawn((
                     ChildOf(anchor),
                     Draft {
+                        page: *page,
                         target,
                         original: setup.output.clone(),
                         control: control.clone(),
@@ -150,7 +157,7 @@ fn menu_event(
                     GlobalZIndex(200),
                     OverrideClip,
                     UiInputCapture,
-                    ScrollableList,
+                    ScrollArea,
                     ScrollPosition::default(),
                     Node {
                         position_type: PositionType::Absolute,
@@ -182,7 +189,7 @@ fn menu_event(
                 ))
                 .id();
             commands.entity(popup).with_children(|p| {
-                p.spawn(text(format!("{} | {}", target.label(), if editable {
+                p.spawn(text(format!("{} | {}", setup.output.label(target), if editable {
                     "Choose fields, then Apply. Esc cancels."
                 } else { "Imported advanced controls: read-only" })));
                 if editable {
@@ -276,11 +283,11 @@ fn sync(
     parents: Query<&ChildOf>,
     menus: Query<(), With<OutputMenu>>,
 ) {
-    if *page != SidebarPage::Solve && focus.get().is_some_and(|e| parents.iter_ancestors(e).any(|p| menus.contains(p))) {
+    if !SidebarPageContent::analysis().contains(*page) && focus.get().is_some_and(|e| parents.iter_ancestors(e).any(|p| menus.contains(p))) {
         focus.clear();
     }
     for (entity, draft) in &drafts {
-        if *page != SidebarPage::Solve || setup.output != draft.original {
+        if *page != draft.page || setup.output != draft.original {
             if focus.get().is_some_and(|e| e == entity || parents.iter_ancestors(e).any(|p| p == entity)) {
                 focus.clear();
             }
@@ -299,7 +306,7 @@ fn sync(
         } else {
             "choose output fields"
         };
-        text.0 = format!("{}: {summary}", label.0.label());
+        text.set_if_neq(Text::new(format!("{}: {summary}", setup.output.label(label.0))));
     }
     for (entity, choice, hovered, mut background) in &mut choices {
         let selected = choice.is_some_and(|choice| drafts
@@ -363,12 +370,18 @@ mod tests {
     }
 
     #[test]
-    fn output_popup_opens_and_applies_through_pointer_events() {
+    fn output_popups_open_and_apply_in_materials() {
+        for target in [OutputTarget::Res, OutputTarget::Vis] {
+            assert_pointer_applies(target);
+        }
+    }
+
+    fn assert_pointer_applies(target: OutputTarget) {
         let mut app = App::new();
         crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>()
             .init_resource::<InputFocus>()
-            .insert_resource(SidebarPage::Solve)
+            .insert_resource(SidebarPage::Materials)
             .add_systems(Startup, |mut commands: Commands| {
                 commands.spawn(Node::default()).with_children(spawn);
             })
@@ -378,7 +391,7 @@ mod tests {
             .world_mut()
             .query::<(Entity, &OutputMenu)>()
             .iter(app.world())
-            .find(|(_, menu)| menu.0 == OutputTarget::Res)
+            .find(|(_, menu)| menu.0 == target)
             .unwrap()
             .0;
         let button = app.world().get::<Children>(root).unwrap()[0];
@@ -420,7 +433,7 @@ mod tests {
             app.world()
                 .resource::<AnalysisSetup>()
                 .output
-                .res
+                .get(target)
                 .value("REACTION"),
             None
         );
@@ -439,7 +452,7 @@ mod tests {
             app.world()
                 .resource::<AnalysisSetup>()
                 .output
-                .res
+                .get(target)
                 .value("REACTION"),
             Some(true)
         );
@@ -447,7 +460,7 @@ mod tests {
             app.world()
                 .resource::<AnalysisSetup>()
                 .output
-                .vis
+                .get(if target == OutputTarget::Res { OutputTarget::Vis } else { OutputTarget::Res })
                 .value("REACTION"),
             None
         );
@@ -458,7 +471,8 @@ mod tests {
         let mut app = App::new();
         crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>()
-            .init_resource::<InputFocus>();
+            .init_resource::<InputFocus>()
+            .insert_resource(SidebarPage::Solve);
         let root = app
             .world_mut()
             .spawn((OutputMenu(OutputTarget::Res), Node::default()))
@@ -524,6 +538,7 @@ mod tests {
         let popup = app
             .world_mut()
             .spawn(Draft {
+                page: SidebarPage::Solve,
                 target: OutputTarget::Vis,
                 control: original.vis.clone(),
                 original: original.clone(),
@@ -585,6 +600,7 @@ mod tests {
         let popup = app
             .world_mut()
             .spawn(Draft {
+                page: SidebarPage::Solve,
                 target: OutputTarget::Res,
                 control: original.res.clone(),
                 original,
@@ -592,7 +608,7 @@ mod tests {
             .id();
         app.update();
         assert!(app.world().get_entity(popup).is_ok());
-        *app.world_mut().resource_mut::<SidebarPage>() = SidebarPage::Results;
+        *app.world_mut().resource_mut::<SidebarPage>() = SidebarPage::Materials;
         app.update();
         assert!(app.world().get_entity(popup).is_err());
     }

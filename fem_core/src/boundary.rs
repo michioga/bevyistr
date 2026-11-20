@@ -424,6 +424,8 @@ pub struct SolverSettings {
     pub substeps: u32,
     /// Linear solver iteration limit (`!SOLVER` NITER), not Newton iterations.
     pub max_iterations: u32,
+    /// FrontISTR PRECOND code for the supported two-row SOLVER card.
+    pub preconditioner: u8,
     pub preconditioner_iterations: u32,
     /// Linear solver relative residual tolerance (`!SOLVER` RESID).
     pub convergence_tol: f32,
@@ -442,6 +444,7 @@ impl Default for SolverSettings {
             analysis_type: AnalysisType::Static,
             substeps: 1,
             max_iterations: 100,
+            preconditioner: 1,
             preconditioner_iterations: 1,
             convergence_tol: 1.0e-6,
             nonlinear_max_iterations: 50,

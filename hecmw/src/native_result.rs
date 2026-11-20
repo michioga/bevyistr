@@ -247,35 +247,48 @@ impl NativeResult {
             .iter()
             .flat_map(|e| e.nodes.iter().copied())
             .collect();
-        let indices: Vec<_> = mesh
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| used.contains(&n.id) || self.nodes.values.contains_key(&n.id.0))
-            .map(|(i, _)| i)
-            .collect();
-        let nodes: Vec<_> = indices.iter().map(|&i| mesh.nodes[i].id).collect();
+        let nodes: Vec<_> = mesh.nodes.iter().map(|n| n.id).collect();
         let elements: Vec<_> = mesh.elements.iter().map(|e| e.id).collect();
-        let mut result = self.step(&nodes, &elements, step)?;
-        if indices.len() != mesh.nodes.len() {
-            for field in &mut result.fields {
-                match field {
-                    ResultField::NodeScalar { values, .. } => {
-                        let mut expanded = vec![f32::NAN; mesh.nodes.len()];
-                        for (&i, &v) in indices.iter().zip(values.iter()) {
-                            expanded[i] = v;
-                        }
-                        *values = expanded;
+        self.step_with_mesh_ids(&nodes, &elements, &used, step)
+    }
+
+    /// Preserves mesh order and marks only omitted, unused nodes as unavailable.
+    pub fn step_with_mesh_ids(
+        &self,
+        nodes: &[NodeId],
+        elements: &[ElementId],
+        used_nodes: &std::collections::HashSet<NodeId>,
+        step: u32,
+    ) -> Result<StepResult, String> {
+        if self.nodes.layout.is_empty() {
+            return self.step(nodes, elements, step);
+        }
+        let indices: Vec<_> = nodes.iter().enumerate()
+            .filter(|(_, id)| used_nodes.contains(id) || self.nodes.values.contains_key(&id.0))
+            .map(|(index, _)| index)
+            .collect();
+        if indices.len() == nodes.len() {
+            return self.step(nodes, elements, step);
+        }
+        let present: Vec<_> = indices.iter().map(|&index| nodes[index]).collect();
+        let mut result = self.step(&present, elements, step)?;
+        for field in &mut result.fields {
+            match field {
+                ResultField::NodeScalar { values, .. } => {
+                    let mut expanded = vec![f32::NAN; nodes.len()];
+                    for (&index, &value) in indices.iter().zip(values.iter()) {
+                        expanded[index] = value;
                     }
-                    ResultField::NodeVector { values, .. } => {
-                        let mut expanded = vec![Vec3::splat(f32::NAN); mesh.nodes.len()];
-                        for (&i, &v) in indices.iter().zip(values.iter()) {
-                            expanded[i] = v;
-                        }
-                        *values = expanded;
-                    }
-                    _ => {}
+                    *values = expanded;
                 }
+                ResultField::NodeVector { values, .. } => {
+                    let mut expanded = vec![Vec3::splat(f32::NAN); nodes.len()];
+                    for (&index, &value) in indices.iter().zip(values.iter()) {
+                        expanded[index] = value;
+                    }
+                    *values = expanded;
+                }
+                _ => {}
             }
         }
         Ok(result)

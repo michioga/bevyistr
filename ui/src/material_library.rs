@@ -1,9 +1,10 @@
 //! Library selections are drafts. Only final confirmation changes AnalysisSetup.
+use bevy::ui_widgets::ScrollArea;
 use crate::{ButtonInteraction, InteractionButton};
-use crate::layout::{ScrollableList, SidebarPage};
+use crate::layout::{SidebarPage, spawn_vertical_scrollbar};
 use crate::material_catalog::{Catalog, LibraryUnits, default_path, read_standard};
 use crate::materials_ui::{SelectedEgrp, SelectedMaterialForSection};
-use bevy::{prelude::*, ui::ScrollPosition};
+use bevy::prelude::*;
 use fem_core::{AnalysisSetup, FemMaterial};
 use std::{
     path::PathBuf,
@@ -180,18 +181,29 @@ pub(crate) fn spawn_material_library(parent: &mut ChildSpawnerCommands) {
                 );
             }
         });
-    parent.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: px(3.0),
-            max_height: px(116.0),
-            overflow: Overflow::scroll_y(),
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(3.0),
             ..default()
-        },
-        ScrollableList,
-        ScrollPosition::default(),
-        LibraryList,
-    ));
+        })
+        .with_children(|row| {
+            let list = row
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        flex_grow: 1.0,
+                        row_gap: px(3.0),
+                        max_height: px(116.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    ScrollArea,
+                    LibraryList,
+                ))
+                .id();
+            spawn_vertical_scrollbar(row, list);
+        });
     parent.spawn((
         Text::new("Select a material; confirm below"),
         TextFont {

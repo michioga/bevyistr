@@ -13,10 +13,12 @@ pub(crate) fn enable_menu_widgets(app: &mut App) {
     // Tab navigation checks inherited visibility before focusing menu items.
     app.init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+        .init_resource::<bevy::input_focus::InputFocusVisible>()
         .add_plugins((
             bevy::camera::visibility::VisibilityPlugin,
             bevy::ui_widgets::ButtonPlugin,
             bevy::ui_widgets::MenuPlugin,
+            bevy::ui_widgets::ListBoxPlugin,
         ));
 }
 
@@ -104,4 +106,9 @@ pub(crate) fn click(world: &mut World, entity: Entity) {
         });
         world.flush();
     }
+}
+
+pub(crate) fn active_list_row(world: &World) -> Option<Entity> {
+    let list = world.resource::<bevy::input_focus::InputFocus>().get()?;
+    world.get::<bevy::ui_widgets::ActiveDescendant>(list)?.0
 }

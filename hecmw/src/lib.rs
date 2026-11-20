@@ -123,9 +123,9 @@ impl From<HecmwParseError> for HecmwLoadError {
 enum Section {
     Ignore,
 
-    Node,
+    Node { group: Option<usize> },
 
-    Element(ElementType),
+    Element { element_type: ElementType, group: Option<usize> },
 
     NodeGroup { index: usize, generate: bool },
 
@@ -730,10 +730,19 @@ pub fn parse_mesh_str(source: &str) -> Result<FemMesh, HecmwParseError> {
 
         match &section {
             Section::Ignore => {}
-            Section::Node => mesh.nodes.push(parse_node(line, line_number)?),
-            Section::Element(element_type) => {
-                mesh.elements
-                    .push(parse_element(line, line_number, element_type.clone())?)
+            Section::Node { group } => {
+                let node = parse_node(line, line_number)?;
+                if let Some(index) = group {
+                    mesh.node_sets[*index].nodes.push(node.id);
+                }
+                mesh.nodes.push(node);
+            }
+            Section::Element { element_type, group } => {
+                let element = parse_element(line, line_number, element_type.clone())?;
+                if let Some(index) = group {
+                    mesh.element_sets[*index].elements.push(element.id);
+                }
+                mesh.elements.push(element);
             }
             Section::NodeGroup { index, generate } => {
                 let nodes = parse_node_group_line(line, line_number, *generate)?;
@@ -759,6 +768,15 @@ pub fn parse_mesh_str(source: &str) -> Result<FemMesh, HecmwParseError> {
         }
     }
 
+    // Header-assigned members may also appear in explicit group cards.
+    for set in &mut mesh.node_sets {
+        let mut seen = std::collections::HashSet::new();
+        set.nodes.retain(|id| seen.insert(*id));
+    }
+    for set in &mut mesh.element_sets {
+        let mut seen = std::collections::HashSet::new();
+        set.elements.retain(|id| seen.insert(*id));
+    }
     mesh.rebuild_topology_cache();
 
     Ok(mesh)
@@ -772,7 +790,8 @@ fn parse_section(
     let command = line.to_ascii_uppercase();
 
     if command.starts_with("!NODE") {
-        return Ok(Section::Node);
+        let group = parse_attribute(line, "NGRP").map(|name| node_group_index(mesh, name));
+        return Ok(Section::Node { group });
     }
 
     if command.starts_with("!ELEMENT") {
@@ -783,16 +802,18 @@ fn parse_section(
             ));
         };
 
-        return Ok(Section::Element(parse_element_type(&raw_type)));
+        let group = parse_attribute(line, "EGRP").map(|name| element_group_index(mesh, name));
+        return Ok(Section::Element {
+            element_type: parse_element_type(&raw_type),
+            group,
+        });
     }
 
     if command.starts_with("!NGROUP") {
         let name = parse_attribute(line, "NGRP")
             .ok_or_else(|| HecmwParseError::new(line_number, "missing NGRP=... in !NGROUP"))?;
         let generate = has_flag(line, "GENERATE");
-        let index = mesh.node_sets.len();
-
-        mesh.node_sets.push(FemNodeSet::new(name));
+        let index = node_group_index(mesh, name);
 
         return Ok(Section::NodeGroup { index, generate });
     }
@@ -801,9 +822,7 @@ fn parse_section(
         let name = parse_attribute(line, "EGRP")
             .ok_or_else(|| HecmwParseError::new(line_number, "missing EGRP=... in !EGROUP"))?;
         let generate = has_flag(line, "GENERATE");
-        let index = mesh.element_sets.len();
-
-        mesh.element_sets.push(FemElementSet::new(name));
+        let index = element_group_index(mesh, name);
 
         return Ok(Section::ElementGroup { index, generate });
     }
@@ -819,6 +838,24 @@ fn parse_section(
     }
 
     Ok(Section::Ignore)
+}
+
+fn node_group_index(mesh: &mut FemMesh, name: String) -> usize {
+    if let Some(index) = mesh.node_sets.iter().position(|set| set.name == name) {
+        index
+    } else {
+        mesh.node_sets.push(FemNodeSet::new(name));
+        mesh.node_sets.len() - 1
+    }
+}
+
+fn element_group_index(mesh: &mut FemMesh, name: String) -> usize {
+    if let Some(index) = mesh.element_sets.iter().position(|set| set.name == name) {
+        index
+    } else {
+        mesh.element_sets.push(FemElementSet::new(name));
+        mesh.element_sets.len() - 1
+    }
 }
 
 fn parse_node(line: &str, line_number: usize) -> Result<FemNode, HecmwParseError> {
@@ -1409,6 +1446,39 @@ mod tests {
             mesh.surface_sets[0].surfaces,
             vec![ElementFaceRef::new(ElementId(10), LocalFaceId(1))]
         );
+    }
+
+    #[test]
+    fn header_groups_merge_with_explicit_memberships_for_sections_and_constraints() {
+        let source = "
+!NODE, NGRP=FIX
+ 1, 0, 0, 0
+ 2, 1, 0, 0
+!NODE
+ 3, 0, 1, 0
+ 4, 0, 0, 1
+!ELEMENT, TYPE=341, EGRP=P1
+ 10, 1, 2, 3, 4
+!NGROUP, NGRP=FIX
+ 2, 3
+!EGROUP, EGRP=P1
+ 10
+!SECTION, TYPE=SOLID, EGRP=P1, MATERIAL=M1
+!MATERIAL, NAME=M1, ITEM=1
+!ITEM=1, SUBITEM=2
+ 210000, 0.3
+!END";
+        let mesh = parse_mesh_str(source).unwrap();
+        let (materials, sections) = parse_msh_setup(source, 0);
+        assert_eq!(mesh.node_sets.len(), 1);
+        assert_eq!(mesh.node_sets[0].nodes, [1, 2, 3].map(NodeId));
+        assert_eq!(mesh.element_sets.len(), 1);
+        assert_eq!(mesh.element_sets[0].elements, [ElementId(10)]);
+        assert_eq!(sections[0].element_set_name.as_deref(), Some("P1"));
+        let model = fem_core::FemModel::single_mesh("fixture", mesh);
+        let setup = fem_core::AnalysisSetup { materials, sections, ..Default::default() };
+        let report = validate_frontistr_project(&model, &setup);
+        assert!(!report.has_errors(), "{}", report.summary(10));
     }
 
     #[test]

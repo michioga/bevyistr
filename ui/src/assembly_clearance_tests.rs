@@ -4,6 +4,8 @@ use super::*;
 #[test]
 fn clearance_scheduling_integrates_with_ui_and_viewport_phases() {
     let mut app = App::new();
+    app.add_plugins((bevy::app::TaskPoolPlugin::default(), bevy::asset::AssetPlugin::default()))
+        .init_asset::<bevy::shader::Shader>();
     app.add_plugins((
         interaction::InteractionPlugin,
         selection::SelectionPlugin,

@@ -3,7 +3,7 @@ use crate::layout::{SidebarPage, SidebarPageContent};
 use crate::project_io::{ExportButton, ExportStatusText, OpenSetupButton};
 use crate::solver_editor::spawn_solver_exact_editor;
 use crate::solver_runner::spawn_solver_execution_ui;
-use bevy::prelude::*;
+use bevy::{prelude::*, text::LineBreak};
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -12,6 +12,9 @@ const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 
 #[derive(Component)]
 pub(crate) struct AnalysisSetupStatsText;
+
+#[derive(Component)]
+pub(crate) struct CntImportDetails;
 
 #[derive(Component)]
 pub(crate) struct SetupImportWarningText;
@@ -55,7 +58,7 @@ pub(crate) fn update_import_warning(
             "Mesh / result viewing is available."
         };
         let details = if *page == SidebarPage::Solve {
-            "Details below."
+            "Details at the bottom of Solve."
         } else {
             "Details: Solve."
         };
@@ -190,45 +193,65 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
 
     crate::output_ui::spawn(parent);
     spawn_solver_execution_ui(parent);
+
+    parent
+        .spawn((
+            Node { flex_direction: FlexDirection::Column, ..default() },
+            SidebarPageContent::page(SidebarPage::Solve),
+        ))
+        .with_child((
+            Text::new(""),
+            TextFont { font_size: FontSize::Px(10.5), ..default() },
+            TextLayout { linebreak: LineBreak::WordOrCharacter, ..default() },
+            TextColor(TEXT_MUTED),
+            Node { display: Display::None, ..default() },
+            CntImportDetails,
+        ));
 }
 
 pub(crate) fn update_analysis_setup_stats_text(
     setup: Res<fem_core::AnalysisSetup>,
     mut query: Query<&mut Text, With<AnalysisSetupStatsText>>,
+    mut details: Query<(&mut Text, &mut Node), (With<CntImportDetails>, Without<AnalysisSetupStatsText>)>,
 ) {
     if !setup.is_changed() {
         return;
     }
 
-    let Ok(mut text) = query.single_mut() else {
-        return;
-    };
-
-    **text = if setup.is_empty() {
-        "Setup: none loaded".to_string()
-    } else {
-        let constrained_nodes: usize = setup
-            .boundary_conditions
-            .iter()
-            .map(|condition| condition.nodes.len())
-            .sum();
-
-        format!(
-            "Setup: BC {} ({} nodes)  Loads {}  MPC {}  Materials {}  Sections {}",
-            setup.boundary_conditions.len(),
-            constrained_nodes,
-            setup.nodal_loads.len() + setup.distributed_loads.len(),
-            setup.mpc_equations.len(),
-            setup.materials.len(),
-            setup.sections.len(),
-        )
-    };
-    if !setup.import_issues.is_empty() {
-        text.0.push_str("\n\nCNT RE-EXPORT LIMITATION\nbevyistr cannot preserve all imported CNT settings.\nShown solver controls cover only the supported subset.\nEntries below identify conversion limits in this editor.\n");
-        for issue in &setup.import_issues {
-            text.0.push_str(&format!("\n{issue}\n"));
+    if let Ok(mut text) = query.single_mut() {
+        let mut summary = if setup.is_empty() {
+            "Setup: none loaded".to_string()
+        } else {
+            let constrained_nodes: usize = setup.boundary_conditions.iter()
+                .map(|condition| condition.nodes.len())
+                .sum();
+            format!(
+                "Setup: BC {} ({} nodes)  Loads {}  MPC {}  Materials {}  Sections {}",
+                setup.boundary_conditions.len(),
+                constrained_nodes,
+                setup.nodal_loads.len() + setup.distributed_loads.len(),
+                setup.mpc_equations.len(),
+                setup.materials.len(),
+                setup.sections.len()
+            )
+        };
+        if setup.solver.preconditioner != 1 {
+            summary.push_str(&format!("\nImported solver PRECOND={}", setup.solver.preconditioner));
         }
-        text.0.push_str("\nExport / Run blocked to prevent settings loss. Mesh and saved results remain viewable. Keep the original input for external runs; changing a dropdown does not resolve omitted settings.");
+        text.set_if_neq(Text::new(summary));
+    }
+
+    if let Ok((mut text, mut node)) = details.single_mut() {
+        node.display = if setup.import_issues.is_empty() { Display::None } else { Display::Flex };
+        if setup.import_issues.is_empty() {
+            text.0.clear();
+        } else {
+            let mut message = String::from("CNT RE-EXPORT DETAILS\nExport / Run is blocked to prevent settings loss.\n");
+            for issue in &setup.import_issues {
+                message.push_str(&format!("\n{issue}\n"));
+            }
+            text.set_if_neq(Text::new(message));
+        }
     }
 }
 
@@ -251,7 +274,7 @@ mod tests {
             .id();
         let details = app
             .world_mut()
-            .spawn((Text::new(""), AnalysisSetupStatsText))
+            .spawn((Text::new(""), Node::default(), CntImportDetails))
             .id();
         app.update();
         assert_eq!(
@@ -298,7 +321,7 @@ mod tests {
                 .get::<Text>(notice)
                 .unwrap()
                 .0
-                .contains("Details below")
+                .contains("Details at the bottom of Solve")
         );
         assert_eq!(
             app.world()

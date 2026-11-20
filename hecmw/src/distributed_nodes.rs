@@ -14,6 +14,68 @@ pub fn owned_nodes(reader: impl BufRead, rank: u16, ranks: u16) -> Result<HashSe
 pub fn owned_entities(reader: impl BufRead, rank: u16, ranks: u16) -> Result<Ownership, String> {
     read_ownership(reader, rank, ranks, true)
 }
+/// Loads and validates owner IDs for a complete, rank-ordered set of meshes.
+pub fn read_partition_owners(paths: &[std::path::PathBuf]) -> Result<Vec<Ownership>, String> {
+    let ranks = u16::try_from(paths.len()).map_err(|_| "Too many MPI rank meshes")?;
+    let mut all_nodes = HashSet::new();
+    let mut all_elements = HashSet::new();
+    paths
+        .iter()
+        .enumerate()
+        .map(|(rank, path)| {
+            let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let owners = owned_entities(std::io::BufReader::new(file), rank as u16, ranks)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            if owners.nodes.iter().any(|id| !all_nodes.insert(*id))
+                || owners.elements.iter().any(|id| !all_elements.insert(*id))
+            {
+                return Err(format!(
+                    "{}: MPI nodes or elements have multiple owners",
+                    path.display()
+                ));
+            }
+            Ok(owners)
+        })
+        .collect()
+}
+
+/// Merge only each rank's owned records. Ghost values can differ from the
+/// owner and must never be averaged or used as a substitute.
+pub fn read_partitioned_step(
+    files: &[&std::path::Path],
+    owners: Option<&[Ownership]>,
+) -> Result<crate::native_result::NativeResult, String> {
+    if owners.is_some_and(|maps| maps.len() != files.len())
+        || (owners.is_none() && files.len() != 1)
+    {
+        return Err("Result files and MPI ownership maps disagree".into());
+    }
+    let mut merged: Option<crate::native_result::NativeResult> = None;
+    for (rank, path) in files.iter().enumerate() {
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            format!(
+                "{}: {e}. Only ASCII .res is supported here.",
+                path.display()
+            )
+        })?;
+        let mut load = || -> Result<_, String> {
+            let mut raw = crate::native_result::NativeResult::parse(source.trim_start())?;
+            if let Some(owners) = owners {
+                raw.retain_owned_nodes(&owners[rank].nodes)?;
+                raw.retain_owned_elements(&owners[rank].elements)?;
+            }
+            if let Some(merged) = &mut merged {
+                merged.merge(raw)?;
+            } else {
+                merged = Some(raw);
+            }
+            Ok(())
+        };
+        load().map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    merged.ok_or_else(|| "No result partitions".into())
+}
+
 struct Numbers<I>(I);
 impl<I: Iterator<Item = Result<String, String>>> Numbers<I> {
     fn token(&mut self) -> Result<String, String> {

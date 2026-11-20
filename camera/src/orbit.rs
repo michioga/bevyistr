@@ -1,6 +1,13 @@
+use bevy::camera_controller::pan_orbit_camera::controller::{
+    component::{OrbitConstraint, PanOrbitCamera},
+    motion::CurrentMotion,
+};
 use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::window::RequestRedraw;
 use fem_core::{InteractionMode, UiPointerState};
+use std::time::Duration;
 
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationScheme {
@@ -21,6 +28,7 @@ impl NavigationScheme {
 }
 
 #[derive(Component)]
+#[require(PanOrbitCamera = screen_space_orbit())]
 pub struct OrbitCamera {
     pub focus: Vec3,
     pub radius: f32,
@@ -81,13 +89,15 @@ pub fn orbit_camera_up(direction_from_focus: Vec3) -> Vec3 {
     }
 }
 
-fn orbit_rotation(rotation: Quat, drag: Vec2) -> Quat {
-    const RADIANS_PER_PIXEL: f32 = 0.005;
-
-    // World Y may point into the screen. A horizontal drag must still
-    // turn around screen up so the visible base of a part stays below it.
-    let screen_rotation = Vec3::new(-drag.y, -drag.x, 0.0) * RADIANS_PER_PIXEL;
-    (rotation * Quat::from_scaled_axis(screen_rotation)).normalize()
+fn screen_space_orbit() -> PanOrbitCamera {
+    let mut controller = PanOrbitCamera {
+        // A horizontal drag turns about the screen's up axis even in the exact top view.
+        orbit_constraint: OrbitConstraint::Free,
+        ..default()
+    };
+    controller.smoothing.orbit = Duration::ZERO;
+    controller.smoothing.pan = Duration::ZERO;
+    controller
 }
 
 pub fn orbit_camera_system(
@@ -95,7 +105,14 @@ pub fn orbit_camera_system(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut motion_evr: MessageReader<MouseMotion>,
     mut wheel_evr: MessageReader<MouseWheel>,
-    mut query: Query<(&mut Transform, &mut OrbitCamera)>,
+    mut query: Query<(
+        &mut Transform,
+        &mut OrbitCamera,
+        &mut PanOrbitCamera,
+        &Camera,
+        &mut Projection,
+    )>,
+    mut redraw: MessageWriter<RequestRedraw>,
     mut mode: ResMut<InteractionMode>,
     mut ui_pointer: ResMut<UiPointerState>,
     scheme: Res<NavigationScheme>,
@@ -111,7 +128,8 @@ pub fn orbit_camera_system(
         ui_pointer.navigating = navigating;
     }
 
-    let Ok((mut transform, mut orbit)) = query.single_mut() else {
+    let Ok((mut transform, mut orbit, mut controller, camera, projection)) = query.single_mut()
+    else {
         return;
     };
 
@@ -121,29 +139,45 @@ pub fn orbit_camera_system(
         rotation_move += ev.delta;
     }
 
-    if !over_ui && (buttons.pressed(MouseButton::Middle) || *emulating_middle) {
-        let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-        let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let dragging = !over_ui && (buttons.pressed(MouseButton::Middle) || *emulating_middle);
+    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl_zoom =
+        *emulating_middle && keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
-        if *emulating_middle && ctrl {
+    if !dragging || ctrl_zoom {
+        if controller.current_motion.is_moving() {
+            controller.current_motion = CurrentMotion::Stationary;
+        }
+        if dragging {
             let factor = (-rotation_move.y * 0.01).exp();
             orbit.radius = (orbit.radius * factor).clamp(orbit.min_radius, orbit.max_radius);
-        } else if shift {
-            // Pan: slide the focus (and target_focus) along the camera's
-            // local right/up plane. Speed is proportional to `radius` so
-            // the scene moves at roughly the same rate as the cursor
-            // regardless of zoom level.
-            let pan_scale = orbit.radius * 0.0012;
+        }
+    } else if rotation_move != Vec2::ZERO && camera.logical_viewport_size().is_some() {
+        let anchor = Some(-DVec3::Z * f64::from(orbit.radius));
+        if shift && !controller.current_motion.is_panning() {
+            controller.start_pan(anchor);
+        } else if !shift && !controller.current_motion.is_orbiting() {
+            controller.start_orbit(anchor);
+        }
 
-            let right = transform.rotation * Vec3::X;
-            let up = transform.rotation * Vec3::Y;
-
-            let delta = -right * rotation_move.x * pan_scale + up * rotation_move.y * pan_scale;
-
-            orbit.focus += delta;
-            orbit.target_focus += delta;
-        } else if rotation_move != Vec2::ZERO {
-            transform.rotation = orbit_rotation(transform.rotation, rotation_move);
+        controller.send_screenspace_input(rotation_move);
+        let rotation = transform.rotation.as_dquat();
+        let translation = transform.translation.as_dvec3();
+        if let Some((delta, turn)) = controller.update_transform_and_projection(
+            camera,
+            &translation,
+            &rotation,
+            projection,
+            &mut redraw,
+            Duration::ZERO,
+        ) {
+            if shift {
+                let delta = (rotation * delta).as_vec3();
+                orbit.focus += delta;
+                orbit.target_focus += delta;
+            } else {
+                transform.rotation = (rotation * turn).as_quat().normalize();
+            }
         }
     }
 
@@ -179,6 +213,7 @@ pub fn orbit_camera_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::input::touch::TouchPhase;
 
@@ -194,12 +229,27 @@ mod tests {
         });
         app.add_message::<MouseMotion>();
         app.add_message::<MouseWheel>();
+        app.add_message::<RequestRedraw>();
         app.add_systems(Update, orbit_camera_system);
 
         let window = app.world_mut().spawn_empty().id();
         let camera = app
             .world_mut()
             .spawn((
+                Camera {
+                    computed: ComputedCameraValues {
+                        target_info: Some(RenderTargetInfo {
+                            physical_size: UVec2::new(1280, 720),
+                            scale_factor: 1.0,
+                        }),
+                        ..default()
+                    },
+                    ..default()
+                },
+                Projection::Perspective(PerspectiveProjection {
+                    aspect_ratio: 1280.0 / 720.0,
+                    ..default()
+                }),
                 Transform::from_xyz(0.0, 0.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
                 OrbitCamera {
                     focus: Vec3::ZERO,
@@ -354,8 +404,14 @@ mod tests {
     #[test]
     fn vertical_drag_crosses_world_poles_without_flipping_the_screen() {
         for sign in [-1.0, 1.0] {
-            let near_pole = orbit_rotation(Quat::IDENTITY, Vec2::new(0.0, sign * 280.0));
-            let past_pole = orbit_rotation(near_pole, Vec2::new(0.0, sign * 70.0));
+            let (mut app, _, camera) = test_app(false);
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(MouseButton::Middle);
+            drag(&mut app, Vec2::new(0.0, sign * 280.0));
+            let near_pole = app.world().get::<Transform>(camera).unwrap().rotation;
+            drag(&mut app, Vec2::new(0.0, sign * 70.0));
+            let past_pole = app.world().get::<Transform>(camera).unwrap().rotation;
             assert!((near_pole * Vec3::Z).z > 0.0);
             assert!((past_pole * Vec3::Z).z < 0.0);
             assert!((near_pole * Vec3::Y).dot(past_pole * Vec3::Y) > 0.9);

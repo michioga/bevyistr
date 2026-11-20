@@ -39,6 +39,8 @@ mod eigen_settings;
 mod solver_settings_tests;
 #[path = "write_settings.rs"]
 mod write_settings;
+#[path = "cnt_visual.rs"]
+mod visual;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
@@ -427,6 +429,9 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         "DIRECTMKL" | "MKL" => LinearSolverMethod::DirectMkl,
                         _ => LinearSolverMethod::Cg,
                     };
+                }
+                if let Some(value) = header.params.get("PRECOND").and_then(|v| v.parse().ok()) {
+                    solver.preconditioner = value;
                 }
                 // The first two SOLVER data rows belong to the linear solve,
                 // independent of STEP ordering. Remaining options are audited
@@ -835,7 +840,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
         }
     }
 
-    data.import_issues = compatibility::audit(text, &data);
+    (data.import_issues, data.output.visual) = compatibility::audit(text, &data);
     data
 }
 

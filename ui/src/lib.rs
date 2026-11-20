@@ -30,6 +30,7 @@ mod probe_history_data;
 mod probe_history_csv;
 mod playback_controls;
 mod result_seek;
+mod result_number_input;
 #[cfg(test)]
 mod widget_test_input;
 mod output_ui;
@@ -43,6 +44,7 @@ mod solver_editor;
 mod solver_menu;
 mod popup_keyboard;
 mod popup_trigger;
+mod popup_select;
 mod app_settings;
 mod navigation_ui;
 mod run_output;
@@ -100,8 +102,8 @@ use contact_ui::{
     update_contact_review_settings,
 };
 use layout::{
-    SidebarPage, UndoInProgress, UndoStack, delete_setup_entry_button_system, handle_panel_wheel,
-    handle_scrollable_list_wheel, push_undo_before_setup_change, render_mode_button_system,
+    SidebarPage, UndoInProgress, UndoStack, delete_setup_entry_button_system,
+    push_undo_before_setup_change, render_mode_button_system,
     sidebar_page_button_system, spawn_ui, undo_redo_system, update_sidebar_page_visibility,
     update_ui_pointer_state,
 };
@@ -179,11 +181,15 @@ impl Plugin for UiPlugin {
         );
         app.add_systems(
             PostUpdate,
-            slider::sync_slider_visuals.before(bevy::ui::UiSystems::Layout),
+            (
+                slider::sync_slider_visuals.before(bevy::ui::UiSystems::Layout),
+                popup_select::reveal_focused_row.after(bevy::ui::UiSystems::Layout),
+            ),
         );
         if !app.is_plugin_added::<bevy::input_focus::tab_navigation::TabNavigationPlugin>() {
             app.add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin);
         }
+        result_number_input::register(app);
         result_menu::register(app);
         result_range_ui::register(app);
         result_probe_ui::register(app);
@@ -329,8 +335,6 @@ impl Plugin for UiPlugin {
             Update,
             (
                 update_ui_pointer_state.in_set(InteractionSystems::UiInput),
-                handle_scrollable_list_wheel.in_set(InteractionSystems::UiInput),
-                handle_panel_wheel.in_set(InteractionSystems::UiInput),
                 sidebar_page_button_system,
                 update_sidebar_page_visibility.after(sidebar_page_button_system),
                 open_project_button_system,

@@ -149,6 +149,11 @@ pub(crate) fn open_result_button_system(
         else {
             continue;
         };
+        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("inp")) {
+            error.0 = Some("MicroAVS .inp results cannot be displayed. Choose a .res.rank.step file from the same run, or a VTU/PVTU result.".into());
+            state.status = "Result not opened; previous display retained.".into();
+            continue;
+        }
         let vtk = path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("vtu") || e.eq_ignore_ascii_case("pvtu"));

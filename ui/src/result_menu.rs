@@ -1,8 +1,9 @@
 //! Result-driven popup menu, following the supplied bevy_menu example.
+use bevy::ui_widgets::ScrollArea;
 #[cfg(test)]
 use crate::ButtonInteraction;
 use crate::InteractionButton;
-use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
+use crate::layout::{SidebarPage, UiInputCapture};
 use bevy::{
     input_focus::{
         FocusCause, InputFocus,
@@ -10,10 +11,10 @@ use bevy::{
     },
     picking::hover::Hovered,
     prelude::*,
-    ui::{InteractionDisabled, ScrollPosition},
+    ui::{InteractionDisabled, ScrollPosition, Selected},
     ui_widgets::{
-        Activate, Button as WidgetButton, MenuAction, MenuButton, MenuEvent, MenuFocusState,
-        MenuItem, MenuPopup,
+        Activate, ActiveDescendant, Button as WidgetButton, ListItem, MenuAction, MenuButton,
+        MenuEvent, MenuFocusState, MenuPopup, ValueChange,
         popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
     },
 };
@@ -24,6 +25,8 @@ use visualization::{ContourSettings, VisualizationSettings};
 struct FieldMenu;
 #[derive(Component)]
 struct FieldButton;
+#[derive(Component)]
+struct FieldChoices;
 #[derive(Component)]
 enum FieldLabel {
     Button,
@@ -142,13 +145,13 @@ mod tests {
         crate::widget_test_input::click(app.world_mut(), button); app.update();
         let popup = app.world_mut().query_filtered::<Entity, With<FieldPopup>>().single(app.world()).unwrap();
         crate::widget_test_input::key(&mut app, KeyCode::End);
-        let last = app.world().resource::<InputFocus>().get().unwrap();
+        let last = crate::widget_test_input::active_list_row(app.world()).unwrap();
         assert_eq!(app.world().get::<Choice>(last).unwrap().name, "Second");
         crate::widget_test_input::key(&mut app, KeyCode::Home);
-        let first = app.world().resource::<InputFocus>().get().unwrap();
+        let first = crate::widget_test_input::active_list_row(app.world()).unwrap();
         assert_eq!(app.world().get::<Choice>(first).unwrap().name, "First");
         crate::widget_test_input::key(&mut app, KeyCode::ArrowDown);
-        let focused = app.world().resource::<InputFocus>().get().unwrap();
+        let focused = crate::widget_test_input::active_list_row(app.world()).unwrap();
         assert_eq!(app.world().get::<Choice>(focused).unwrap().name, "Second");
         crate::widget_test_input::key(&mut app, KeyCode::Enter);
         assert!(app.world().get_entity(popup).is_err());
@@ -544,7 +547,7 @@ fn menu_event(
                     GlobalZIndex(200),
                     OverrideClip,
                     UiInputCapture,
-                    ScrollableList,
+                    ScrollArea,
                     ScrollPosition::default(),
                     Node {
                         position_type: PositionType::Absolute,
@@ -579,18 +582,17 @@ fn menu_event(
                         choices.len()
                     )));
                     popup.spawn(text("Click a field to change the contour. Esc cancels."));
-                    for (name, label) in choices {
-                        let selected = results
-                            .active
-                            .as_ref()
-                            .is_some_and(|a| a.field_name == name);
-                        let label = format!("{} {label}", if selected { "[x]" } else { "[ ]" });
-                        popup
-                            .spawn((
-                                MenuItem,
+                    crate::popup_select::list(popup, nav, |list| {
+                        choices.into_iter().map(|(name, label)| {
+                            let selected = results
+                                .active
+                                .as_ref()
+                                .is_some_and(|a| a.field_name == name);
+                            let label = format!("{} {label}", if selected { "[x]" } else { "[ ]" });
+                            let mut row = list.spawn((
+                                ListItem,
                                 Choice { name },
                                 Hovered::default(),
-                                TabIndex(0),
                                 Node {
                                     min_height: px(26),
                                     flex_shrink: 0.0,
@@ -598,11 +600,15 @@ fn menu_event(
                                     ..default()
                                 },
                                 BackgroundColor(Color::srgb(0.1, 0.14, 0.17)),
-                            ))
-                            .observe(choose_field)
-                            .observe(crate::popup_keyboard::handle)
-                            .with_child(text(label));
-                    }
+                            ));
+                            if selected {
+                                row.insert(Selected);
+                            }
+                            row.with_child(text(label)).id()
+                        }).collect()
+                    })
+                    .insert(FieldChoices)
+                    .observe(choose_field);
                 });
         }
     }
@@ -634,12 +640,14 @@ fn select(name: &str, results: &mut FemResultSet, settings: &mut VisualizationSe
     true
 }
 fn choose_field(
-    event: On<Activate>,
+    event: On<ValueChange<Entity>>,
     choices: Query<&Choice>,
     mut results: ResMut<FemResultSet>,
     mut settings: ResMut<VisualizationSettings>,
+    mut commands: Commands,
 ) {
-    if let Ok(choice) = choices.get(event.entity) {
+    crate::popup_select::dismiss(event.source, &mut commands);
+    if let Ok(choice) = choices.get(event.value) {
         select(&choice.name, &mut results, &mut settings);
     }
 }
@@ -685,7 +693,8 @@ fn sync(
     mut scale_sections: Query<&mut Node, With<DeformationScaleSection>>,
     mut items: Query<(Entity, &Choice, &Hovered, &mut BackgroundColor)>,
     mut focus: ResMut<InputFocus>,
-    menu_focus: Query<(), Or<(With<FieldButton>, With<Choice>)>>,
+    lists: Query<&ActiveDescendant>,
+    menu_focus: Query<(), Or<(With<FieldButton>, With<FieldChoices>)>>,
     mut field_count: Local<usize>,
 ) {
     let mut settings = settings;
@@ -779,12 +788,13 @@ fn sync(
             Display::None
         };
     }
+    let active_row = crate::popup_select::active_row(&focus, &lists);
     for (entity, choice, hovered, mut color) in &mut items {
         let selected = results
             .active
             .as_ref()
             .is_some_and(|a| a.field_name == choice.name);
-        color.set_if_neq(BackgroundColor(if focus.get() == Some(entity) {
+        color.set_if_neq(BackgroundColor(if active_row == Some(entity) {
             Color::srgb(0.22, 0.40, 0.47)
         } else if selected {
             Color::srgb(0.16, 0.43, 0.51)

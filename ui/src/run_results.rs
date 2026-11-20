@@ -1,9 +1,9 @@
 //! Result files belonging to one run. Snapshotting is read-only: old results
 //! remain on disk, but are never silently mixed into this run's timeline.
 use fem_core::{ElementId, NodeId, StepResult};
-use hecmw::native_result::NativeResult;
+use hecmw::distributed_nodes::{read_partition_owners, read_partitioned_step};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -98,38 +98,33 @@ impl RunResultSource {
     pub(crate) fn load(&self, parts: &[Vec<NodeId>]) -> Result<Vec<Vec<StepResult>>, String> {
         self.load_with_elements(parts, &[])
     }
+    #[cfg(test)]
     pub(crate) fn load_with_elements(
         &self,
         parts: &[Vec<NodeId>],
         elements: &[Vec<ElementId>],
+    ) -> Result<Vec<Vec<StepResult>>, String> {
+        self.load_with_mesh_ids(parts, elements, None)
+    }
+
+    pub(crate) fn load_with_mesh_ids(
+        &self,
+        parts: &[Vec<NodeId>],
+        elements: &[Vec<ElementId>],
+        used_nodes: Option<&[HashSet<NodeId>]>,
     ) -> Result<Vec<Vec<StepResult>>, String> {
         if parts.iter().all(Vec::is_empty) {
             return Err("No model nodes for these results".into());
         }
         let mut partition_stamps = Vec::new();
         let owners = if let Some(prefix) = &self.partition_prefix {
-            let mut owners = Vec::new();
-            let mut all = std::collections::HashSet::new();
-            let mut all_elements = std::collections::HashSet::new();
-            for rank in 0..self.ranks {
-                let path = self.directory.join(format!("{prefix}.{rank}"));
-                let expected = stamp(&path)?;
-                let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-                let ids = hecmw::distributed_nodes::owned_entities(
-                    std::io::BufReader::new(file),
-                    rank,
-                    self.ranks,
-                )
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-                if ids.nodes.iter().any(|id| !all.insert(*id))
-                    || ids.elements.iter().any(|id| !all_elements.insert(*id))
-                {
-                    return Err("MPI nodes have multiple owners".into());
-                }
-                owners.push(ids);
-                partition_stamps.push((path, expected));
+            let paths: Vec<_> = (0..self.ranks)
+                .map(|rank| self.directory.join(format!("{prefix}.{rank}")))
+                .collect();
+            for path in &paths {
+                partition_stamps.push((path.clone(), stamp(path)?));
             }
-            Some(owners)
+            Some(read_partition_owners(&paths)?)
         } else if self.ranks > 1 {
             return Err("MPI result loading requires this run's distributed node ownership".into());
         } else {
@@ -157,38 +152,23 @@ impl RunResultSource {
         }
         let mut by_mesh: Vec<Vec<StepResult>> = parts.iter().map(|_| Vec::new()).collect();
         for step in steps {
-            let mut merged: Option<NativeResult> = None;
-            for rank in 0..self.ranks {
-                let (path, expected) = fresh.get(&(step,rank))
+            let paths = (0..self.ranks).map(|rank| {
+                let (path, expected) = fresh.get(&(step, rank))
                     .ok_or_else(|| format!("Step {step}: missing/unchanged result for MPI rank {rank}. No partial result was loaded."))?;
                 if expected.bytes == 0 {
                     return Err(format!("Empty result file: {}", path.display()));
                 }
-                let source = std::fs::read_to_string(path).map_err(|e| {
-                    format!(
-                        "{}: {e}. Only ASCII .res is supported here.",
-                        path.display()
-                    )
-                })?;
-                let mut raw =
-                    NativeResult::parse(&source).map_err(|e| format!("{}: {e}", path.display()))?;
-                if let Some(owners) = &owners {
-                    raw.retain_owned_nodes(&owners[usize::from(rank)].nodes)?;
-                    raw.retain_owned_elements(&owners[usize::from(rank)].elements)?;
-                }
-                if let Some(merged) = &mut merged {
-                    merged.merge(raw)?;
-                } else {
-                    merged = Some(raw);
-                }
-            }
-            let raw = merged.ok_or("No result partitions")?;
+                Ok(path.as_path())
+            }).collect::<Result<Vec<_>, String>>()?;
+            let raw = read_partitioned_step(&paths, owners.as_deref())?;
             for (mi, (node_ids, results)) in parts.iter().zip(&mut by_mesh).enumerate() {
-                results.push(raw.step(
-                    node_ids,
-                    elements.get(mi).map_or(&[], Vec::as_slice),
-                    step,
-                )?);
+                let element_ids: &[ElementId] = elements.get(mi).map_or(&[], Vec::as_slice);
+                let result = if let Some(used) = used_nodes.and_then(|sets| sets.get(mi)) {
+                    raw.step_with_mesh_ids(node_ids, element_ids, used, step)
+                } else {
+                    raw.step(node_ids, element_ids, step)
+                };
+                results.push(result.map_err(|e| format!("Step {step}, part {}: {e}", mi + 1))?);
             }
         }
         // A second writer must not turn a completed scan into mixed data.
@@ -221,6 +201,26 @@ mod tests {
         }
         source
     }
+    #[test]
+    fn automatic_results_keep_unused_nodes_unavailable_but_reject_missing_used_nodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = RunResultSource::capture(dir.path(), "job", 1, 0).unwrap();
+        std::fs::write(dir.path().join("job.res.0.1"), record(10, 2.0)).unwrap();
+        source.finish().unwrap();
+        let ids = [vec![NodeId(20), NodeId(10)]];
+        let used = [HashSet::from([NodeId(10)])];
+        let steps = source.load_with_mesh_ids(&ids, &[], Some(&used)).unwrap();
+        let Some(fem_core::ResultField::NodeVector { values, .. }) =
+            steps[0][0].field_by_name("Displacement")
+        else { panic!("missing displayed displacement") };
+        assert!(values[0].is_nan());
+        assert_eq!(values[1].x, 2.0);
+
+        let used = [HashSet::from([NodeId(10), NodeId(20)])];
+        assert!(source.load_with_mesh_ids(&ids, &[], Some(&used))
+            .unwrap_err().contains("Missing result for node 20"));
+    }
+
     #[test]
     fn new_numeric_steps_merge_ranks_and_map_assembly_ids() {
         let dir = tempfile::tempdir().unwrap();

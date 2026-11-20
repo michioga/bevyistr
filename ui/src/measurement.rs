@@ -288,7 +288,7 @@ pub(crate) fn capture_text_input_escape(
 /// undo the analysis setup.
 pub(crate) fn update_ui_keyboard_state(
     input_focus: Option<Res<InputFocus>>,
-    editable_text: Query<(), Or<(With<EditableText>, With<bevy::ui_widgets::MenuItem>, With<bevy::ui_widgets::MenuButton>)>>,
+    editable_text: Query<(), Or<(With<EditableText>, With<bevy::ui_widgets::MenuItem>, With<bevy::ui_widgets::MenuButton>, With<bevy::ui_widgets::ListBox>)>>,
     escape: Res<TextInputEscape>,
     mut keyboard_state: ResMut<UiKeyboardState>,
 ) {

@@ -200,8 +200,9 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     // ── SOLVER ──
     writeln!(
         o,
-        "!SOLVER, METHOD={}, PRECOND=1, ITERLOG=YES, TIMELOG=YES",
-        s.solver_method.frontistr_method()
+        "!SOLVER, METHOD={}, PRECOND={}, ITERLOG=YES, TIMELOG=YES",
+        s.solver_method.frontistr_method(),
+        s.preconditioner
     )
     .unwrap();
     writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
@@ -228,10 +229,16 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
             }
         }
     }
-    writeln!(o, "!VISUAL, METHOD=PSR").unwrap();
-    writeln!(o, "!surface_num=1").unwrap();
-    writeln!(o, "!surface 1").unwrap();
-    writeln!(o, "!output_type=VTK").unwrap();
+    if let Some(visual) = &setup.output.visual {
+        for line in &visual.lines {
+            writeln!(o, "{line}").unwrap();
+        }
+    } else {
+        writeln!(o, "!VISUAL, METHOD=PSR").unwrap();
+        writeln!(o, "!surface_num=1").unwrap();
+        writeln!(o, "!surface 1").unwrap();
+        writeln!(o, "!output_type=VTK").unwrap();
+    }
     writeln!(o, "!END").unwrap();
 
     o

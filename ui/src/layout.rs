@@ -20,9 +20,9 @@ use crate::selection_ui::{
 };
 use crate::slider::{SliderConfig, SliderId, spawn_slider};
 use crate::solve_ui::spawn_solve_ui;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
+use bevy::ui_widgets::{ControlOrientation, ScrollArea, Scrollbar, ScrollbarThumb};
 use fem_core::{SelectionLevel, UiPointerState, ViewportTool};
 use visualization::{VisualizationMode, VisualizationSettings};
 
@@ -86,20 +86,7 @@ pub(crate) enum DeleteSetupEntry {
     Section(usize),
 }
 
-/// Marks any scrollable list container so [`handle_scrollable_list_wheel`]
-/// can find and scroll whichever one the cursor is over.
-///
-/// `Overflow::scroll_y()` alone only clips content visually; without this
-/// system actually moving `ScrollPosition` in response to `MouseWheel`
-/// events, a list taller than its container's `max_height` is unreachable —
-/// the content exists but there's no way to see it.
-#[derive(Component)]
-pub(crate) struct ScrollableList;
-
-/// Marks the main panel scroll area (the entire left-panel content below
-/// the title bar). Handled by [`handle_panel_wheel`] — separate from the
-/// smaller [`ScrollableList`] handler so the two don't fight each other
-/// when the cursor is over both.
+/// Identifies the sidebar scroll position to reset on page changes.
 #[derive(Component)]
 pub(crate) struct PanelScrollArea;
 
@@ -151,7 +138,7 @@ impl SidebarPageContent {
         })
     }
 
-    const fn analysis() -> Self {
+    pub(crate) const fn analysis() -> Self {
         Self(Self::LOADS | Self::MATERIALS | Self::SOLVE)
     }
 
@@ -159,7 +146,7 @@ impl SidebarPageContent {
         Self(Self::MODEL | Self::CONTACT)
     }
 
-    const fn contains(self, page: SidebarPage) -> bool {
+    pub(crate) const fn contains(self, page: SidebarPage) -> bool {
         self.0 & Self::page(page).0 != 0
     }
 }
@@ -218,257 +205,272 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
             spawn_selection_level_bar(panel);
             divider(panel);
 
-            // ── Scrollable content area ──────────────────────────────────
             panel
-                .spawn((
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        overflow: Overflow::scroll_y(),
-                        flex_grow: 1.0,
-                        ..default()
-                    },
-                    ScrollPosition::default(),
-                    PanelScrollArea,
-                    Name::new("PanelScrollArea"),
-                ))
-                .with_children(|panel| {
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::page(SidebarPage::Model),
-                        "ModelFilePage",
-                        |panel| {
-                            // ── § File ──────────────────────────────────────────────────
-                            section(panel, "FILE", |sec| {
-                                spawn_model_file_ui(sec);
-                            });
-                            divider(panel);
-                        },
-                    ); // end ModelFilePage
-
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::part_position(),
-                        "PartPositionPage",
-                        |panel| {
-                            // ── § Assembly ──────────────────────────────────────────────
-                            section(panel, "PART POSITION", |sec| {
-                                spawn_assembly_ui(sec);
-                            });
-                            divider(panel);
-                        },
-                    ); // end PartPositionPage
-
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::page(SidebarPage::Model),
-                        "ModelSelectionPage",
-                        |panel| {
-                            // ── § Selection ─────────────────────────────────────────────
-                            section(panel, "SELECTION", |sec| {
-                                spawn_model_selection_ui(sec);
-                            });
-                            divider(panel);
-                        },
-                    ); // end ModelSelectionPage
-
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::page(SidebarPage::Model),
-                        "ModelSetsPage",
-                        |panel| {
-                            // ── § Sets / Groups ──────────────────────────────────────────
-                            section(panel, "SETS", |sec| {
-                                spawn_model_sets_ui(sec);
-                            });
-                            divider(panel);
-                        },
-                    ); // end ModelSetsPage
-
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::page(SidebarPage::Contact),
-                        "ContactPage",
-                        |panel| {
-                            // ── § Contact definition ─────────────────────────────────────
-                            section(panel, "CONTACT DEFINITION", spawn_contact_definition_ui);
-                            divider(panel);
-
-                            // ── § Contact detection ──────────────────────────────────────
-                            section(panel, "CONTACT DETECTION", spawn_contact_detection_ui);
-                            divider(panel);
-
-                            // ── § Contact review ─────────────────────────────────────────
-                            section(panel, "CONTACT REVIEW", spawn_contact_review_ui);
-                            divider(panel);
-
-                            // ── § MPC / rigid spider ─────────────────────────────────────
-                            section(panel, "MPC / RIGID SPIDER", spawn_mpc_ui);
-                            divider(panel);
-                        },
-                    ); // end ContactPage
-
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::analysis(),
-                        "AnalysisPages",
-                        |panel| {
-                            // ── § Analysis Setup (boundary conditions / loads / materials) ──
-                            section(panel, "ANALYSIS SETUP", |sec| {
-                                // Export row: Open Setup + Export to FrontISTR on the same row
-                                spawn_solve_ui(sec);
-                                spawn_boundary_load_editor(sec);
-
-                                spawn_materials_ui(sec);
-
-                                sec.spawn((
-                                    Text::new("Boundary conditions & loads:"),
-                                    TextFont {
-                                        font_size: FontSize::Px(9.5),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
-                                    Node {
-                                        margin: UiRect::top(px(4.0)),
-                                        ..default()
-                                    },
-                                    SidebarPageContent::page(SidebarPage::Loads),
-                                ));
-                                sec.spawn((
-                                    Node {
-                                        flex_direction: FlexDirection::Column,
-                                        row_gap: px(3.0),
-                                        max_height: px(90.0),
-                                        overflow: Overflow::scroll_y(),
-                                        ..default()
-                                    },
-                                    ScrollPosition::default(),
-                                    ScrollableList,
-                                    BoundaryLoadsListContainer,
-                                    SidebarPageContent::page(SidebarPage::Loads),
-                                    Name::new("BoundaryLoadsListContainer"),
-                                ));
-
-                                // ── Solver settings ──────────────────────────────────────
-                            });
-                        },
-                    ); // end AnalysisPages
-
-                    // ── POST-PROCESS group ──────────────────────────────────────────
-                    sidebar_page_group(
-                        panel,
-                        SidebarPageContent::page(SidebarPage::Results),
-                        "ResultsPage",
-                        |panel| {
-                            // ── § Post-process ───────────────────────────────────────────
-                            section(panel, "POST-PROCESS", |sec| {
-                                sec.spawn((Node {
-                                    flex_direction: FlexDirection::Row,
-                                    ..default()
-                                },))
-                                    .with_children(|row| {
-                                        row.spawn((
-                                            InteractionButton,
-                                            Node {
-                                                flex_grow: 1.0,
-                                                height: px(28.0),
-                                                justify_content: JustifyContent::Center,
-                                                align_items: AlignItems::Center,
-                                                border: UiRect::all(px(1.0)),
-                                                border_radius: BorderRadius::all(px(5.0)),
-                                                ..default()
-                                            },
-                                            BackgroundColor(BUTTON_NORMAL),
-                                            BorderColor::all(PANEL_BORDER),
-                                            OpenResultButton,
-                                            bevy::ui_widgets::Button,
-                                            bevy::input_focus::tab_navigation::TabIndex(0),
-                                            Name::new("OpenResultButton"),
-                                        ))
-                                        .observe(crate::result_open::request_result_open)
-                                        .with_child((
-                                            Text::new("Open Results..."),
-                                            Pickable::IGNORE,
-                                            TextFont {
-                                                font_size: FontSize::Px(12.0),
-                                                ..default()
-                                            },
-                                            TextColor(TEXT_MAIN),
-                                        ));
-                                    });
-                                sec.spawn((
-                                    Text::new("VTU / PVTU: open directly, including geometry.\nRES: choose its mesh when prompted.\nYour editable model is preserved."),
-                                    TextFont {font_size:FontSize::Px(10.5),..default()},
-                                    TextColor(TEXT_MUTED),
-                                ));
-                                sec.spawn((
-                                    Text::new("Result: none loaded"),
-                                    TextFont {
-                                        font_size: FontSize::Px(11.5),
-                                        ..default()
-                                    },
-                                    TextColor(TEXT_MUTED),
-                                    ResultStatsText,
-                                ));
-                                crate::result_menu::spawn(sec);
-                                sec.spawn((
-                                    Node {
-                                        flex_direction: FlexDirection::Column,
-                                        row_gap: px(8.0),
-                                        margin: UiRect::top(px(4.0)),
-                                        ..default()
-                                    },
-                                    Visibility::Hidden,
-                                    ResultSliderSection,
-                                    Name::new("ResultSliderSection"),
-                                ))
-                                .with_children(|sliders| {
-                                    spawn_slider(
-                                        sliders,
-                                        SliderConfig {
-                                            width: 270.0,
-                                            min: 0.0,
-                                            max: 0.0,
-                                            value: 0.0,
-                                            label: "Frame",
-                                            id: SliderId::ResultStep,
-                                        },
-                                    );
-                                    crate::playback_controls::spawn(sliders);
-                                    crate::result_seek::spawn_details(sliders);
-                                    spawn_slider(
-                                        sliders,
-                                        SliderConfig {
-                                            width: 270.0,
-                                            min: 0.5,
-                                            max: 10.0,
-                                            value: 2.0,
-                                            label: "Speed (frames/sec)",
-                                            id: SliderId::PlaybackSpeed,
-                                        },
-                                    );
-                                    crate::result_seek::spawn_speed_hint(sliders);
-                                    sliders.spawn((
-                                        crate::result_menu::DeformationScaleSection,
-                                        Node { flex_direction: FlexDirection::Column, ..default() },
-                                    )).with_children(|scale| {
-                                        spawn_slider(
-                                            scale,
-                                            SliderConfig {
-                                                width: 270.0,
-                                                min: 0.0,
-                                                max: 20.0,
-                                                value: 1.0,
-                                                label: "Deform scale",
-                                                id: SliderId::DeformScale,
-                                            },
-                                        );
-                                    });
-                                });
-                            });
-                        },
-                    ); // end ResultsPage
-                }); // end scrollable content area
+                .spawn(Node {
+                    width: percent(100),
+                    flex_grow: 1.0,
+                    min_height: px(0.0),
+                    ..default()
+                })
+                .with_children(spawn_sidebar_content);
         });
+}
+
+fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
+    let scroll_area = panel
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::scroll_y(),
+                flex_grow: 1.0,
+                flex_basis: px(0.0),
+                min_width: px(0.0),
+                ..default()
+            },
+            ScrollPosition::default(),
+            PanelScrollArea,
+            ScrollArea,
+            Name::new("PanelScrollArea"),
+        ))
+        .with_children(|panel| {
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::page(SidebarPage::Model),
+                "ModelFilePage",
+                |panel| {
+                    // ── § File ──────────────────────────────────────────────────
+                    section(panel, "FILE", |sec| {
+                        spawn_model_file_ui(sec);
+                    });
+                    divider(panel);
+                },
+            ); // end ModelFilePage
+
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::part_position(),
+                "PartPositionPage",
+                |panel| {
+                    // ── § Assembly ──────────────────────────────────────────────
+                    section(panel, "PART POSITION", |sec| {
+                        spawn_assembly_ui(sec);
+                    });
+                    divider(panel);
+                },
+            ); // end PartPositionPage
+
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::page(SidebarPage::Model),
+                "ModelSelectionPage",
+                |panel| {
+                    // ── § Selection ─────────────────────────────────────────────
+                    section(panel, "SELECTION", |sec| {
+                        spawn_model_selection_ui(sec);
+                    });
+                    divider(panel);
+                },
+            ); // end ModelSelectionPage
+
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::page(SidebarPage::Model),
+                "ModelSetsPage",
+                |panel| {
+                    // ── § Sets / Groups ──────────────────────────────────────────
+                    section(panel, "SETS", |sec| {
+                        spawn_model_sets_ui(sec);
+                    });
+                    divider(panel);
+                },
+            ); // end ModelSetsPage
+
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::page(SidebarPage::Contact),
+                "ContactPage",
+                |panel| {
+                    // ── § Contact definition ─────────────────────────────────────
+                    section(panel, "CONTACT DEFINITION", spawn_contact_definition_ui);
+                    divider(panel);
+
+                    // ── § Contact detection ──────────────────────────────────────
+                    section(panel, "CONTACT DETECTION", spawn_contact_detection_ui);
+                    divider(panel);
+
+                    // ── § Contact review ─────────────────────────────────────────
+                    section(panel, "CONTACT REVIEW", spawn_contact_review_ui);
+                    divider(panel);
+
+                    // ── § MPC / rigid spider ─────────────────────────────────────
+                    section(panel, "MPC / RIGID SPIDER", spawn_mpc_ui);
+                    divider(panel);
+                },
+            ); // end ContactPage
+
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::analysis(),
+                "AnalysisPages",
+                |panel| {
+                    // ── § Analysis Setup (boundary conditions / loads / materials) ──
+                    section(panel, "ANALYSIS SETUP", |sec| {
+                        // Export row: Open Setup + Export to FrontISTR on the same row
+                        spawn_solve_ui(sec);
+                        spawn_boundary_load_editor(sec);
+
+                        spawn_materials_ui(sec);
+
+                        sec.spawn((
+                            Text::new("Boundary conditions & loads:"),
+                            TextFont {
+                                font_size: FontSize::Px(9.5),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
+                            Node {
+                                margin: UiRect::top(px(4.0)),
+                                ..default()
+                            },
+                            SidebarPageContent::page(SidebarPage::Loads),
+                        ));
+                        sec.spawn((
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: px(3.0),
+                                max_height: px(90.0),
+                                overflow: Overflow::scroll_y(),
+                                ..default()
+                            },
+                            ScrollPosition::default(),
+                            ScrollArea,
+                            BoundaryLoadsListContainer,
+                            SidebarPageContent::page(SidebarPage::Loads),
+                            Name::new("BoundaryLoadsListContainer"),
+                        ));
+
+                        // ── Solver settings ──────────────────────────────────────
+                    });
+                },
+            ); // end AnalysisPages
+
+            // ── POST-PROCESS group ──────────────────────────────────────────
+            sidebar_page_group(
+                panel,
+                SidebarPageContent::page(SidebarPage::Results),
+                "ResultsPage",
+                |panel| {
+                    // ── § Post-process ───────────────────────────────────────────
+                    section(panel, "POST-PROCESS", |sec| {
+                        sec.spawn((Node {
+                            flex_direction: FlexDirection::Row,
+                            ..default()
+                        },))
+                            .with_children(|row| {
+                                row.spawn((
+                                    InteractionButton,
+                                    Node {
+                                        flex_grow: 1.0,
+                                        height: px(28.0),
+                                        justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
+                                        border: UiRect::all(px(1.0)),
+                                        border_radius: BorderRadius::all(px(5.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(BUTTON_NORMAL),
+                                    BorderColor::all(PANEL_BORDER),
+                                    OpenResultButton,
+                                    bevy::ui_widgets::Button,
+                                    bevy::input_focus::tab_navigation::TabIndex(0),
+                                    Name::new("OpenResultButton"),
+                                ))
+                                .observe(crate::result_open::request_result_open)
+                                .with_child((
+                                    Text::new("Open Results..."),
+                                    Pickable::IGNORE,
+                                    TextFont {
+                                        font_size: FontSize::Px(12.0),
+                                        ..default()
+                                    },
+                                    TextColor(TEXT_MAIN),
+                                ));
+                            });
+                        sec.spawn((
+                            Text::new("VTU / PVTU: open directly, including geometry.\nRES: choose its mesh when prompted.\nYour editable model is preserved."),
+                            TextFont {font_size:FontSize::Px(10.5),..default()},
+                            TextColor(TEXT_MUTED),
+                        ));
+                        sec.spawn((
+                            Text::new("Result: none loaded"),
+                            TextFont {
+                                font_size: FontSize::Px(11.5),
+                                ..default()
+                            },
+                            TextColor(TEXT_MUTED),
+                            ResultStatsText,
+                        ));
+                        crate::result_menu::spawn(sec);
+                        sec.spawn((
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: px(8.0),
+                                margin: UiRect::top(px(4.0)),
+                                ..default()
+                            },
+                            Visibility::Hidden,
+                            ResultSliderSection,
+                            Name::new("ResultSliderSection"),
+                        ))
+                        .with_children(|sliders| {
+                            spawn_slider(
+                                sliders,
+                                SliderConfig {
+                                    width: 270.0,
+                                    min: 0.0,
+                                    max: 0.0,
+                                    value: 0.0,
+                                    label: "Frame",
+                                    id: SliderId::ResultStep,
+                                },
+                            );
+                            crate::playback_controls::spawn(sliders);
+                            crate::result_seek::spawn_details(sliders);
+                            spawn_slider(
+                                sliders,
+                                SliderConfig {
+                                    width: 270.0,
+                                    min: 0.5,
+                                    max: 10.0,
+                                    value: 2.0,
+                                    label: "Speed (frames/sec)",
+                                    id: SliderId::PlaybackSpeed,
+                                },
+                            );
+                            crate::result_seek::spawn_speed_hint(sliders);
+                            sliders.spawn((
+                                crate::result_menu::DeformationScaleSection,
+                                Node { flex_direction: FlexDirection::Column, ..default() },
+                            )).with_children(|scale| {
+                                spawn_slider(
+                                    scale,
+                                    SliderConfig {
+                                        width: 270.0,
+                                        min: 0.0,
+                                        max: 20.0,
+                                        value: 1.0,
+                                        label: "Deform scale",
+                                        id: SliderId::DeformScale,
+                                    },
+                                );
+                            });
+                        });
+                    });
+                },
+            ); // end ResultsPage
+        })
+        .id();
+    spawn_vertical_scrollbar(panel, scroll_area);
 }
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -995,113 +997,28 @@ pub(crate) fn update_sidebar_page_visibility(
     }
 }
 
-pub(crate) fn handle_scrollable_list_wheel(
-    mut wheel_events: MessageReader<MouseWheel>,
-    windows: Query<&Window>,
-    mut scrollable_query: Query<
-        (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
-        With<ScrollableList>,
-    >,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
-
-    for ev in wheel_events.read() {
-        let line_height = 24.0;
-        let delta_y = match ev.unit {
-            MouseScrollUnit::Line => ev.y * line_height,
-            MouseScrollUnit::Pixel => ev.y,
-        };
-
-        if delta_y == 0.0 {
-            continue;
-        }
-
-        for (mut scroll, node, transform) in &mut scrollable_query {
-            let scale = node.inverse_scale_factor;
-            let size = node.size() * scale;
-            let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
-
-            let over = cursor.x >= origin.x
-                && cursor.x <= origin.x + size.x
-                && cursor.y >= origin.y
-                && cursor.y <= origin.y + size.y;
-
-            if over {
-                scroll.0.y = (scroll.0.y - delta_y).max(0.0);
-            }
-        }
-    }
-}
-
-/// Scrolls the main left-panel content area with the mouse wheel, but
-/// only when the cursor is NOT over a [`ScrollableList`] widget (those
-/// consume the scroll event themselves in [`handle_scrollable_list_wheel`]).
-///
-/// See [`crate::slider::update_sliders`]'s doc comment for why this uses
-/// `UiGlobalTransform` + `ComputedNode::inverse_scale_factor` rather than
-/// `GlobalTransform` directly.
-pub(crate) fn handle_panel_wheel(
-    mut wheel_events: MessageReader<MouseWheel>,
-    windows: Query<&Window>,
-    mut panel_query: Query<
-        (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
-        With<PanelScrollArea>,
-    >,
-    list_query: Query<(&ComputedNode, &UiGlobalTransform), With<ScrollableList>>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
-
-    // If cursor is over any ScrollableList, the list handler takes priority.
-    let over_sublist = list_query.iter().any(|(node, transform)| {
-        let scale = node.inverse_scale_factor;
-        let size = node.size() * scale;
-        let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
-        cursor.x >= origin.x
-            && cursor.x <= origin.x + size.x
-            && cursor.y >= origin.y
-            && cursor.y <= origin.y + size.y
-    });
-
-    if over_sublist {
-        return;
-    }
-
-    for ev in wheel_events.read() {
-        let line_height = 28.0;
-        let delta_y = match ev.unit {
-            MouseScrollUnit::Line => ev.y * line_height,
-            MouseScrollUnit::Pixel => ev.y,
-        };
-
-        if delta_y == 0.0 {
-            continue;
-        }
-
-        for (mut scroll, node, transform) in &mut panel_query {
-            let scale = node.inverse_scale_factor;
-            let size = node.size() * scale;
-            let origin = transform.transform_point2(Vec2::ZERO) * scale - size * 0.5;
-
-            let over_panel = cursor.x >= origin.x
-                && cursor.x <= origin.x + size.x
-                && cursor.y >= origin.y
-                && cursor.y <= origin.y + size.y;
-
-            if over_panel {
-                scroll.0.y = (scroll.0.y - delta_y).max(0.0);
-            }
-        }
-    }
+/// Adds a narrow scrollbar along the right edge of a scroll area's parent.
+pub(crate) fn spawn_vertical_scrollbar(parent: &mut ChildSpawnerCommands, target: Entity) {
+    parent.spawn((
+        Scrollbar {
+            orientation: ControlOrientation::Vertical,
+            target,
+            min_thumb_length: 16.0,
+        },
+        Node {
+            width: px(7.0),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.10, 0.14, 0.17)),
+    ))
+    .with_child((
+        ScrollbarThumb {
+            border_radius: BorderRadius::all(px(3.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.31, 0.48, 0.56)),
+    ));
 }
 
 pub(crate) fn update_ui_pointer_state(

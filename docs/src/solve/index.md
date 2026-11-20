@@ -23,14 +23,14 @@ Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数
 Open Project／Open Setupで、再出力時に保持できないCNT設定を検出すると、
 画面上部に **CNT re-export blocked** と表示します。これはbevyistrが元の設定を保持して再出力できないという案内です。
 件数は検出したCNT記述の数で、解析エラーや不備の個数ではありません。
-Solveには元ファイル名・行番号・
+Solveの最下部には元ファイル名・行番号・
 キーワードと理由を表示し、Export／Run FrontISTRを停止します。
 次の表はbevyistrが再出力できる範囲です。FrontISTRで使える構文とパラメータは、公式サイトの「キーワード → 解析制御データ (cnt)」で確認できます。 [FrontISTR公式ドキュメント](https://source-docs.frontistr.com/index.html)
 
 | 項目 | 再出力できる代表例 | Export／Runが止まる代表例 |
 | --- | --- | --- |
 | 拘束・荷重の`GRPID` | `GRPID=1`。ヒンジ例題のような省略形は既定値1として扱います。 | `GRPID=2`など、グループ1以外の指定 |
-| `!SOLVER` | 対応METHODと`PRECOND=1, ITERLOG=YES, TIMELOG=YES`。`NITER`、`RESID`、正の整数の`iterPREmax`を保持します。その他の数値欄は`SIGMA_DIAG=1`、`OMEGA=0`が必要です。 | `19_conrod`の`PRECOND=3`、`DUMPTYPE`や`DUMPEXIT`、未知のMETHOD |
+| `!SOLVER` | 対応METHOD、`PRECOND=1`／`2`／`3`、`ITERLOG=YES, TIMELOG=YES`。`NITER`、`RESID`、正の整数の`iterPREmax`を保持します。その他の数値欄は`SIGMA_DIAG=1`、`OMEGA=0`が必要です。 | その他の前処理、`DUMPTYPE`や`DUMPEXIT`、未知のMETHOD |
 | 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、定義済みの拘束・荷重のグループ1をすべて有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析の入力、複数ステップ・自動増分・個別の時間設定・部分グループの有効化 |
 | 材料 | 対応する書式の等方弾性・密度 | 異方弾性、温度依存テーブル、弾塑性、超弾性 |
 | 接触 | bevyistrで新規に定義した対応形式の接触 | 既存CNTの`!CONTACT`を読み込んで再出力する操作 |
@@ -52,7 +52,7 @@ FrontISTRの仕様を確認する際は、設定項目ごとのページを参�
 
 公式の`!OUTPUT_RES`と`!OUTPUT_VIS`は、物理量ごとのON／OFFを定義します。GROUP／ACTIONを含むカードや未知の項目を保持するのはbevyistrの再出力動作です。利用するFrontISTRの版で有効な指定は、その版の仕様を確認してください。 [RES出力の開始 `!WRITE, RESULT`](https://source-docs.frontistr.com/keyword_reference/cnt/write_result.html) · [RESの物理量 `!OUTPUT_RES`](https://source-docs.frontistr.com/keyword_reference/cnt/output_res.html) · [可視化の物理量 `!OUTPUT_VIS`](https://source-docs.frontistr.com/keyword_reference/cnt/output_vis.html)
 
-`19_conrod`には、表の`PRECOND=3`に加えて、再出力を制限するFrontISTRの描画・可視化出力設定も含まれます。
+`19_conrod`の`PRECOND=3`と、PSRの全外表面1面の可視化ブロックを保持します。`VTK`と`COMPLETE_MICROAVS`では、読み込んだ出力形式のまま再出力します。名前付き表面グループ、複数面、等値面、その他の出力形式を含む入力には再出力制限が適用されます。
 保存済み結果は、対応形式であればResultsのコンター・変形・プローブで確認できます。
 
 ### 実行手順

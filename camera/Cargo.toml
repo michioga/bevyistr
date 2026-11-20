@@ -15,6 +15,6 @@ include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo
 name = "camera"
 
 [dependencies]
-bevy.workspace = true
+bevy = { workspace = true, features = ["pan_orbit_camera"] }
 fem_core.workspace = true
 interaction.workspace = true

@@ -1,7 +1,8 @@
 //! Shared viewport selection controls, growth modes, previews, and groups.
 
+use bevy::ui_widgets::ScrollArea;
 use crate::{ButtonInteraction, InteractionButton};
-use crate::layout::{RenderModeButton, ScrollableList, SidebarPage};
+use crate::layout::{RenderModeButton, SidebarPage};
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -199,7 +200,7 @@ pub(crate) fn spawn_model_sets_ui(parent: &mut ChildSpawnerCommands) {
             ..default()
         },
         ScrollPosition::default(),
-        ScrollableList,
+        ScrollArea,
         SetsListContainer,
         Name::new("SetsListContainer"),
     ));
@@ -387,20 +388,6 @@ pub(crate) fn update_selection_context(
         }
     }
 }
-
-/// Scrolls whichever [`ScrollableList`] container the cursor is over in
-/// response to `MouseWheel` events.
-///
-/// `Overflow::scroll_y()` only clips content visually — Bevy does not wire
-/// up mouse-wheel input to `ScrollPosition` automatically outside of its
-/// picking-based UI examples, which this project doesn't otherwise use, so
-/// this reimplements the cursor-hit-test approach already used by
-/// [`crate::slider::update_sliders`] for consistency with the rest of the
-/// custom `bevy_ui` widgets here — including the same physical→logical
-/// pixel conversion via `ComputedNode::inverse_scale_factor`; see that
-/// function's doc comment for why both `UiGlobalTransform` (not the
-/// 3D-world `GlobalTransform`, which `Node` entities don't carry) and that
-/// scale factor are needed.
 
 pub(crate) fn selection_guide_toggle_system(
     mut state: ResMut<SelectionGuideState>,

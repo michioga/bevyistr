@@ -118,11 +118,9 @@ fn pointer_selection_preserves_numbers_exports_and_supports_undo_redo() {
     app.update();
     app.world_mut().resource_mut::<UndoStack>().undo.clear();
     let popup = open(&mut app, Kind::Method);
-    let choices: Vec<Choice> = app
-        .world()
-        .get::<Children>(popup)
-        .unwrap()
-        .iter()
+    let list = app.world_mut().query_filtered::<Entity, With<SolverChoices>>()
+        .single(app.world()).unwrap();
+    let choices: Vec<Choice> = app.world().get::<Children>(list).unwrap().iter()
         .filter_map(|e| app.world().get::<Choice>(e).copied())
         .collect();
     assert_eq!(choices[0], Choice::Method(LinearSolverMethod::Mumps));
@@ -172,7 +170,7 @@ fn keyboard_escape_cancels_and_enter_selects_analysis() {
     let choice = Choice::Analysis(AnalysisType::NlStatic);
     let selected = item(&mut app, choice);
     key(&mut app, KeyCode::ArrowDown, Key::ArrowDown);
-    assert_eq!(app.world().resource::<InputFocus>().get(), Some(selected));
+    assert_eq!(crate::widget_test_input::active_list_row(app.world()), Some(selected));
     key(&mut app, KeyCode::Enter, Key::Enter);
     assert_eq!(
         app.world().resource::<AnalysisSetup>().solver.analysis_type,

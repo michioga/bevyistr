@@ -135,15 +135,19 @@ pub fn spawn_slider(parent: &mut ChildSpawnerCommands, config: SliderConfig) -> 
                 },
                 TextColor(Color::srgb(0.75, 0.82, 0.88)),
             ));
-            row.spawn((
-                Text::new(format!("{:.2}", config.value)),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.90, 0.94)),
-                SliderValueText(config.id),
-            ));
+            if matches!(config.id, SliderId::PlaybackSpeed | SliderId::DeformScale) {
+                crate::result_number_input::spawn(row, &config);
+            } else {
+                row.spawn((
+                    Text::new(format!("{:.2}", config.value)),
+                    TextFont {
+                        font_size: FontSize::Px(11.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.85, 0.90, 0.94)),
+                    SliderValueText(config.id),
+                ));
+            }
         });
 
     let mut track_entity = Entity::PLACEHOLDER;

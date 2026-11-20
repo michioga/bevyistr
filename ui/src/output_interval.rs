@@ -1,7 +1,7 @@
 //! File output scheduling, separate from quantity menus and result playback.
 use crate::InteractionButton;
 use crate::{
-    layout::{SidebarPage, UiInputCapture},
+    layout::{SidebarPage, SidebarPageContent, UiInputCapture},
     measurement::editable_value,
 };
 use bevy::{
@@ -101,7 +101,7 @@ fn toggle(
     page: Res<SidebarPage>,
     mut setup: ResMut<AnalysisSetup>,
 ) {
-    if *page != SidebarPage::Solve {
+    if !SidebarPageContent::analysis().contains(*page) {
         return;
     }
     if let Ok(button) = buttons.get(event.entity) {
@@ -139,7 +139,7 @@ pub(crate) fn update(
     for (entity, target, mut input, mut border, mut color) in &mut inputs {
         let control = *setup.output.write(target.0);
         // FrontISTR's eigen output loop does not consult WRITE FREQUENCY.
-        let active = *page == SidebarPage::Solve && control.enabled && !eigen;
+        let active = SidebarPageContent::analysis().contains(*page) && control.enabled && !eigen;
         color.0 = if active {
             Color::WHITE
         } else {
@@ -183,7 +183,7 @@ pub(crate) fn update(
     for (target, mut text) in &mut labels {
         text.0 = format!(
             "{}: {}",
-            target.0.label(),
+            setup.output.label(target.0),
             if setup.output.write(target.0).enabled {
                 "ON"
             } else {
