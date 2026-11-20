@@ -26,6 +26,13 @@ pub fn run_gmsh(input: &Path, mesh_size_factor: Option<f32>) -> Result<FemMesh, 
     let output = input.with_extension("msh");
 
     let mut cmd = Command::new("gmsh");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd.arg(input)
         .arg("-3")
         .arg("-format")
