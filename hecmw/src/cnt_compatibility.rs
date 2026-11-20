@@ -185,6 +185,16 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
             ) {
                 Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
+            } else if !solver.solver_method.is_iterative() && body.is_empty() {
+                if h.params.contains_key("PRECOND")
+                    || ["ITERLOG", "TIMELOG"].into_iter().any(|key| {
+                        !matches!(value(key).as_deref(), None | Some("YES" | "NO"))
+                    })
+                {
+                    Some("Direct solver export supports ITERLOG and TIMELOG with YES or NO")
+                } else {
+                    None
+                }
             } else if !matches!(value("PRECOND").as_deref(), Some("1" | "2" | "3"))
                 || !is("ITERLOG", "YES") || !is("TIMELOG", "YES")
             {
@@ -444,7 +454,7 @@ mod tests {
             "!SOLUTION, TYPE=STATICEIGEN",
             "!SOLUTION, TYPE=TYPO",
             "!SOLUTION, TYPE=DYNAMIC, NONLINEAR",
-            "!SOLVER, METHOD=DIRECTMKL",
+            "!SOLVER, METHOD=DIRECTMKL, TIMELOG=VERBOSE",
             "!SOLVER, METHOD=UNKNOWN",
             "!SOLVER, METHOD=CG, PRECOND=2",
             "!STEP, SUBSTEPS=3, CONVERG=1e-8",

@@ -430,6 +430,13 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         _ => LinearSolverMethod::Cg,
                     };
                 }
+                if !solver.solver_method.is_iterative() {
+                    let log_enabled = |name| {
+                        header.params.get(name).is_some_and(|value| value.eq_ignore_ascii_case("YES"))
+                    };
+                    solver.direct_iteration_log = log_enabled("ITERLOG");
+                    solver.direct_time_log = log_enabled("TIMELOG");
+                }
                 if let Some(value) = header.params.get("PRECOND").and_then(|v| v.parse().ok()) {
                     solver.preconditioner = value;
                 }
@@ -909,6 +916,21 @@ fn resolve_element_group(token: &str, mesh: &FemMesh) -> Vec<ElementId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_trips_the_eigen_spring_mumps_card() {
+        let mesh = FemMesh::default();
+        let input = "!SOLUTION, TYPE=EIGEN\n!EIGEN\n5,1e-8,60\n!SOLVER,METHOD=MUMPS\n";
+        let mut setup = AnalysisSetup::default();
+        parse_cnt(input, &mesh, 0).merge_into(&mut setup);
+        assert!(setup.import_issues.is_empty(), "{:?}", setup.import_issues);
+
+        let output = crate::cnt_writer::build_cnt(&setup, &[]);
+        assert!(output.contains("!SOLVER, METHOD=MUMPS\n\n"));
+        let reloaded = parse_cnt(&output, &mesh, 0);
+        assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+        assert_eq!(reloaded.solver, Some(setup.solver));
+    }
 
     #[test]
     fn preserves_repeated_concentrated_group_loads() {

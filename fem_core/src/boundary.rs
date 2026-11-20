@@ -435,6 +435,9 @@ pub struct SolverSettings {
     pub nonlinear_convergence_tol: f32,
     /// Linear solver method.
     pub solver_method: LinearSolverMethod,
+    /// Explicit log options for direct solvers. Authored projects enable both.
+    pub direct_iteration_log: bool,
+    pub direct_time_log: bool,
 }
 
 impl Default for SolverSettings {
@@ -450,6 +453,8 @@ impl Default for SolverSettings {
             nonlinear_max_iterations: 50,
             nonlinear_convergence_tol: 1.0e-3,
             solver_method: LinearSolverMethod::Cg,
+            direct_iteration_log: true,
+            direct_time_log: true,
         }
     }
 }

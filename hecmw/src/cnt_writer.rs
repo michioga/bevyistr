@@ -206,15 +206,26 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
 
     // ── SOLVER ──
-    writeln!(
-        o,
-        "!SOLVER, METHOD={}, PRECOND={}, ITERLOG=YES, TIMELOG=YES",
-        s.solver_method.frontistr_method(),
-        s.preconditioner
-    )
-    .unwrap();
-    writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
-    writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
+    if s.solver_method.is_iterative() {
+        writeln!(
+            o,
+            "!SOLVER, METHOD={}, PRECOND={}, ITERLOG=YES, TIMELOG=YES",
+            s.solver_method.frontistr_method(),
+            s.preconditioner
+        )
+        .unwrap();
+        writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
+        writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
+    } else {
+        write!(o, "!SOLVER, METHOD={}", s.solver_method.frontistr_method()).unwrap();
+        if s.direct_iteration_log {
+            write!(o, ", ITERLOG=YES").unwrap();
+        }
+        if s.direct_time_log {
+            write!(o, ", TIMELOG=YES").unwrap();
+        }
+        writeln!(o).unwrap();
+    }
 
     writeln!(o).unwrap();
     for (name, control) in [
