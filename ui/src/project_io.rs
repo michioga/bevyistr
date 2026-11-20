@@ -519,13 +519,38 @@ pub(crate) fn open_project_button_system(
             run_state.clear_export_target();
 
             match hecmw::load_hecmw_ctrl(&ctrl_path) {
-                Ok(content) => {
+                Ok(mut content) => {
                     let (mesh_path, cnt_path) = hecmw::resolve_paths(&ctrl_path, &content);
                     if let (Some(mesh_path), Some(cnt_path)) = (mesh_path, cnt_path) {
                         load_status.loading(mesh_path.clone());
                         request.request(mesh_path);
                         pending_cnt.request(cnt_path, 0, version.value);
-                        pending_cnt.project_control = Some((content.settings, content.import_issues));
+                        let partition = if content.has_partition_input {
+                            let path = ctrl_path.with_file_name("hecmw_part_ctrl.dat");
+                            match hecmw::partition_control::load(&path) {
+                                Ok(partition) => {
+                                    run_state.use_imported_ranks(partition.domains.get());
+                                    Some(partition)
+                                }
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                                Err(error) => {
+                                    content.import_issues.push(fem_core::SetupImportIssue {
+                                        source: path.display().to_string(),
+                                        line: 1,
+                                        keyword: "!PARTITION".into(),
+                                        message: error.to_string(),
+                                    });
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        pending_cnt.project_control = Some(fem_core::FrontistrControlImport {
+                            control: content.settings,
+                            partition,
+                            issues: content.import_issues,
+                        });
                     } else {
                         bevy::log::warn!("hecmw_ctrl.dat: mesh or control file not found");
                     }
@@ -565,9 +590,10 @@ pub(crate) fn apply_pending_cnt_system(
         return;
     };
 
-    if let Some((settings, issues)) = pending_cnt.project_control.take() {
-        setup.frontistr_control = settings;
-        setup.import_issues.extend(issues);
+    if let Some(import) = pending_cnt.project_control.take() {
+        setup.frontistr_control = import.control;
+        setup.frontistr_partition = import.partition;
+        setup.import_issues.extend(import.issues);
     }
     match hecmw::load_cnt_file(&path, mesh, mesh_index) {
         Ok(data) => {

@@ -1,4 +1,4 @@
-use fem_core::FrontistrControlSettings;
+use fem_core::{FrontistrControlSettings, FrontistrPartitionSettings};
 use std::{fmt::Write as FmtWrite, io, path::Path};
 
 pub struct HecmwCtrlParams<'a> {
@@ -45,6 +45,7 @@ pub fn write_parallel_hecmw_ctrl(
         distributed_name,
         ranks,
         FrontistrControlSettings::default(),
+        None,
     )
 }
 
@@ -54,6 +55,7 @@ pub fn write_parallel_hecmw_ctrl_with_settings(
     distributed_name: &str,
     ranks: u16,
     settings: FrontistrControlSettings,
+    partition: Option<&FrontistrPartitionSettings>,
 ) -> io::Result<()> {
     if ranks == 0
         || [p.mesh_name, p.cnt_name, p.result_name, distributed_name]
@@ -87,7 +89,7 @@ pub fn write_parallel_hecmw_ctrl_with_settings(
     let staged = crate::staged_inputs::StagedInputs::new(dir.as_ref())?;
     std::fs::write(
         staged.path().join("hecmw_part_ctrl.dat"),
-        format!("!PARTITION, TYPE=NODE-BASED, METHOD=PMETIS, DOMAIN={ranks}\n"),
+        super::partition_control::format(partition, ranks)?,
     )?;
     std::fs::write(staged.path().join("hecmw_ctrl.dat"), out)?;
     staged.publish(&["hecmw_part_ctrl.dat", "hecmw_ctrl.dat"])

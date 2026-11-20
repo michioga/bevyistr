@@ -27,6 +27,7 @@ pub struct HecmwCtrlContent {
     pub cnt_path: Option<String>,
     pub result_path: Option<String>,
     pub settings: FrontistrControlSettings,
+    pub has_partition_input: bool,
     pub import_issues: Vec<SetupImportIssue>,
 }
 
@@ -95,6 +96,9 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                 })
             };
             let name = parameter("NAME").unwrap_or("");
+            if keyword.eq_ignore_ascii_case("!MESH") && name.eq_ignore_ascii_case("part_in") {
+                c.has_partition_input = true;
+            }
             let result = keyword.eq_ignore_ascii_case("!RESULT");
             let mut problem = None;
             if keyword.eq_ignore_ascii_case("!SUBDIR") {

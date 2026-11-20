@@ -1,6 +1,7 @@
 pub mod cnt;
 pub mod cnt_writer;
 pub mod ctrl_reader;
+pub mod partition_control;
 pub mod ctrl_writer;
 pub mod frd;
 pub mod inp;

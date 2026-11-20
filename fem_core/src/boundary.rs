@@ -607,6 +607,34 @@ impl FrontistrControlSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontistrPartitionSettings {
+    pub element_based: bool,
+    pub method: FrontistrPartitionMethod,
+    pub domains: std::num::NonZeroU16,
+    pub depth: Option<std::num::NonZeroU32>,
+    pub ucd: Option<String>,
+    pub contact: Option<String>,
+    pub contact_owner: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrontistrPartitionMethod {
+    Rcb(Vec<char>),
+    Kmetis,
+    Pmetis,
+}
+
+impl FrontistrPartitionMethod {
+    pub fn keyword(&self) -> &'static str {
+        match *self {
+            Self::Rcb(_) => "RCB",
+            Self::Kmetis => "KMETIS",
+            Self::Pmetis => "PMETIS",
+        }
+    }
+}
+
 #[derive(Resource, Debug, Clone)]
 pub struct AnalysisSetup {
     pub boundary_conditions: Vec<BoundaryCondition>,
@@ -628,6 +656,7 @@ pub struct AnalysisSetup {
     pub solver: SolverSettings,
     pub output: crate::OutputSettings,
     pub frontistr_control: FrontistrControlSettings,
+    pub frontistr_partition: Option<FrontistrPartitionSettings>,
     /// Import blockers are not cleared by editing a solver dropdown. The
     /// omitted source settings must not silently disappear on export/run.
     pub import_issues: Vec<SetupImportIssue>,
@@ -645,6 +674,7 @@ impl Default for AnalysisSetup {
             solver: SolverSettings::default(),
             output: crate::OutputSettings::default(),
             frontistr_control: FrontistrControlSettings::default(),
+            frontistr_partition: None,
             import_issues: Vec::new(),
         }
     }

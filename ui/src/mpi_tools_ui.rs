@@ -35,6 +35,9 @@ pub(crate) struct MpiTools;
 #[derive(Component)]
 pub(crate) struct MpiToolPath(Tool);
 
+#[derive(Component)]
+pub(crate) struct MpiPartitionSummary;
+
 pub(super) fn spawn(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
@@ -77,6 +80,7 @@ pub(super) fn spawn(parent: &mut ChildSpawnerCommands) {
                     ..default()
                 },
                 TextColor(TEXT_MUTED),
+                MpiPartitionSummary,
             ));
         });
 }
@@ -113,8 +117,22 @@ pub(crate) fn update_mpi_tools(
     mut run: ResMut<FrontistrRunState>,
     mut buttons: Query<(&MpiToolButton, Ref<ButtonInteraction>, &mut BackgroundColor)>,
     mut sections: Query<&mut Node, With<MpiTools>>,
-    mut paths: Query<(&MpiToolPath, &mut Text)>,
+    mut paths: Query<(&MpiToolPath, &mut Text), Without<MpiPartitionSummary>>,
+    mut summaries: Query<&mut Text, With<MpiPartitionSummary>>,
+    setup: Res<fem_core::AnalysisSetup>,
 ) {
+    if setup.is_changed() {
+        let (kind, method) = setup.frontistr_partition.as_ref().map_or(
+            ("NODE-BASED", "PMETIS"),
+            |settings| (
+                if settings.element_based { "ELEMENT-BASED" } else { "NODE-BASED" },
+                settings.method.keyword(),
+            ),
+        );
+        for mut summary in &mut summaries {
+            summary.set_if_neq(Text::new(format!("MPI ranks set DOMAIN. Partition: {kind} / {method}.")));
+        }
+    }
     let visible = run.launch_mode == SolverLaunchMode::Mpi;
     for mut node in &mut sections {
         let display = if visible {

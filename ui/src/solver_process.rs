@@ -74,6 +74,7 @@ pub(crate) struct SolverProcessConfig {
     pub(crate) executable: PathBuf,
     pub(crate) project_stem: String,
     pub(crate) control_settings: fem_core::FrontistrControlSettings,
+    pub(crate) partition_settings: Option<fem_core::FrontistrPartitionSettings>,
     pub(crate) partitioner: Option<PathBuf>,
     pub(crate) working_directory: PathBuf,
     pub(crate) environment: RuntimeEnvironment,
@@ -354,6 +355,7 @@ fn run_pipeline(
             distributed,
             config.mpi_ranks,
             config.control_settings,
+            config.partition_settings.as_ref(),
         )
         .map_err(|e| format!("Could not write partition controls: {e}"))?;
         let partition = ProcessStep {

@@ -89,6 +89,7 @@ pub(crate) struct FrontistrRunState {
     results_source: Option<crate::run_results::RunResultSource>,
     auto_load_results: bool,
     control_settings: fem_core::FrontistrControlSettings,
+    partition_settings: Option<fem_core::FrontistrPartitionSettings>,
 }
 
 impl Default for FrontistrRunState {
@@ -131,6 +132,7 @@ impl Default for FrontistrRunState {
             results_source: None,
             auto_load_results: true,
             control_settings: Default::default(),
+            partition_settings: None,
         }
     }
 }
@@ -186,6 +188,7 @@ impl FrontistrRunState {
     pub(crate) fn clear_export_target(&mut self) {
         self.results_source = None;
         self.control_settings = Default::default();
+        self.partition_settings = None;
         self.project = None;
         if self.is_running() {
             return;
@@ -218,6 +221,12 @@ impl FrontistrRunState {
                 format!("MPI launch selected ({} ranks).", self.mpi_ranks)
             }
         };
+    }
+
+    pub(crate) fn use_imported_ranks(&mut self, ranks: u16) {
+        if !self.is_running() {
+            self.mpi_ranks = ranks;
+        }
     }
 
     fn adjust_mpi_ranks(&mut self, delta: i16) {
@@ -273,6 +282,12 @@ impl FrontistrRunState {
         if validation.has_errors() {
             return Err(validation.summary(5));
         }
+        if self.launch_mode == SolverLaunchMode::Mpi {
+            if let Some(partition) = &setup.frontistr_partition {
+                hecmw::partition_control::validate(partition, self.mpi_ranks, !model.contacts.is_empty())
+                    .map_err(|error| format!("Invalid MPI partition settings: {error}"))?;
+            }
+        }
         let target = match self.project().cloned() {
             Some(target) => target,
             None => {
@@ -290,6 +305,7 @@ impl FrontistrRunState {
             .map_err(|error| format!("Could not write solver input: {error}"))?;
         self.register_export(target.directory, target.stem);
         self.control_settings = setup.frontistr_control;
+        self.partition_settings = setup.frontistr_partition.clone();
         Ok(true)
     }
 
@@ -315,6 +331,7 @@ impl FrontistrRunState {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
             control_settings: self.control_settings,
+            partition_settings: self.partition_settings.clone(),
             partitioner: self.partitioner.clone(),
             working_directory: target.directory.clone(),
             environment: self.runtime_environment.clone(),
