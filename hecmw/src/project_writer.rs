@@ -5,7 +5,7 @@
 //! remapping analysis targets into the flattened ID space. Keeping this out
 //! of the UI makes export behaviour testable without Bevy systems.
 
-use std::{collections::BTreeSet, fmt, io, path::Path};
+use std::{collections::{BTreeSet, HashMap}, fmt, io, path::Path};
 
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactSlaveRef, DistributedLoad,
@@ -340,6 +340,7 @@ fn validate_analysis_setup(
         }
     }
 
+    let mut group_counts = HashMap::new();
     for (index, load) in setup.nodal_loads.iter().enumerate() {
         let location = format!("CLOAD[{}] {}", index + 1, load.name);
         let Some(mesh) = model.meshes.get(load.mesh_index) else {
@@ -365,6 +366,27 @@ fn validate_analysis_setup(
         }
         if let Some(center) = &load.rotation_center {
             validate_rotation_center(report, &location, model, center);
+        }
+        if let Some(group) = crate::cnt_writer::grouped_load_key(load) {
+            let counts: &mut HashMap<_, usize> = group_counts.entry(group).or_default();
+            *counts.entry(load.node).or_default() += 1;
+        }
+    }
+
+    for (key, counts) in group_counts {
+        let Some(group) = model.meshes[key.mesh_index]
+            .node_sets.iter().find(|set| set.name == key.group)
+        else {
+            continue; // A missing group was reported above.
+        };
+        let occurrences = counts.values().next().copied();
+        if counts.len() != group.nodes.len()
+            || !group.nodes.iter().all(|node| counts.get(node).copied() == occurrences)
+        {
+            report.error(
+                format!("CLOAD group {}", key.group),
+                "group membership or repeated loads differ between nodes; a group row would change which loads FrontISTR applies",
+            );
         }
     }
 
@@ -971,6 +993,33 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn blocks_compact_load_when_its_node_coverage_changes() {
+        let mut model = FemModel::demo_hex8();
+        let nodes = model.meshes[0].nodes.iter().take(2).map(|node| node.id).collect::<Vec<_>>();
+        model.meshes[0].node_sets.push(fem_core::FemNodeSet {
+            name: "LOADED".into(),
+            nodes: nodes.clone(),
+        });
+        let mut setup = AnalysisSetup::default();
+        for node in nodes {
+            setup.nodal_loads.push(NodalLoad {
+                name: "LOADED".into(),
+                mesh_index: 0,
+                node,
+                ngrp_name: Some("LOADED".into()),
+                rotation_center: None,
+                dof: 1,
+                value: 3.0,
+            });
+        }
+        assert!(!validate_frontistr_project(&model, &setup).has_errors());
+        setup.nodal_loads.push(setup.nodal_loads[0].clone());
+        let report = validate_frontistr_project(&model, &setup);
+        assert!(report.has_errors());
+        assert!(report.summary(10).contains("repeated loads differ between nodes"));
+    }
 
     #[test]
     fn blocked_partition_path_does_not_replace_any_input_files() {

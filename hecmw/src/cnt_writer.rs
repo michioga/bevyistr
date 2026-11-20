@@ -155,15 +155,7 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     let mut last: Option<(&str, Option<&RotationCenter>)> = None;
     let mut compact_loads = HashMap::new();
     for load in &setup.nodal_loads {
-        if let Some(group) = &load.ngrp_name {
-            let compact_key = (
-                load.mesh_index,
-                load.name.as_str(),
-                group.as_str(),
-                load.dof,
-                load.value.to_bits(),
-                load.rotation_center.as_ref(),
-            );
+        if let Some(compact_key) = grouped_load_key(load) {
             // A source row is expanded once per member. Preserve the number
             // of occurrences per node, including identical additive rows.
             let (written, occurrences): &mut (usize, HashMap<_, usize>) =
@@ -364,6 +356,27 @@ fn write_bc(o: &mut String, bc: &BoundaryCondition) {
             .unwrap();
         }
     }
+}
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+pub(crate) struct GroupedLoadKey<'a> {
+    pub mesh_index: usize,
+    pub group: &'a str,
+    name: &'a str,
+    dof: u8,
+    value: u32,
+    rotation_center: Option<&'a RotationCenter>,
+}
+
+pub(crate) fn grouped_load_key(load: &NodalLoad) -> Option<GroupedLoadKey<'_>> {
+    Some(GroupedLoadKey {
+        mesh_index: load.mesh_index,
+        group: load.ngrp_name.as_deref()?,
+        name: &load.name,
+        dof: load.dof,
+        value: load.value.to_bits(),
+        rotation_center: load.rotation_center.as_ref(),
+    })
 }
 
 fn write_cload(o: &mut String, load: &NodalLoad) {
