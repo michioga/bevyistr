@@ -745,7 +745,32 @@ pub fn write_frontistr_project(
     model: &FemModel,
     setup: &AnalysisSetup,
 ) -> Result<FrontistrExportSummary, FrontistrExportError> {
-    let dir = dir.as_ref();
+    write_project_inputs(dir.as_ref(), stem, model, setup, None)
+}
+
+/// Writes and publishes the entire MPI input set before partitioning starts.
+pub fn write_parallel_frontistr_project(
+    dir: impl AsRef<Path>,
+    stem: &str,
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    partition_prefix: &str,
+    ranks: u16,
+) -> Result<FrontistrExportSummary, FrontistrExportError> {
+    if let Some(partition) = &setup.frontistr_partition {
+        crate::partition_control::validate(partition, ranks, !model.contacts.is_empty())
+            .map_err(|error| FrontistrExportError::new("hecmw_part_ctrl.dat", error))?;
+    }
+    write_project_inputs(dir.as_ref(), stem, model, setup, Some((partition_prefix, ranks)))
+}
+
+fn write_project_inputs(
+    dir: &Path,
+    stem: &str,
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    parallel: Option<(&str, u16)>,
+) -> Result<FrontistrExportSummary, FrontistrExportError> {
     let validation = validate_frontistr_project(model, setup);
     if validation.has_errors() {
         return Err(FrontistrExportError::validation(&validation));
@@ -761,16 +786,25 @@ pub fn write_frontistr_project(
         .map_err(|error| FrontistrExportError::new("staging project input", error))?;
     let dir = staged.path();
 
-    write_hecmw_ctrl_with_settings(
-        dir,
-        &HecmwCtrlParams {
-            mesh_name: stem,
-            cnt_name: stem,
-            result_name: stem,
-        },
-        setup.frontistr_control,
-    )
-    .map_err(|error| FrontistrExportError::new("hecmw_ctrl.dat", error))?;
+    let ctrl = HecmwCtrlParams {
+        mesh_name: stem,
+        cnt_name: stem,
+        result_name: stem,
+    };
+    if let Some((prefix, ranks)) = parallel {
+        crate::ctrl_writer::write_parallel_hecmw_ctrl_with_settings(
+            dir,
+            &ctrl,
+            prefix,
+            ranks,
+            setup.frontistr_control,
+            setup.frontistr_partition.as_ref(),
+        )
+        .map_err(|error| FrontistrExportError::new("parallel control files", error))?;
+    } else {
+        write_hecmw_ctrl_with_settings(dir, &ctrl, setup.frontistr_control)
+            .map_err(|error| FrontistrExportError::new("hecmw_ctrl.dat", error))?;
+    }
 
     let part_count = model.meshes.len();
     let mut remapped_setup;
@@ -799,7 +833,12 @@ pub fn write_frontistr_project(
         write_cnt_file_with_contacts(&cnt_path, setup, &model.contacts)
             .map_err(|error| FrontistrExportError::new(&cnt_name, error))?;
 
-    staged.publish(&[&msh_name, &cnt_name, "hecmw_ctrl.dat"])
+    let mut files = vec![msh_name.as_str(), cnt_name.as_str()];
+    if parallel.is_some() {
+        files.push("hecmw_part_ctrl.dat");
+    }
+    files.push("hecmw_ctrl.dat");
+    staged.publish(&files)
         .map_err(|error| FrontistrExportError::new("replacing project input", error))?;
 
     Ok(FrontistrExportSummary {
@@ -932,6 +971,22 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn blocked_partition_path_does_not_replace_any_input_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        for name in ["old.msh", "old.cnt", "hecmw_ctrl.dat"] {
+            std::fs::write(dir.join(name), name).unwrap();
+        }
+        std::fs::create_dir(dir.join("hecmw_part_ctrl.dat")).unwrap();
+        let model = FemModel::demo_hex8();
+        let setup = AnalysisSetup::default();
+        assert!(write_parallel_frontistr_project(dir, "old", &model, &setup, "ranks", 2).is_err());
+        for name in ["old.msh", "old.cnt", "hecmw_ctrl.dat"] {
+            assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(), name);
+        }
+    }
 
     #[test]
     fn blocked_mesh_path_does_not_replace_the_existing_control_file() {

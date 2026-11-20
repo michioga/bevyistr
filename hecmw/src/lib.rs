@@ -31,7 +31,7 @@ pub use msh_writer::{
 pub use project_writer::{
     FrontistrExportError, FrontistrExportSummary, FrontistrValidationIssue,
     FrontistrValidationReport, FrontistrValidationSeverity, remap_setup_for_assembly,
-    validate_frontistr_project, write_frontistr_project,
+    validate_frontistr_project, write_frontistr_project, write_parallel_frontistr_project,
 };
 pub use result::{ResultLoadError, load_result_file, parse_result_str};
 pub use series::{detect_series, load_series};

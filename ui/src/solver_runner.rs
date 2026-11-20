@@ -89,7 +89,7 @@ pub(crate) struct FrontistrRunState {
     results_source: Option<crate::run_results::RunResultSource>,
     auto_load_results: bool,
     control_settings: fem_core::FrontistrControlSettings,
-    partition_settings: Option<fem_core::FrontistrPartitionSettings>,
+    prepared_partition_prefix: Option<String>,
 }
 
 impl Default for FrontistrRunState {
@@ -132,7 +132,7 @@ impl Default for FrontistrRunState {
             results_source: None,
             auto_load_results: true,
             control_settings: Default::default(),
-            partition_settings: None,
+            prepared_partition_prefix: None,
         }
     }
 }
@@ -188,7 +188,7 @@ impl FrontistrRunState {
     pub(crate) fn clear_export_target(&mut self) {
         self.results_source = None;
         self.control_settings = Default::default();
-        self.partition_settings = None;
+        self.prepared_partition_prefix = None;
         self.project = None;
         if self.is_running() {
             return;
@@ -282,12 +282,6 @@ impl FrontistrRunState {
         if validation.has_errors() {
             return Err(validation.summary(5));
         }
-        if self.launch_mode == SolverLaunchMode::Mpi {
-            if let Some(partition) = &setup.frontistr_partition {
-                hecmw::partition_control::validate(partition, self.mpi_ranks, !model.contacts.is_empty())
-                    .map_err(|error| format!("Invalid MPI partition settings: {error}"))?;
-            }
-        }
         let target = match self.project().cloned() {
             Some(target) => target,
             None => {
@@ -301,11 +295,21 @@ impl FrontistrRunState {
                 }
             }
         };
-        hecmw::write_frontistr_project(&target.directory, &target.stem, model, setup)
-            .map_err(|error| format!("Could not write solver input: {error}"))?;
+        let prepared_partition_prefix = if self.launch_mode == SolverLaunchMode::Mpi {
+            let prefix = crate::solver_process::new_partition_prefix(self.mpi_ranks)?;
+            hecmw::write_parallel_frontistr_project(
+                &target.directory, &target.stem, model, setup, &prefix, self.mpi_ranks,
+            )
+            .map_err(|error| format!("Could not write MPI solver input: {error}"))?;
+            Some(prefix)
+        } else {
+            hecmw::write_frontistr_project(&target.directory, &target.stem, model, setup)
+                .map_err(|error| format!("Could not write solver input: {error}"))?;
+            None
+        };
         self.register_export(target.directory, target.stem);
         self.control_settings = setup.frontistr_control;
-        self.partition_settings = setup.frontistr_partition.clone();
+        self.prepared_partition_prefix = prepared_partition_prefix;
         Ok(true)
     }
 
@@ -331,7 +335,7 @@ impl FrontistrRunState {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
             control_settings: self.control_settings,
-            partition_settings: self.partition_settings.clone(),
+            prepared_partition_prefix: self.prepared_partition_prefix.take(),
             partitioner: self.partitioner.clone(),
             working_directory: target.directory.clone(),
             environment: self.runtime_environment.clone(),

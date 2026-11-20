@@ -184,6 +184,7 @@ mod tests {
     #[test]
     fn auto_resets_only_the_selected_mpi_tool_and_is_inactive_in_direct_mode() {
         let mut app = App::new();
+        app.init_resource::<fem_core::AnalysisSetup>();
         app.insert_resource(FrontistrRunState {
             launch_mode: SolverLaunchMode::Direct,
             partitioner: Some("chosen-partitioner".into()),

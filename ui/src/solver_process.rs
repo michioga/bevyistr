@@ -74,7 +74,7 @@ pub(crate) struct SolverProcessConfig {
     pub(crate) executable: PathBuf,
     pub(crate) project_stem: String,
     pub(crate) control_settings: fem_core::FrontistrControlSettings,
-    pub(crate) partition_settings: Option<fem_core::FrontistrPartitionSettings>,
+    pub(crate) prepared_partition_prefix: Option<String>,
     pub(crate) partitioner: Option<PathBuf>,
     pub(crate) working_directory: PathBuf,
     pub(crate) environment: RuntimeEnvironment,
@@ -165,6 +165,14 @@ impl SolverProcessHandle {
     }
 }
 
+pub(crate) fn new_partition_prefix(ranks: u16) -> Result<String, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    Ok(format!("bevyistr_part_{ranks}_{}_{stamp}", std::process::id()))
+}
+
 pub(crate) fn spawn_solver_process(
     config: SolverProcessConfig,
 ) -> Result<SolverProcessHandle, String> {
@@ -179,10 +187,13 @@ pub(crate) fn spawn_solver_process(
     // Share this run's exact prefix with the result reader; never discover
     // partition ownership by guessing among previous runs' files.
     let partition_prefix = if config.launch_mode == SolverLaunchMode::Mpi {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
-        Some(format!("bevyistr_part_{}_{}_{}", config.mpi_ranks, std::process::id(), stamp))
-    } else { None };
+        Some(match &config.prepared_partition_prefix {
+            Some(prefix) => prefix.clone(),
+            None => new_partition_prefix(config.mpi_ranks)?,
+        })
+    } else {
+        None
+    };
     let worker_prefix = partition_prefix.clone();
     thread::Builder::new()
         .name("frontistr-runner".to_string())
@@ -345,19 +356,21 @@ fn run_pipeline(
         // A fresh prefix prevents a previous successful run from masking
         // incomplete/missing output from this partitioner invocation.
         let distributed = partition_prefix.ok_or("Missing partition prefix")?;
-        hecmw::ctrl_writer::write_parallel_hecmw_ctrl_with_settings(
-            &config.working_directory,
-            &hecmw::HecmwCtrlParams {
-                mesh_name: &config.project_stem,
-                cnt_name: &config.project_stem,
-                result_name: &config.project_stem,
-            },
-            distributed,
-            config.mpi_ranks,
-            config.control_settings,
-            config.partition_settings.as_ref(),
-        )
-        .map_err(|e| format!("Could not write partition controls: {e}"))?;
+        if config.prepared_partition_prefix.is_none() {
+            hecmw::ctrl_writer::write_parallel_hecmw_ctrl_with_settings(
+                &config.working_directory,
+                &hecmw::HecmwCtrlParams {
+                    mesh_name: &config.project_stem,
+                    cnt_name: &config.project_stem,
+                    result_name: &config.project_stem,
+                },
+                distributed,
+                config.mpi_ranks,
+                config.control_settings,
+                None,
+            )
+            .map_err(|e| format!("Could not write partition controls: {e}"))?;
+        }
         let partition = ProcessStep {
             label: "Partitioning (hecmw_part1)",
             program: partitioner,
