@@ -284,8 +284,10 @@ pub(crate) fn mesh_load_system(
             ),
             Err(e) => status.failed(path, e.to_string()),
         },
-        _ => match hecmw::load_mesh_file_with_setup_and_contacts(&path) {
-            Ok((mesh, materials, sections, contact_pairs, mut equations)) => {
+        _ => match hecmw::load_mesh_project(&path) {
+            Ok(hecmw::HecmwMeshProject {
+                mesh, materials, sections, contacts: contact_pairs, mut equations, import_issues,
+            }) => {
                 let mesh_index = if import { model.meshes.len() } else { 0 };
                 apply_mesh(
                     mesh,
@@ -324,6 +326,10 @@ pub(crate) fn mesh_load_system(
                 }
                 if !equations.is_empty() {
                     setup.mpc_equations.extend(equations);
+                    changed = true;
+                }
+                if !import_issues.is_empty() {
+                    setup.import_issues.extend(import_issues);
                     changed = true;
                 }
                 if changed {

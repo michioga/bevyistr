@@ -567,7 +567,7 @@ impl LinearSolverMethod {
     }
 }
 
-/// A CNT setting that cannot yet be regenerated without changing its meaning.
+/// An imported FrontISTR setting that cannot yet be regenerated without changing its meaning.
 /// Keep this with the setup (including undo/assembly clones), not just in a log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupImportIssue {

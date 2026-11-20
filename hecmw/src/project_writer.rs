@@ -380,14 +380,6 @@ fn validate_analysis_setup(
         if !load.value.is_finite() {
             report.error(&location, "load value is not finite");
         }
-        if load.kind == DistributedLoadKind::Pressure
-            && matches!(&load.target, DistributedLoadTarget::Elements(_))
-        {
-            report.warning(
-                &location,
-                "pressure has no local-face data; export will use P1",
-            );
-        }
         if load.kind == DistributedLoadKind::Gravity {
             if let Some(direction) = load.direction {
                 if !direction.is_finite() || direction.length_squared() <= f32::EPSILON {

@@ -56,6 +56,13 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
             blockers.push(reason.into());
         }
     }
+    for load in &setup.distributed_loads {
+        if load.kind == DistributedLoadKind::Pressure
+            && matches!(load.target, DistributedLoadTarget::Elements(_))
+        {
+            blockers.push(format!("DLOAD {}: pressure requires a local face for each element", load.name));
+        }
+    }
     for target in [fem_core::OutputTarget::Res, fem_core::OutputTarget::Vis] {
         if let Err(reason) = setup.output.write(target).validate() {
             blockers.push(format!("{}: {reason}", target.label()));
@@ -382,13 +389,8 @@ fn write_dload(o: &mut String, dl: &DistributedLoad) {
                 .unwrap();
             }
         }
-        // Pressure without face info (e.g. hand-built from a bare element
-        // group rather than a picked surface) — fall back to local face 1
-        // rather than emitting FrontISTR's invalid/nonexistent "P0".
-        (DistributedLoadKind::Pressure, DistributedLoadTarget::Elements(elements)) => {
-            for el in elements {
-                writeln!(o, " {},P1,{:.8e}", el.0, dl.value).unwrap();
-            }
+        (DistributedLoadKind::Pressure, DistributedLoadTarget::Elements(_)) => {
+            unreachable!("pressure without faces must be rejected before export");
         }
         (DistributedLoadKind::Gravity, target) => {
             let direction = dl

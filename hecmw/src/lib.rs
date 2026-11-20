@@ -14,6 +14,7 @@ pub mod result_series;
 pub mod vtu;
 pub mod vtk_scene;
 mod vtk_partitions;
+mod msh_compatibility;
 
 pub use cnt::{CntData, CntError, load_cnt_file};
 pub use cnt_writer::{write_cnt_file, write_cnt_file_with_contacts};
@@ -165,6 +166,21 @@ pub fn load_mesh_file_with_setup_and_contacts(
     ),
     HecmwLoadError,
 > {
+    let project = load_mesh_project(path)?;
+    Ok((project.mesh, project.materials, project.sections, project.contacts, project.equations))
+}
+
+pub struct HecmwMeshProject {
+    pub mesh: FemMesh,
+    pub materials: Vec<fem_core::FemMaterial>,
+    pub sections: Vec<fem_core::Section>,
+    pub contacts: Vec<HecmwContactPairDefinition>,
+    pub equations: Vec<fem_core::MpcEquation>,
+    pub import_issues: Vec<fem_core::SetupImportIssue>,
+}
+
+/// Loads editable mesh data and reports imported settings that block export.
+pub fn load_mesh_project(path: impl AsRef<Path>) -> Result<HecmwMeshProject, HecmwLoadError> {
     let path = path.as_ref();
     let source = fs::read_to_string(path)?;
     let mesh = parse_mesh_str(&source).map_err(HecmwLoadError::from)?;
@@ -179,7 +195,8 @@ pub fn load_mesh_file_with_setup_and_contacts(
     let contacts = parse_msh_contact_pairs(&source);
     let equation_source = expand_msh_equation_inputs(&source, path)?;
     let equations = parse_msh_equations(&equation_source, &mesh);
-    Ok((mesh, materials, sections, contacts, equations))
+    let import_issues = msh_compatibility::audit(&source, path);
+    Ok(HecmwMeshProject { mesh, materials, sections, contacts, equations, import_issues })
 }
 
 #[derive(Debug, Clone)]

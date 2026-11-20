@@ -14,7 +14,7 @@ const BUTTON_NORMAL: Color = Color::srgba(0.10, 0.12, 0.14, 0.94);
 pub(crate) struct AnalysisSetupStatsText;
 
 #[derive(Component)]
-pub(crate) struct CntImportDetails;
+pub(crate) struct SetupImportDetails;
 
 #[derive(Component)]
 pub(crate) struct SetupImportWarningText;
@@ -65,7 +65,7 @@ pub(crate) fn update_import_warning(
         let count = setup.import_issues.len();
         let entry_label = if count == 1 { "entry" } else { "entries" };
         text.set_if_neq(Text::new(format!(
-            "CNT re-export blocked: {count} {entry_label}.\nSettings not preserved by bevyistr.\n{viewing}\nExport / Run blocked. {details}"
+            "Input re-export blocked: {count} {entry_label}.\nSettings not preserved by bevyistr.\n{viewing}\nExport / Run blocked. {details}"
         )));
     }
 }
@@ -205,14 +205,14 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
             TextLayout { linebreak: LineBreak::WordOrCharacter, ..default() },
             TextColor(TEXT_MUTED),
             Node { display: Display::None, ..default() },
-            CntImportDetails,
+            SetupImportDetails,
         ));
 }
 
 pub(crate) fn update_analysis_setup_stats_text(
     setup: Res<fem_core::AnalysisSetup>,
     mut query: Query<&mut Text, With<AnalysisSetupStatsText>>,
-    mut details: Query<(&mut Text, &mut Node), (With<CntImportDetails>, Without<AnalysisSetupStatsText>)>,
+    mut details: Query<(&mut Text, &mut Node), (With<SetupImportDetails>, Without<AnalysisSetupStatsText>)>,
 ) {
     if !setup.is_changed() {
         return;
@@ -246,7 +246,7 @@ pub(crate) fn update_analysis_setup_stats_text(
         if setup.import_issues.is_empty() {
             text.0.clear();
         } else {
-            let mut message = String::from("CNT RE-EXPORT DETAILS\nExport / Run is blocked to prevent settings loss.\n");
+            let mut message = String::from("INPUT RE-EXPORT DETAILS\nExport / Run is blocked to prevent settings loss.\n");
             for issue in &setup.import_issues {
                 message.push_str(&format!("\n{issue}\n"));
             }
@@ -274,7 +274,7 @@ mod tests {
             .id();
         let details = app
             .world_mut()
-            .spawn((Text::new(""), Node::default(), CntImportDetails))
+            .spawn((Text::new(""), Node::default(), SetupImportDetails))
             .id();
         app.update();
         assert_eq!(
@@ -303,7 +303,7 @@ mod tests {
                 .contains("heat.cnt:4")
         );
         let message = &app.world().get::<Text>(notice).unwrap().0;
-        assert!(message.contains("CNT re-export blocked: 1 entry."));
+        assert!(message.contains("Input re-export blocked: 1 entry."));
         assert!(message.contains("Settings not preserved by bevyistr"));
         assert!(message.contains("Mesh / result viewing is available"));
         // Changing pages updates the explanation without clearing blockers or
