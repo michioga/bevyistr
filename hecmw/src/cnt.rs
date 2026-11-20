@@ -911,6 +911,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preserves_repeated_concentrated_group_loads() {
+        let mesh = crate::parse_mesh_str(
+            "!NODE\n1,0,0,0\n2,1,0,0\n!NGROUP, NGRP=FIX\n1,2\n",
+        )
+        .unwrap();
+        let input = "!CLOAD, GRPID=1\nFIX,1,3.0\nFIX,1,3.0\n";
+        let mut setup = AnalysisSetup::default();
+        parse_cnt(input, &mesh, 0).merge_into(&mut setup);
+
+        let output = crate::cnt_writer::build_cnt(&setup, &[]);
+        assert_eq!(output.matches("FIX,1,3.00000000e0").count(), 2);
+        assert_eq!(parse_cnt(&output, &mesh, 0).nodal_loads, setup.nodal_loads);
+    }
+
+    #[test]
     fn output_controls_round_trip_independently_without_changing_defaults() {
         use fem_core::OutputTarget;
         let model = fem_core::FemModel::demo_hex8();

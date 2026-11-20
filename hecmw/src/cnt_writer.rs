@@ -4,7 +4,7 @@ use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, DistributedLoadTarget, FemMaterial, NodalLoad, RotationCenter,
 };
-use std::{collections::HashSet, fmt::Write as FmtWrite, io, path::Path};
+use std::{collections::HashMap, fmt::Write as FmtWrite, io, path::Path};
 
 pub fn write_cnt_file(
     path: impl AsRef<Path>,
@@ -146,19 +146,27 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
 
     // CLOAD — group by name
     let mut last: Option<(&str, Option<&RotationCenter>)> = None;
-    let mut written_compact_loads = HashSet::new();
+    let mut compact_loads = HashMap::new();
     for load in &setup.nodal_loads {
         if let Some(group) = &load.ngrp_name {
             let compact_key = (
-                load.name.clone(),
-                group.clone(),
+                load.mesh_index,
+                load.name.as_str(),
+                group.as_str(),
                 load.dof,
                 load.value.to_bits(),
-                load.rotation_center.clone(),
+                load.rotation_center.as_ref(),
             );
-            if !written_compact_loads.insert(compact_key) {
+            // A source row is expanded once per member. Preserve the number
+            // of occurrences per node, including identical additive rows.
+            let (written, occurrences): &mut (usize, HashMap<_, usize>) =
+                compact_loads.entry(compact_key).or_default();
+            let count = occurrences.entry(load.node).or_default();
+            *count += 1;
+            if *count <= *written {
                 continue;
             }
+            *written = *count;
         }
         let key = (load.name.as_str(), load.rotation_center.as_ref());
         if last != Some(key) {
