@@ -34,11 +34,7 @@ pub fn write_parallel_hecmw_ctrl(
     if ranks == 0
         || [p.mesh_name, p.cnt_name, p.result_name, distributed_name]
             .iter()
-            .any(|name| {
-                name.is_empty()
-                    || name.contains(['\r', '\n', '/', '\\'])
-                    || matches!(*name, "." | "..")
-            })
+            .any(|name| !crate::staged_inputs::is_project_name(name))
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -65,9 +61,11 @@ pub fn write_parallel_hecmw_ctrl(
     writeln!(out, "!CONTROL, NAME=fstrCNT\n {}.cnt", p.cnt_name).unwrap();
     writeln!(out, "!RESULT, NAME=fstrRES, IO=OUT\n {}.res", p.result_name).unwrap();
     writeln!(out, "!RESULT, NAME=vis_out, IO=OUT\n {}_vis", p.result_name).unwrap();
+    let staged = crate::staged_inputs::StagedInputs::new(dir.as_ref())?;
     std::fs::write(
-        dir.as_ref().join("hecmw_part_ctrl.dat"),
+        staged.path().join("hecmw_part_ctrl.dat"),
         format!("!PARTITION, TYPE=NODE-BASED, METHOD=PMETIS, DOMAIN={ranks}\n"),
     )?;
-    std::fs::write(dir.as_ref().join("hecmw_ctrl.dat"), out)
+    std::fs::write(staged.path().join("hecmw_ctrl.dat"), out)?;
+    staged.publish(&["hecmw_part_ctrl.dat", "hecmw_ctrl.dat"])
 }

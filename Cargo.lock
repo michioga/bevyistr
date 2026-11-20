@@ -2239,6 +2239,7 @@ version = "0.4.0"
 dependencies = [
  "bevy",
  "bevyistr-fem-core",
+ "tempfile",
 ]
 
 [[package]]

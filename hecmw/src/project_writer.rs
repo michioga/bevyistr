@@ -751,6 +751,16 @@ pub fn write_frontistr_project(
         return Err(FrontistrExportError::validation(&validation));
     }
 
+    if !crate::staged_inputs::is_project_name(stem) {
+        return Err(FrontistrExportError::new(
+            "project file name",
+            io::Error::new(io::ErrorKind::InvalidInput, "Expected a simple file stem"),
+        ));
+    }
+    let staged = crate::staged_inputs::StagedInputs::new(dir)
+        .map_err(|error| FrontistrExportError::new("staging project input", error))?;
+    let dir = staged.path();
+
     write_hecmw_ctrl(
         dir,
         &HecmwCtrlParams {
@@ -787,6 +797,9 @@ pub fn write_frontistr_project(
     let (boundary_condition_count, load_count, material_count, section_count, contact_count) =
         write_cnt_file_with_contacts(&cnt_path, setup, &model.contacts)
             .map_err(|error| FrontistrExportError::new(&cnt_name, error))?;
+
+    staged.publish(&[&msh_name, &cnt_name, "hecmw_ctrl.dat"])
+        .map_err(|error| FrontistrExportError::new("replacing project input", error))?;
 
     Ok(FrontistrExportSummary {
         node_count,
@@ -918,6 +931,24 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn blocked_mesh_path_does_not_replace_the_existing_control_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        std::fs::write(dir.join("hecmw_ctrl.dat"), "existing control").unwrap();
+        std::fs::create_dir(dir.join("collision.msh")).unwrap();
+
+        let model = FemModel::demo_hex8();
+        let setup = AnalysisSetup::default();
+        assert!(!validate_frontistr_project(&model, &setup).has_errors());
+        assert!(write_frontistr_project(dir, "collision", &model, &setup).is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("hecmw_ctrl.dat")).unwrap(),
+            "existing control"
+        );
+        assert!(!dir.join("collision.cnt").exists());
+    }
 
     #[test]
     fn assembly_output_group_is_not_silently_exported_with_a_stale_name() {

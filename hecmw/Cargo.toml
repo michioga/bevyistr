@@ -17,3 +17,4 @@ name = "hecmw"
 [dependencies]
 bevy.workspace = true
 fem_core.workspace = true
+tempfile = "3.27"
