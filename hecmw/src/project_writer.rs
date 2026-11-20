@@ -16,7 +16,7 @@ use fem_core::{
 use crate::msh_writer::{element_type_code, part_group_prefix, validate_single_mesh_all_groups};
 use crate::{
     HecmwCtrlParams, assembly_id_offsets, remap_element, remap_node, write_cnt_file_with_contacts,
-    write_hecmw_ctrl, write_msh_assembly_with_setup, write_msh_file_with_setup,
+    ctrl_writer::write_hecmw_ctrl_with_settings, write_msh_assembly_with_setup, write_msh_file_with_setup,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -761,13 +761,14 @@ pub fn write_frontistr_project(
         .map_err(|error| FrontistrExportError::new("staging project input", error))?;
     let dir = staged.path();
 
-    write_hecmw_ctrl(
+    write_hecmw_ctrl_with_settings(
         dir,
         &HecmwCtrlParams {
             mesh_name: stem,
             cnt_name: stem,
             result_name: stem,
         },
+        setup.frontistr_control,
     )
     .map_err(|error| FrontistrExportError::new("hecmw_ctrl.dat", error))?;
 

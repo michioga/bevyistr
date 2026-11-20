@@ -226,6 +226,7 @@ pub struct HoverPreviewTargets {
 #[derive(Resource, Debug, Clone, Default)]
 pub struct PendingCntLoad {
     pub path: Option<PathBuf>,
+    pub project_control: Option<(FrontistrControlSettings, Vec<SetupImportIssue>)>,
 
     /// Index into [`FemModel::meshes`] the `.cnt` file's groups should be
     /// resolved against once it's ready to load.
@@ -242,6 +243,7 @@ impl PendingCntLoad {
     /// version read at the moment the concurrent mesh load was requested).
     pub fn request(&mut self, path: PathBuf, mesh_index: usize, current_version: u64) {
         self.path = Some(path);
+        self.project_control = None;
         self.mesh_index = mesh_index;
         self.after_version = current_version;
     }

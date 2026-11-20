@@ -73,6 +73,7 @@ impl RuntimeEnvironment {
 pub(crate) struct SolverProcessConfig {
     pub(crate) executable: PathBuf,
     pub(crate) project_stem: String,
+    pub(crate) control_settings: fem_core::FrontistrControlSettings,
     pub(crate) partitioner: Option<PathBuf>,
     pub(crate) working_directory: PathBuf,
     pub(crate) environment: RuntimeEnvironment,
@@ -343,7 +344,7 @@ fn run_pipeline(
         // A fresh prefix prevents a previous successful run from masking
         // incomplete/missing output from this partitioner invocation.
         let distributed = partition_prefix.ok_or("Missing partition prefix")?;
-        hecmw::write_parallel_hecmw_ctrl(
+        hecmw::ctrl_writer::write_parallel_hecmw_ctrl_with_settings(
             &config.working_directory,
             &hecmw::HecmwCtrlParams {
                 mesh_name: &config.project_stem,
@@ -352,6 +353,7 @@ fn run_pipeline(
             },
             distributed,
             config.mpi_ranks,
+            config.control_settings,
         )
         .map_err(|e| format!("Could not write partition controls: {e}"))?;
         let partition = ProcessStep {
@@ -374,7 +376,12 @@ fn run_pipeline(
                 ));
             }
         }
-        verify_partition_files(&config.working_directory, distributed, config.mpi_ranks)?;
+        verify_partition_files(
+            &config.working_directory,
+            distributed,
+            config.mpi_ranks,
+            config.control_settings.subdirectory_limit(),
+        )?;
     }
     if cancelled(stop) {
         return Ok(StepResult::Stopped);
@@ -388,9 +395,14 @@ fn run_pipeline(
     )
 }
 
-fn verify_partition_files(directory: &Path, prefix: &str, ranks: u16) -> Result<(), String> {
+fn verify_partition_files(
+    directory: &Path,
+    prefix: &str,
+    ranks: u16,
+    subdirectory_limit: Option<u32>,
+) -> Result<(), String> {
     for rank in 0..ranks {
-        let path = directory.join(format!("{prefix}.{rank}"));
+        let path = hecmw::ctrl_writer::partition_mesh_path(directory, prefix, ranks, rank, subdirectory_limit);
         if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() > 0) {
             return Err(format!(
                 "Partition output missing or empty: {}; solver was not started.",

@@ -11,6 +11,7 @@
 //!  hinge.res
 //! ```
 
+use fem_core::{FrontistrControlSettings, FrontistrSubdirectories, SetupImportIssue};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -25,11 +26,18 @@ pub struct HecmwCtrlContent {
     pub distributed_mesh_path: Option<String>,
     pub cnt_path: Option<String>,
     pub result_path: Option<String>,
+    pub settings: FrontistrControlSettings,
+    pub import_issues: Vec<SetupImportIssue>,
 }
 
 pub fn load_hecmw_ctrl(path: impl AsRef<Path>) -> io::Result<HecmwCtrlContent> {
-    let text = std::fs::read_to_string(path.as_ref())?;
-    Ok(parse_ctrl(&text))
+    let path = path.as_ref();
+    let text = std::fs::read_to_string(path)?;
+    let mut control = parse_ctrl(&text);
+    for issue in &mut control.import_issues {
+        issue.source = path.display().to_string();
+    }
+    Ok(control)
 }
 
 /// Resolves the relative paths in `content` against the directory containing
@@ -62,6 +70,8 @@ pub fn resolve_paths(
 fn parse_ctrl(text: &str) -> HecmwCtrlContent {
     let mut c = HecmwCtrlContent::default();
     let mut mesh_priority = 0;
+    let mut seen_result = false;
+    let mut seen_subdir = false;
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
 
@@ -85,6 +95,50 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                 })
             };
             let name = parameter("NAME").unwrap_or("");
+            let result = keyword.eq_ignore_ascii_case("!RESULT");
+            let mut problem = None;
+            if keyword.eq_ignore_ascii_case("!SUBDIR") {
+                if seen_subdir {
+                    problem = Some("Repeated SUBDIR cards cannot be preserved");
+                } else {
+                    seen_subdir = true;
+                    c.settings.subdirectories = parse_subdir(line);
+                    if c.settings.subdirectories.is_none() {
+                        problem = Some("Invalid SUBDIR options");
+                    }
+                }
+            } else if result && name.eq_ignore_ascii_case("fstrRES") {
+                if seen_result {
+                    problem = Some("Repeated fstrRES results cannot be preserved");
+                } else {
+                    seen_result = true;
+                    c.settings.binary_result = match parameter("TYPE").map(str::to_ascii_uppercase).as_deref() {
+                        Some("BINARY") => Some(true),
+                        Some("TEXT") => Some(false),
+                        None => None,
+                        _ => {
+                            problem = Some("Unsupported result file TYPE");
+                            None
+                        }
+                    };
+                    if parameter("IO").is_some_and(|io| !io.eq_ignore_ascii_case("OUT")) {
+                        problem = Some("Only fstrRES output files can be regenerated");
+                    }
+                }
+            } else if keyword.eq_ignore_ascii_case("!RESTART")
+                || (result && name.eq_ignore_ascii_case("fstrTEMP"))
+                || (keyword.eq_ignore_ascii_case("!MESH") && parameter("REFINE").is_some())
+            {
+                problem = Some("This global control setting cannot be regenerated");
+            }
+            if let Some(message) = problem {
+                c.import_issues.push(SetupImportIssue {
+                    source: "hecmw_ctrl.dat".into(),
+                    line: i + 1,
+                    keyword: line.into(),
+                    message: message.into(),
+                });
+            }
             let candidate_priority = if keyword.eq_ignore_ascii_case("!MESH")
                 && parameter("TYPE").is_none_or(|kind| !kind.eq_ignore_ascii_case("HECMW-DIST"))
             {
@@ -148,6 +202,25 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
     }
 
     c
+}
+
+fn parse_subdir(line: &str) -> Option<FrontistrSubdirectories> {
+    let mut enabled = None;
+    let mut limit = None;
+    for field in line.split(',').skip(1).map(str::trim) {
+        match field.to_ascii_uppercase().as_str() {
+            "ON" if enabled.is_none() => enabled = Some(true),
+            "OFF" if enabled.is_none() => enabled = Some(false),
+            _ => {
+                let (key, value) = field.split_once('=')?;
+                if !key.trim().eq_ignore_ascii_case("LIMIT") || limit.is_some() {
+                    return None;
+                }
+                limit = Some(value.trim().parse().ok()?);
+            }
+        }
+    }
+    Some(FrontistrSubdirectories { enabled: enabled?, limit })
 }
 
 #[cfg(test)]

@@ -587,6 +587,26 @@ impl std::fmt::Display for SetupImportIssue {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrontistrControlSettings {
+    pub binary_result: Option<bool>,
+    pub subdirectories: Option<FrontistrSubdirectories>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrontistrSubdirectories {
+    pub enabled: bool,
+    pub limit: Option<std::num::NonZeroU32>,
+}
+
+impl FrontistrControlSettings {
+    pub fn subdirectory_limit(self) -> Option<u32> {
+        self.subdirectories
+            .filter(|subdirectories| subdirectories.enabled)
+            .map(|subdirectories| subdirectories.limit.map_or(5000, |limit| limit.get()))
+    }
+}
+
 #[derive(Resource, Debug, Clone)]
 pub struct AnalysisSetup {
     pub boundary_conditions: Vec<BoundaryCondition>,
@@ -607,6 +627,7 @@ pub struct AnalysisSetup {
     /// `!SOLVER` etc. in the exported `.cnt` file.
     pub solver: SolverSettings,
     pub output: crate::OutputSettings,
+    pub frontistr_control: FrontistrControlSettings,
     /// Import blockers are not cleared by editing a solver dropdown. The
     /// omitted source settings must not silently disappear on export/run.
     pub import_issues: Vec<SetupImportIssue>,
@@ -623,6 +644,7 @@ impl Default for AnalysisSetup {
             mpc_equations: Vec::new(),
             solver: SolverSettings::default(),
             output: crate::OutputSettings::default(),
+            frontistr_control: FrontistrControlSettings::default(),
             import_issues: Vec::new(),
         }
     }

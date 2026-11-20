@@ -521,14 +521,13 @@ pub(crate) fn open_project_button_system(
             match hecmw::load_hecmw_ctrl(&ctrl_path) {
                 Ok(content) => {
                     let (mesh_path, cnt_path) = hecmw::resolve_paths(&ctrl_path, &content);
-                    if let Some(mesh_path) = mesh_path {
+                    if let (Some(mesh_path), Some(cnt_path)) = (mesh_path, cnt_path) {
                         load_status.loading(mesh_path.clone());
                         request.request(mesh_path);
-                    } else {
-                        bevy::log::warn!("hecmw_ctrl.dat: mesh file not found");
-                    }
-                    if let Some(cnt_path) = cnt_path {
                         pending_cnt.request(cnt_path, 0, version.value);
+                        pending_cnt.project_control = Some((content.settings, content.import_issues));
+                    } else {
+                        bevy::log::warn!("hecmw_ctrl.dat: mesh or control file not found");
                     }
                 }
                 Err(e) => bevy::log::warn!("Failed to parse hecmw_ctrl.dat: {e}"),
@@ -566,6 +565,10 @@ pub(crate) fn apply_pending_cnt_system(
         return;
     };
 
+    if let Some((settings, issues)) = pending_cnt.project_control.take() {
+        setup.frontistr_control = settings;
+        setup.import_issues.extend(issues);
+    }
     match hecmw::load_cnt_file(&path, mesh, mesh_index) {
         Ok(data) => {
             for issue in &data.import_issues {

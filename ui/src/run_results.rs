@@ -22,6 +22,7 @@ pub(crate) struct RunResultSource {
     directory: PathBuf,
     stem: String,
     ranks: u16,
+    subdirectory_limit: Option<u32>,
     before: Snapshot,
     completed: Option<Snapshot>,
     pub(crate) partition_prefix: Option<String>,
@@ -38,13 +39,50 @@ fn stamp(path: &Path) -> Result<Stamp, String> {
     })
 }
 
-fn snapshot(directory: &Path, stem: &str) -> Result<Snapshot, String> {
+fn snapshot(directory: &Path, stem: &str, subdirectory_limit: Option<u32>) -> Result<Snapshot, String> {
     let prefix = format!("{stem}.res.");
     let mut snapshot = BTreeMap::new();
+    if subdirectory_limit.is_some() {
+        let root = directory.join("fstrRES");
+        let steps = match root.read_dir() {
+            Ok(steps) => steps,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(snapshot),
+            Err(error) => return Err(error.to_string()),
+        };
+        for step in steps {
+            let step = step.map_err(|e| e.to_string())?;
+            let step_number = step.file_name().to_str().and_then(|name| {
+                name.strip_prefix("STEP")?.parse::<u32>().ok()
+            });
+            if step_number.is_some() && step.file_type().map_err(|e| e.to_string())?.is_dir() {
+                scan_results(&step.path(), &prefix, step_number, true, &mut snapshot)?;
+            }
+        }
+    } else {
+        scan_results(directory, &prefix, None, false, &mut snapshot)?;
+    }
+    Ok(snapshot)
+}
+
+fn scan_results(
+    directory: &Path,
+    prefix: &str,
+    expected_step: Option<u32>,
+    scan_trunks: bool,
+    snapshot: &mut Snapshot,
+) -> Result<(), String> {
     for entry in directory.read_dir().map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        let Some(suffix) = name.to_str().and_then(|n| n.strip_prefix(&prefix)) else {
+        if scan_trunks
+            && name.to_str().and_then(|name| name.strip_prefix("TRUNK"))
+                .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+            && entry.file_type().map_err(|e| e.to_string())?.is_dir()
+        {
+            scan_results(&entry.path(), prefix, expected_step, false, snapshot)?;
+            continue;
+        }
+        let Some(suffix) = name.to_str().and_then(|n| n.strip_prefix(prefix)) else {
             continue;
         };
         let mut fields = suffix.split('.');
@@ -55,7 +93,7 @@ fn snapshot(directory: &Path, stem: &str) -> Result<Snapshot, String> {
             continue;
         };
         let path = entry.path();
-        if !path.is_file() {
+        if expected_step.is_some_and(|expected| expected != step) || !path.is_file() {
             continue;
         }
         let meta = stamp(&path)?;
@@ -63,26 +101,38 @@ fn snapshot(directory: &Path, stem: &str) -> Result<Snapshot, String> {
             return Err("Ambiguous result filenames".into());
         }
     }
-    Ok(snapshot)
+    Ok(())
 }
 
 impl RunResultSource {
+    #[cfg(test)]
     pub(crate) fn capture(
         directory: &Path,
         stem: &str,
         ranks: u16,
         model_version: u64,
     ) -> Result<Self, String> {
+        Self::capture_with_subdirectories(directory, stem, ranks, model_version, None)
+    }
+
+    pub(crate) fn capture_with_subdirectories(
+        directory: &Path,
+        stem: &str,
+        ranks: u16,
+        model_version: u64,
+        subdirectory_limit: Option<u32>,
+    ) -> Result<Self, String> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Ok(Self {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
             model_version,
-            before: snapshot(directory, stem)?,
+            before: snapshot(directory, stem, subdirectory_limit)?,
             completed: None,
             directory: directory.into(),
             stem: stem.into(),
             ranks,
+            subdirectory_limit,
             partition_prefix: None,
         })
     }
@@ -90,7 +140,7 @@ impl RunResultSource {
     /// Freeze the completed run before a later external solver invocation
     /// can replace its values in the same directory.
     pub(crate) fn finish(&mut self) -> Result<(), String> {
-        self.completed = Some(snapshot(&self.directory, &self.stem)?);
+        self.completed = Some(snapshot(&self.directory, &self.stem, self.subdirectory_limit)?);
         Ok(())
     }
 
@@ -119,7 +169,9 @@ impl RunResultSource {
         let mut partition_stamps = Vec::new();
         let owners = if let Some(prefix) = &self.partition_prefix {
             let paths: Vec<_> = (0..self.ranks)
-                .map(|rank| self.directory.join(format!("{prefix}.{rank}")))
+                .map(|rank| hecmw::ctrl_writer::partition_mesh_path(
+                    &self.directory, prefix, self.ranks, rank, self.subdirectory_limit,
+                ))
                 .collect();
             for path in &paths {
                 partition_stamps.push((path.clone(), stamp(path)?));
@@ -130,7 +182,7 @@ impl RunResultSource {
         } else {
             None
         };
-        let after = snapshot(&self.directory, &self.stem)?;
+        let after = snapshot(&self.directory, &self.stem, self.subdirectory_limit)?;
         if self
             .completed
             .as_ref()
@@ -188,6 +240,20 @@ mod benchmark;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovers_only_result_steps_in_the_frontistr_subdirectories() {
+        let directory = tempfile::tempdir().unwrap();
+        let step = directory.path().join("fstrRES/STEP5/TRUNK1");
+        std::fs::create_dir_all(&step).unwrap();
+        std::fs::write(step.join("job.res.1.5"), "new").unwrap();
+        std::fs::write(step.join("job.res.1.4"), "wrong step").unwrap();
+        std::fs::write(directory.path().join("job.res.0.5"), "other layout").unwrap();
+
+        let found = snapshot(directory.path(), "job", Some(1)).unwrap();
+        assert_eq!(found.keys().copied().collect::<Vec<_>>(), [(5, 1)]);
+    }
+
     fn record(id: u32, value: f32) -> String {
         format!("*fstrresult\n1 0\n1 0\n3\nDISPLACEMENT\n{id}\n{value} 0 0\n")
     }

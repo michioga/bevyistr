@@ -73,6 +73,7 @@ fn fake_project(mode: SolverLaunchMode) -> (TempProject, SolverProcessConfig) {
     let config = SolverProcessConfig {
         executable: dir.0.join(executable_name("fistr1")),
         project_stem: "model".into(),
+        control_settings: Default::default(),
         partitioner: None,
         working_directory: dir.0.clone(),
         environment: RuntimeEnvironment::Inherited,
@@ -377,6 +378,7 @@ fn installed_frontistr_parallel_smoke() {
             .map(PathBuf::from)
             .unwrap_or_else(|| "fistr1".into()),
         project_stem: "hinge".into(),
+        control_settings: Default::default(),
         partitioner: None,
         working_directory: dir.0.clone(),
         environment: RuntimeEnvironment::detect(),

@@ -88,6 +88,7 @@ pub(crate) struct FrontistrRunState {
     stop_requested: bool,
     results_source: Option<crate::run_results::RunResultSource>,
     auto_load_results: bool,
+    control_settings: fem_core::FrontistrControlSettings,
 }
 
 impl Default for FrontistrRunState {
@@ -129,6 +130,7 @@ impl Default for FrontistrRunState {
             stop_requested: false,
             results_source: None,
             auto_load_results: true,
+            control_settings: Default::default(),
         }
     }
 }
@@ -183,6 +185,7 @@ impl FrontistrRunState {
 
     pub(crate) fn clear_export_target(&mut self) {
         self.results_source = None;
+        self.control_settings = Default::default();
         self.project = None;
         if self.is_running() {
             return;
@@ -286,6 +289,7 @@ impl FrontistrRunState {
         hecmw::write_frontistr_project(&target.directory, &target.stem, model, setup)
             .map_err(|error| format!("Could not write solver input: {error}"))?;
         self.register_export(target.directory, target.stem);
+        self.control_settings = setup.frontistr_control;
         Ok(true)
     }
 
@@ -297,11 +301,12 @@ impl FrontistrRunState {
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
         }
-        let mut results_source = if res_enabled {
-            Some(crate::run_results::RunResultSource::capture(
+        let mut results_source = if res_enabled && self.control_settings.binary_result != Some(true) {
+            Some(crate::run_results::RunResultSource::capture_with_subdirectories(
                 &target.directory, &target.stem,
                 if self.launch_mode == SolverLaunchMode::Mpi { self.mpi_ranks } else { 1 },
                 model_version,
+                self.control_settings.subdirectory_limit(),
             )?)
         } else {
             None
@@ -309,6 +314,7 @@ impl FrontistrRunState {
         let process = spawn_solver_process(SolverProcessConfig {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
+            control_settings: self.control_settings,
             partitioner: self.partitioner.clone(),
             working_directory: target.directory.clone(),
             environment: self.runtime_environment.clone(),
@@ -400,6 +406,8 @@ impl FrontistrRunState {
                 if !self.auto_load_results {
                     self.message.push_str(" RES output was OFF: automatic result loading skipped. Use Open Results for any VTK output.");
                     self.results_source = None;
+                } else if self.control_settings.binary_result == Some(true) {
+                    self.message.push_str(" Binary RES saved. Use Open Results for any VTK output.");
                 }
                 if let Some(source) = &mut self.results_source {
                     if let Err(error) = source.finish() {
