@@ -620,35 +620,29 @@ fn parse_msh_setup(
 
                 let item =
                     keyword_assignment_value(sub).and_then(|value| value.parse::<u32>().ok());
-                if sub_upper.starts_with("!ELASTIC") || item == Some(1) {
+                let elastic = sub_upper.starts_with("!ELASTIC") || item == Some(1);
+                let density = sub_upper.starts_with("!DENSITY") || item == Some(2);
+                if elastic || density {
                     i += 1;
-                    if i < lines.len() {
-                        let vals: Vec<f32> = lines[i]
-                            .trim()
-                            .split(',')
-                            .filter_map(|v| v.trim().parse::<f32>().ok())
-                            .collect();
-                        if let Some(&e) = vals.first() {
-                            mat.young_modulus = Some(e);
+                    while let Some(row) = lines.get(i).map(|line| line.trim()) {
+                        if row.is_empty() || row.starts_with("!!") || row.starts_with('#') {
+                            i += 1;
+                            continue;
                         }
-                        if let Some(&nu) = vals.get(1) {
-                            mat.poisson_ratio = Some(nu);
+                        if row.starts_with('!') {
+                            break;
                         }
+                        let mut values = row.split(',').map(|value| value.trim().parse().ok());
+                        if elastic {
+                            mat.young_modulus = values.next().flatten();
+                            mat.poisson_ratio = values.next().flatten();
+                        } else {
+                            mat.density = values.next().flatten();
+                        }
+                        i += 1;
+                        break;
                     }
-                } else if sub_upper.starts_with("!DENSITY") || item == Some(2) {
-                    i += 1;
-                    if i < lines.len() {
-                        if let Ok(rho) = lines[i]
-                            .trim()
-                            .split(',')
-                            .next()
-                            .unwrap_or("")
-                            .trim()
-                            .parse::<f32>()
-                        {
-                            mat.density = Some(rho);
-                        }
-                    }
+                    continue;
                 }
 
                 i += 1;

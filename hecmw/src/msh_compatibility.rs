@@ -115,9 +115,11 @@ fn data_rows<'a>(
 }
 
 fn constant_material_row(header: &str, rows: &[&str], expected: usize) -> bool {
+    let declared = super::keyword_parameter(header, "SUBITEM");
+    let native_item = super::keyword_assignment_value(header).is_some();
+    let default = if native_item { 1 } else { expected };
     if super::keyword_parameter(header, "INPUT").is_some()
-        || super::keyword_parameter(header, "SUBITEM")
-            .is_some_and(|value| value.parse() != Ok(expected))
+        || declared.map_or(Ok(default), |value| value.parse()) != Ok(expected)
     {
         return false;
     }
@@ -134,6 +136,19 @@ fn constant_material_row(header: &str, rows: &[&str], expected: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_validation_and_import_skip_the_same_comments() {
+        let source = "!MATERIAL, NAME=STEEL, ITEM=2\n!ITEM=1,SUBITEM=2\n!! Elastic constants\n210000,0.3\n!ITEM=2\n# Density\n7.85e-9\n";
+        assert!(audit(source, Path::new("project.msh")).is_empty());
+        let (materials, _) = crate::parse_msh_setup(source, 0);
+        assert_eq!(materials[0].young_modulus, Some(210000.0));
+        assert_eq!(materials[0].poisson_ratio, Some(0.3));
+        assert_eq!(materials[0].density, Some(7.85e-9));
+
+        let wrong_item_width = source.replace("!ITEM=1,SUBITEM=2", "!ITEM=1");
+        assert_eq!(audit(&wrong_item_width, Path::new("project.msh")).len(), 1);
+    }
 
     #[test]
     fn blocks_temperature_tables_without_blocking_constant_materials() {
