@@ -15,7 +15,7 @@ include = ["src/**", "tests/**", "test-data/**", "assets/**", "build.rs", "Cargo
 name = "ui"
 
 [dependencies]
-avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32"] }
+avian3d = { version = "0.8", default-features = false, features = ["3d", "parry-f32"] }
 bevy.workspace = true
 camera.workspace = true
 fem_core.workspace = true

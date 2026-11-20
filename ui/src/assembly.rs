@@ -8,7 +8,7 @@
 use crate::measurement::MeasurementBoxState;
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::camera::visibility::RenderLayers;
-use bevy::math::primitives::{Cone, Cuboid, Cylinder, Torus};
+use bevy::shape::{Cone, Cuboid, Cylinder, Torus};
 use bevy::mesh::Mesh3d;
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;

@@ -1,3 +1,4 @@
+use crate::ButtonInteraction;
 use super::*;
 use crate::layout::{UndoInProgress, UndoStack, push_undo_before_setup_change, undo_redo_system};
 use crate::material_library::{MaterialLibraryState, material_library_system};
@@ -106,10 +107,10 @@ fn click(app: &mut App, name: &str) {
     let entity = named_entity(app, name);
     app.world_mut()
         .entity_mut(entity)
-        .insert(Interaction::Pressed);
+        .insert(ButtonInteraction::Pressed);
     app.update();
     if let Ok(mut entity) = app.world_mut().get_entity_mut(entity) {
-        entity.insert(Interaction::None);
+        entity.insert(ButtonInteraction::None);
     }
 }
 

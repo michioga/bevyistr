@@ -5,6 +5,7 @@
 //! used only as a robust geometric distance/intersection utility when the user
 //! explicitly asks for a check.
 
+use crate::{ButtonInteraction, InteractionButton};
 use crate::assembly::AssemblyEditorState;
 use crate::layout::SidebarPage;
 use avian3d::collision::collider::contact_query::{
@@ -323,7 +324,7 @@ impl AssemblyClearanceState {
 pub(crate) fn spawn_assembly_clearance_ui(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 width: percent(100.0),
                 height: px(29.0),
@@ -359,7 +360,7 @@ pub(crate) fn spawn_assembly_clearance_ui(parent: &mut ChildSpawnerCommands) {
                 ("Next pair", ClearanceReviewAction::Next),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: 1.0,
                         height: px(27.0),
@@ -475,7 +476,7 @@ pub(crate) fn assembly_clearance_review_button_system(
     page: Res<SidebarPage>,
     contact_review: Res<ContactReviewSettings>,
     mut clearance: ResMut<AssemblyClearanceState>,
-    buttons: Query<(Ref<Interaction>, &AssemblyClearanceReviewButton)>,
+    buttons: Query<(Ref<ButtonInteraction>, &AssemblyClearanceReviewButton)>,
 ) {
     if !matches!(*page, SidebarPage::Model | SidebarPage::Contact)
         || review_pause_reason(editor.is_dragging(), &contact_review).is_some()
@@ -483,7 +484,7 @@ pub(crate) fn assembly_clearance_review_button_system(
         return;
     }
     for (interaction, button) in &buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             clearance.navigate(button.action, &model, version.value, editor.selected_part);
         }
     }
@@ -496,7 +497,7 @@ pub(crate) fn assembly_clearance_button_system(
     page: Res<SidebarPage>,
     contact_review: Res<ContactReviewSettings>,
     mut clearance: ResMut<AssemblyClearanceState>,
-    buttons: Query<Ref<Interaction>, With<AssemblyClearanceButton>>,
+    buttons: Query<Ref<ButtonInteraction>, With<AssemblyClearanceButton>>,
 ) {
     if !can_check(&model, editor.selected_part)
         || !matches!(*page, SidebarPage::Model | SidebarPage::Contact)
@@ -505,7 +506,7 @@ pub(crate) fn assembly_clearance_button_system(
         return;
     }
     for interaction in &buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             clearance.check(&model, version.value, editor.selected_part);
         }
     }
@@ -555,7 +556,7 @@ pub(crate) fn update_assembly_clearance_controls(
     clearance: Res<AssemblyClearanceState>,
     mut buttons: Query<
         (
-            &Interaction,
+            &ButtonInteraction,
             Has<AssemblyClearanceButton>,
             &Children,
             &mut BackgroundColor,
@@ -581,9 +582,9 @@ pub(crate) fn update_assembly_clearance_controls(
             BUTTON_DISABLED
         } else {
             match *interaction {
-                Interaction::Pressed => BUTTON_PRESSED,
-                Interaction::Hovered => BUTTON_HOVERED,
-                Interaction::None => BUTTON_NORMAL,
+                ButtonInteraction::Pressed => BUTTON_PRESSED,
+                ButtonInteraction::Hovered => BUTTON_HOVERED,
+                ButtonInteraction::None => BUTTON_NORMAL,
             }
         };
         background.set_if_neq(BackgroundColor(next_background));

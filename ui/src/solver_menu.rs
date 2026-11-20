@@ -1,4 +1,5 @@
 //! Discrete solver choices: click to commit, native menu dismissal to cancel.
+use crate::InteractionButton;
 use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
 use bevy::{
     input_focus::{
@@ -117,7 +118,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             .with_children(|anchor| {
                 anchor
                     .spawn((
-                        Button,
+                        InteractionButton,
                         WidgetButton,
                         MenuButton,
                         Selector,

@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use super::*;
 
 fn assembly_app() -> App {
@@ -47,9 +48,9 @@ fn press(app: &mut App, name: &str) {
     let entity = named_entity(app, name);
     app.world_mut()
         .entity_mut(entity)
-        .insert(Interaction::Pressed);
+        .insert(ButtonInteraction::Pressed);
     app.update();
-    app.world_mut().entity_mut(entity).insert(Interaction::None);
+    app.world_mut().entity_mut(entity).insert(ButtonInteraction::None);
 }
 
 fn positions(app: &App, mesh: usize) -> Vec<Vec3> {
@@ -86,14 +87,14 @@ fn axis_controls_pair_opposite_buttons_around_a_noninteractive_label() {
                 .unwrap();
             assert_eq!(left.action, AssemblyTransformAction::for_axis(mode, -axis));
             assert_eq!(right.action, AssemblyTransformAction::for_axis(mode, axis));
-            assert!(app.world().get::<Button>(children[1]).is_none());
+            assert!(app.world().get::<InteractionButton>(children[1]).is_none());
             let label_entity = app.world().get::<Children>(children[1]).unwrap()[0];
             assert_eq!(app.world().get::<Text>(label_entity).unwrap().0, label);
             for (index, sign) in [(0, "-"), (2, "+")] {
                 let text = app.world().get::<Children>(children[index]).unwrap()[0];
                 assert_eq!(app.world().get::<Text>(text).unwrap().0, sign);
             }
-            let (_, border) = transform_button_colors(right.action, Interaction::None);
+            let (_, border) = transform_button_colors(right.action, ButtonInteraction::None);
             assert_eq!(
                 *app.world().get::<BorderColor>(group).unwrap(),
                 BorderColor::all(border)
@@ -361,9 +362,9 @@ fn reset_remains_available_in_both_modes() {
 fn opposite_signs_and_rotation_share_the_viewport_axis_palette() {
     for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
         for interaction in [
-            Interaction::None,
-            Interaction::Hovered,
-            Interaction::Pressed,
+            ButtonInteraction::None,
+            ButtonInteraction::Hovered,
+            ButtonInteraction::Pressed,
         ] {
             let positive =
                 transform_button_colors(AssemblyTransformAction::Translate(axis), interaction);

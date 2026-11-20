@@ -1,5 +1,6 @@
 //! Shared viewport selection controls, growth modes, previews, and groups.
 
+use crate::{ButtonInteraction, InteractionButton};
 use crate::layout::{RenderModeButton, ScrollableList, SidebarPage};
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::prelude::*;
@@ -216,7 +217,7 @@ fn selection_action_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(28.0),
@@ -405,7 +406,7 @@ pub(crate) fn selection_guide_toggle_system(
     mut state: ResMut<SelectionGuideState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &Children,
@@ -416,14 +417,14 @@ pub(crate) fn selection_guide_toggle_system(
     mut labels: Query<&mut Text>,
 ) {
     for (interaction, mut background, mut border, children) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.expanded = !state.expanded;
         }
 
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => Color::srgba(0.11, 0.20, 0.25, 0.98),
-            Interaction::None => Color::srgba(0.08, 0.14, 0.18, 0.96),
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => Color::srgba(0.11, 0.20, 0.25, 0.98),
+            ButtonInteraction::None => Color::srgba(0.08, 0.14, 0.18, 0.96),
         });
         *border = BorderColor::all(if state.expanded {
             ACTIVE_BORDER
@@ -501,11 +502,11 @@ pub(crate) fn selection_level_button_system(
     mut buttons: Query<
         (
             Entity,
-            &Interaction,
+            &ButtonInteraction,
             &SelectionLevelButton,
             &mut BackgroundColor,
             &mut BorderColor,
-            &mut Button,
+            &mut InteractionButton,
         ),
         Without<RenderModeButton>,
     >,
@@ -514,7 +515,7 @@ pub(crate) fn selection_level_button_system(
 ) {
     for (_entity, interaction, button, mut background, mut border, mut bevy_button) in &mut buttons
     {
-        if *interaction == Interaction::Pressed && filter.level != button.level {
+        if *interaction == ButtonInteraction::Pressed && filter.level != button.level {
             filter.level = button.level;
             hover.clear();
             selection.clear();
@@ -530,11 +531,11 @@ pub(crate) fn selection_level_button_system(
 
         let active = filter.level == button.level;
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -552,7 +553,7 @@ pub(crate) fn surface_selection_mode_button_system(
     filter: Res<SelectionFilter>,
     mut settings: ResMut<SurfaceSelectionSettings>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &SurfaceSelectionModeButton,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -578,16 +579,16 @@ pub(crate) fn surface_selection_mode_button_system(
     let supports_growth = supports_surface_growth(filter.level);
 
     for (interaction, button, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             settings.mode = button.mode;
         }
 
         let active = settings.mode == button.mode;
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
         *background = BackgroundColor(color);
         *border = if active {
@@ -982,7 +983,7 @@ pub(crate) fn rebuild_sets_list(
 fn set_list_button(parent: &mut ChildSpawnerCommands, set_button: SetButton, label: &str) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 width: percent(100.0),
                 padding: UiRect::axes(px(8.0), px(4.0)),
@@ -1017,7 +1018,7 @@ pub(crate) fn set_button_system(
     selected_query: Query<Entity, With<Selected>>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &SetButton,
@@ -1026,7 +1027,7 @@ pub(crate) fn set_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, set_button) in &mut buttons {
-        if *interaction == Interaction::Pressed
+        if *interaction == ButtonInteraction::Pressed
             && interaction.is_changed()
             && let Some(model) = model.as_deref()
             && let Some(mesh) = model.meshes.get(set_button.mesh_index)
@@ -1081,9 +1082,9 @@ pub(crate) fn set_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
         *background = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -1094,12 +1095,12 @@ pub(crate) fn make_node_group_button_system(
     mut model: ResMut<FemModel>,
     selection: Res<SelectionState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<MakeNodeGroupButton>,
     >,
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             for (mesh_index, nodes) in selected_nodes_by_mesh(&selection) {
                 let Some(mesh) = model.meshes.get_mut(mesh_index) else {
                     continue;
@@ -1115,9 +1116,9 @@ pub(crate) fn make_node_group_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -1130,12 +1131,12 @@ pub(crate) fn make_element_group_button_system(
     mut model: ResMut<FemModel>,
     selection: Res<SelectionState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<MakeElementGroupButton>,
     >,
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let mut by_mesh = BTreeMap::<usize, BTreeSet<fem_core::ElementId>>::new();
             for target in &selection.targets {
                 if let FemEntityId::Element(id) = target.entity {
@@ -1161,9 +1162,9 @@ pub(crate) fn make_element_group_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);

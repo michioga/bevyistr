@@ -18,5 +18,4 @@ name = "box_select"
 bevy.workspace = true
 fem_core.workspace = true
 selection.workspace = true
-camera.workspace = true
 interaction.workspace = true

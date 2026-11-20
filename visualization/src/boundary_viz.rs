@@ -7,7 +7,7 @@
 //! numbers until you can see where they land on the model.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::math::primitives::{Cone, Cylinder};
+use bevy::shape::{Cone, Cylinder};
 use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;

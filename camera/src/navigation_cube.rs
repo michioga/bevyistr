@@ -5,10 +5,11 @@
 //! directions, while the main orbit focus and distance remain unchanged.
 
 use bevy::camera::{ScalingMode, Viewport, visibility::RenderLayers};
-use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::math::primitives::Cuboid;
+use bevy::render::view::Tonemapping;
+use bevy::shape::Cuboid;
 use bevy::mesh::Mesh3d;
 use bevy::pbr::MeshMaterial3d;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use fem_core::MainViewportCamera;
 
@@ -211,7 +212,7 @@ pub(crate) fn spawn_navigation_cube(
 
     commands
         .spawn((
-            Button,
+            Hovered::default(),
             Node {
                 position_type: PositionType::Absolute,
                 right: px(12.0),
@@ -304,14 +305,14 @@ pub(crate) fn navigation_cube_input_system(
     buttons: Res<ButtonInput<MouseButton>>,
     pointer: Res<fem_core::UiPointerState>,
     windows: Query<&Window>,
-    hit_areas: Query<&Interaction, With<NavigationCubeHitArea>>,
+    hit_areas: Query<&Hovered, With<NavigationCubeHitArea>>,
     nav_camera: Query<(&Camera, &GlobalTransform), With<NavigationCubeCamera>>,
     main_camera: Query<&Transform, With<MainViewportCamera>>,
     mut state: ResMut<NavigationCubeState>,
 ) {
     let pointer_is_over = hit_areas
         .single()
-        .is_ok_and(|interaction| *interaction != Interaction::None);
+        .is_ok_and(Hovered::get);
     if !pointer_is_over || pointer.navigating {
         state.hovered = None;
         return;

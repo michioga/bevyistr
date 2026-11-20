@@ -223,6 +223,7 @@ fn solver_value_row(
                     border_radius: BorderRadius::all(px(3.0)),
                     ..default()
                 },
+                bevy::ui_widgets::TextInput,
                 EditableText {
                     visible_width: Some(12.0),
                     max_characters: Some(32),

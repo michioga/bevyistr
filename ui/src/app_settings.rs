@@ -1,4 +1,6 @@
 //! User preferences, not project data. Never restore an active export target.
+#[cfg(test)]
+use crate::{ButtonInteraction, InteractionButton};
 use crate::solver_process::SolverLaunchMode;
 use crate::solver_runner::FrontistrRunState;
 use bevy::prelude::*;
@@ -363,7 +365,7 @@ mod tests {
         ] {
             let world = app.world_mut();
             let button = world
-                .query_filtered::<(Entity, &Children), With<Button>>()
+                .query_filtered::<(Entity, &Children), With<InteractionButton>>()
                 .iter(world)
                 .find(|(_, children)| {
                     children.iter().any(|child| {
@@ -374,7 +376,7 @@ mod tests {
                 })
                 .unwrap()
                 .0;
-            *world.get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+            *world.get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::Pressed;
             app.update();
             assert_eq!(*app.world().resource::<NavigationScheme>(), scheme);
             let reloaded = AppSettings::load(path.clone());
@@ -384,7 +386,7 @@ mod tests {
                 read_document(&path).unwrap()["navigation"]["custom"].as_str(),
                 Some("keep")
             );
-            *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+            *app.world_mut().get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::None;
         }
     }
 

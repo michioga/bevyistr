@@ -1,4 +1,5 @@
 //! Guided, transactional result opening. File parsing runs off the UI thread.
+use crate::ButtonInteraction;
 use crate::{
     layout::SidebarPage,
     result_loading::{MeshInput, ResultInput, ResultLoadTask},
@@ -39,9 +40,8 @@ impl ResultOpenState {
 #[derive(Component)]
 pub(crate) struct OpenResultRequested;
 
-/// Legacy UI Interaction can report Pressed on a control exposed by a closing
-/// popup. Only the picking widget's completed click/keyboard activation may
-/// request a dialog; menu items are not descendants of this button.
+/// Completed click or keyboard activation opens the dialog.
+/// Menu items are separate from this button and must never open the dialog.
 pub(crate) fn request_result_open(
     event: On<Activate>,
     buttons: Query<(), With<OpenResultButton>>,
@@ -112,7 +112,7 @@ pub(crate) fn open_result_button_system(
     mut buttons: Query<
         (
             Entity,
-            &Interaction,
+            &ButtonInteraction,
             &mut BackgroundColor,
             Has<OpenResultRequested>,
         ),
@@ -129,7 +129,7 @@ pub(crate) fn open_result_button_system(
     for (entity, interaction, mut background, requested) in &mut buttons {
         *background = BackgroundColor(if state.pending.is_some() {
             Color::srgb(0.13, 0.15, 0.16)
-        } else if *interaction == Interaction::None {
+        } else if *interaction == ButtonInteraction::None {
             Color::srgb(0.10, 0.12, 0.14)
         } else {
             Color::srgb(0.18, 0.45, 0.55)

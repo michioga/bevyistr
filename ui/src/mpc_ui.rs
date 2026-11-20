@@ -1,5 +1,6 @@
 //! MPC equation editing, pair constraints, and rigid-spider review UI.
 
+use crate::{ButtonInteraction, InteractionButton};
 use crate::contact_ui::{ContactParameter, ContactParameterButton};
 use crate::layout::SidebarPage;
 use crate::measurement::MeasurementBoxState;
@@ -361,7 +362,7 @@ fn mpc_action_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(28.0),
@@ -426,12 +427,12 @@ pub(crate) fn detect_rigid_spiders_button_system(
     mut state: ResMut<RigidSpiderCandidateState>,
     mut contacts: ResMut<ContactCandidateState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<DetectRigidSpidersButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(model) = model.as_deref() {
                 contacts.candidates.clear();
                 contacts.selected = None;
@@ -439,9 +440,9 @@ pub(crate) fn detect_rigid_spiders_button_system(
             }
         }
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(PANEL_BORDER);
     }
@@ -451,7 +452,7 @@ pub(crate) fn rigid_spider_action_button_system(
     mut state: ResMut<RigidSpiderCandidateState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &RigidSpiderActionButton,
@@ -460,7 +461,7 @@ pub(crate) fn rigid_spider_action_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, action) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             match action.0 {
                 RigidSpiderAction::Previous => state.select_previous(),
                 RigidSpiderAction::Next => state.select_next(),
@@ -468,9 +469,9 @@ pub(crate) fn rigid_spider_action_button_system(
             }
         }
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(PANEL_BORDER);
     }
@@ -481,12 +482,12 @@ pub(crate) fn accept_rigid_spider_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     mut state: ResMut<RigidSpiderCandidateState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<AcceptRigidSpiderButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let candidate = state.selected_candidate().cloned();
             if let (Some(model), Some(candidate)) = (model.as_deref(), candidate) {
                 let name = format!("SPIDER_{}", setup.mpc_equations.len() + 1);
@@ -499,9 +500,9 @@ pub(crate) fn accept_rigid_spider_button_system(
             }
         }
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(PANEL_BORDER);
     }
@@ -568,7 +569,7 @@ pub(crate) fn capture_mpc_pair_node_button_system(
     selected_query: Query<Entity, With<Selected>>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &CaptureMpcPairNodeButton,
@@ -577,7 +578,7 @@ pub(crate) fn capture_mpc_pair_node_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             filter.level = SelectionLevel::Node;
             let result = single_selected_node(&selection).and_then(|(mesh_index, node)| {
                 let exists = model
@@ -635,10 +636,10 @@ pub(crate) fn capture_mpc_pair_node_button_system(
             MpcPairSide::Negative => draft.negative.is_some(),
         };
         *background = BackgroundColor(match (*interaction, captured) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if captured {
             ACTIVE_BORDER
@@ -652,7 +653,7 @@ pub(crate) fn mpc_pair_dof_button_system(
     mut state: ResMut<MpcPairDraftState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &MpcPairDofButton,
@@ -661,15 +662,15 @@ pub(crate) fn mpc_pair_dof_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.dof = button.0;
         }
         let active = state.dof == button.0;
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
     }
@@ -732,12 +733,12 @@ pub(crate) fn create_mpc_pair_button_system(
     mut editor: ResMut<MpcEquationEditorState>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<CreateMpcPairButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let result = (|| {
                 let positive = draft
                     .positive
@@ -786,9 +787,9 @@ pub(crate) fn create_mpc_pair_button_system(
         }
 
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(PANEL_BORDER);
     }
@@ -798,19 +799,19 @@ pub(crate) fn clear_mpc_pair_button_system(
     mut draft: ResMut<MpcPairDraftPreview>,
     mut state: ResMut<MpcPairDraftState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ClearMpcPairButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             draft.clear();
             state.message = "Pair MPC draft cleared".to_string();
         }
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(PANEL_BORDER);
     }
@@ -876,7 +877,7 @@ pub(crate) fn defined_mpc_action_button_system(
     mut spider_candidates: ResMut<RigidSpiderCandidateState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &DefinedMpcActionButton,
@@ -886,7 +887,7 @@ pub(crate) fn defined_mpc_action_button_system(
 ) {
     for (interaction, mut background, mut border, action) in &mut buttons {
         let count = setup.mpc_equations.len();
-        if *interaction == Interaction::Pressed && interaction.is_changed() && count > 0 {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() && count > 0 {
             let current = preview.selected.filter(|index| *index < count).unwrap_or(0);
             if editor.equation != Some(current) {
                 editor.equation = Some(current);
@@ -958,13 +959,13 @@ pub(crate) fn defined_mpc_action_button_system(
 
         let destructive = action.0 == DefinedMpcAction::Remove;
         *background = BackgroundColor(match (*interaction, destructive) {
-            (Interaction::Pressed | Interaction::Hovered, true) => {
+            (ButtonInteraction::Pressed | ButtonInteraction::Hovered, true) => {
                 Color::srgba(0.75, 0.22, 0.22, 0.95)
             }
-            (Interaction::None, true) => Color::srgba(0.55, 0.18, 0.18, 0.85),
-            (Interaction::Pressed, false) => BUTTON_PRESSED,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::None, true) => Color::srgba(0.55, 0.18, 0.18, 0.85),
+            (ButtonInteraction::Pressed, false) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if destructive {
             Color::srgb(0.72, 0.30, 0.30)

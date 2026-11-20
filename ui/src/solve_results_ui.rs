@@ -1,5 +1,6 @@
 //! Automatic, asynchronous Solve -> Results handoff. A completed run starts
 //! loading in the background; the Solve button remains available to reopen.
+use crate::{ButtonInteraction, InteractionButton};
 use crate::{
     layout::SidebarPage,
     result_requests::{ResultRequestId, ResultRequests},
@@ -49,7 +50,7 @@ pub(crate) struct RunResultsText;
 pub(crate) fn spawn_results_handoff(panel: &mut ChildSpawnerCommands) {
     panel
         .spawn((
-            Button,
+            InteractionButton,
             OpenRunResultsButton,
             Node {
                 height: px(28.0),
@@ -123,7 +124,7 @@ pub(crate) fn open_run_results_system(
     version: Res<FemModelVersion>,
     mut state: ResMut<SolveResultsState>,
     mut requests: ResMut<ResultRequests>,
-    mut buttons: Query<(Ref<Interaction>, &mut BackgroundColor), With<OpenRunResultsButton>>,
+    mut buttons: Query<(Ref<ButtonInteraction>, &mut BackgroundColor), With<OpenRunResultsButton>>,
     mut labels: Query<&mut Text, With<RunResultsText>>,
 ) {
     let source = run.completed_results();
@@ -144,13 +145,13 @@ pub(crate) fn open_run_results_system(
     }
     let enabled = compatible && model.is_some() && state.pending.is_none();
     for (interaction, mut background) in &mut buttons {
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let (Some(model), Some(source)) = (model.as_deref(), source) {
                 queue_results_load(source, model, version.value, &mut state, &mut requests);
             }
         }
         background.set_if_neq(BackgroundColor(if enabled {
-            if *interaction == Interaction::Hovered {
+            if *interaction == ButtonInteraction::Hovered {
                 Color::srgb(0.16, 0.5, 0.3)
             } else {
                 Color::srgb(0.10, 0.32, 0.20)

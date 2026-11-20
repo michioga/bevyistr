@@ -1,4 +1,5 @@
 //! Library selections are drafts. Only final confirmation changes AnalysisSetup.
+use crate::{ButtonInteraction, InteractionButton};
 use crate::layout::{ScrollableList, SidebarPage};
 use crate::material_catalog::{Catalog, LibraryUnits, default_path, read_standard};
 use crate::materials_ui::{SelectedEgrp, SelectedMaterialForSection};
@@ -210,7 +211,7 @@ fn library_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 min_height: px(25.0),
@@ -241,7 +242,7 @@ pub(crate) fn material_library_system(
     target: Res<SelectedEgrp>,
     mut state: ResMut<MaterialLibraryState>,
     mut selected: ResMut<SelectedMaterialForSection>,
-    mut buttons: Query<(Ref<Interaction>, &LibraryButton, &mut BackgroundColor)>,
+    mut buttons: Query<(Ref<ButtonInteraction>, &LibraryButton, &mut BackgroundColor)>,
     lists: Query<Entity, With<LibraryList>>,
     children: Query<&Children>,
     mut revision: Local<Option<u64>>,
@@ -266,7 +267,7 @@ pub(crate) fn material_library_system(
     for (interaction, button, _) in &buttons {
         if *page != SidebarPage::Materials
             || target.0.is_none()
-            || *interaction != Interaction::Pressed
+            || *interaction != ButtonInteraction::Pressed
             || !interaction.is_changed()
             || state.pending.is_some()
         {
@@ -320,7 +321,7 @@ pub(crate) fn material_library_system(
             Color::srgb(0.06, 0.07, 0.08)
         } else if active {
             Color::srgb(0.18, 0.45, 0.55)
-        } else if *interaction != Interaction::None {
+        } else if *interaction != ButtonInteraction::None {
             Color::srgb(0.18, 0.22, 0.24)
         } else {
             Color::srgb(0.10, 0.12, 0.14)

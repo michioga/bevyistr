@@ -1,5 +1,6 @@
 //! Contact definition, automatic candidate detection, and review UI.
 
+use crate::{ButtonInteraction, InteractionButton};
 use crate::layout::{ScrollableList, SidebarPage};
 use crate::measurement::{MeasurementBoxState, MeasurementTarget};
 use crate::slider::{SliderConfig, SliderId, SliderState, SliderTrack, spawn_slider};
@@ -209,7 +210,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
             for (index, kind) in ContactPairKind::ALL.into_iter().enumerate() {
                 let (radius, border) = segment_style(index == 0, index == 1);
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: 1.0,
                         height: px(26.0),
@@ -249,7 +250,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
                 (ContactType::Tied, "Tied"),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: 1.0,
                         height: px(25.0),
@@ -305,7 +306,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
             );
             parameters
                 .spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         width: percent(100.0),
                         height: px(25.0),
@@ -473,7 +474,7 @@ pub(crate) fn spawn_contact_review_ui(parent: &mut ChildSpawnerCommands) {
         .with_children(|review| {
             review
                 .spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         width: percent(100.0),
                         height: px(28.0),
@@ -542,7 +543,7 @@ pub(crate) fn spawn_contact_review_ui(parent: &mut ChildSpawnerCommands) {
                         "RejectContactCandidateButton",
                     );
                     row.spawn((
-                        Button,
+                        InteractionButton,
                         Node {
                             flex_grow: 1.0,
                             height: px(28.0),
@@ -593,7 +594,7 @@ fn contact_action_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(28.0),
@@ -662,12 +663,12 @@ pub(crate) fn create_surface_button_system(
     mut model: Option<ResMut<FemModel>>,
     selection: Res<SelectionState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<CreateSurfaceButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(model) = model.as_deref_mut() {
                 let surface_set_count: usize = model
                     .meshes
@@ -681,9 +682,9 @@ pub(crate) fn create_surface_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -694,12 +695,12 @@ pub(crate) fn create_surface_button_system(
 pub(crate) fn create_contact_button_system(
     mut model: Option<ResMut<FemModel>>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<CreateContactButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(model) = model.as_deref_mut() {
                 let name = format!("CONTACT_{}", model.contacts.len() + 1);
 
@@ -708,9 +709,9 @@ pub(crate) fn create_contact_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -728,7 +729,7 @@ pub(crate) fn contact_pair_kind_button_system(
     selected_query: Query<Entity, With<Selected>>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &ContactPairKindButton,
@@ -737,7 +738,7 @@ pub(crate) fn contact_pair_kind_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed
+        if *interaction == ButtonInteraction::Pressed
             && interaction.is_changed()
             && settings.pair_kind != button.0
         {
@@ -763,10 +764,10 @@ pub(crate) fn contact_pair_kind_button_system(
 
         let active = settings.pair_kind == button.0;
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
     }
@@ -776,7 +777,7 @@ pub(crate) fn contact_behavior_button_system(
     mut settings: ResMut<ContactDefinitionSettings>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &ContactBehaviorButton,
@@ -785,16 +786,16 @@ pub(crate) fn contact_behavior_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             settings.contact_type = button.0;
         }
 
         let active = settings.contact_type == button.0;
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
     }
@@ -805,13 +806,13 @@ pub(crate) fn contact_penalty_toggle_button_system(
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ContactPenaltyToggleButton>,
     >,
     mut labels: Query<&mut Text, With<ContactPenaltyToggleLabel>>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             settings.use_penalty_factor = !settings.use_penalty_factor;
             settings.active_parameter = if settings.use_penalty_factor {
                 ContactParameter::PenaltyFactor
@@ -855,10 +856,10 @@ pub(crate) fn contact_penalty_toggle_button_system(
 
         let active = settings.use_penalty_factor;
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
     }
@@ -881,7 +882,7 @@ pub(crate) fn contact_parameter_button_system(
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &ContactParameterButton,
         ),
@@ -889,7 +890,7 @@ pub(crate) fn contact_parameter_button_system(
     >,
 ) {
     for (interaction, mut background, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             settings.active_parameter = button.0;
             let (slider_id, label, units, fallback) = match button.0 {
                 ContactParameter::Friction => (
@@ -933,10 +934,10 @@ pub(crate) fn contact_parameter_button_system(
 
         let active = settings.active_parameter == button.0;
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
     }
 }
@@ -1133,7 +1134,7 @@ pub(crate) fn capture_contact_side_button_system(
     selected_query: Query<Entity, With<Selected>>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &CaptureContactSideButton,
@@ -1142,7 +1143,7 @@ pub(crate) fn capture_contact_side_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let result = match (button.0, settings.pair_kind, model.as_deref()) {
                 (ContactCaptureSide::Slave, ContactPairKind::NodeSurface, _) => {
                     contact_nodes_from_selection(&selection).map(|(mesh_index, nodes)| {
@@ -1191,10 +1192,10 @@ pub(crate) fn capture_contact_side_button_system(
             ContactCaptureSide::Master => CONTACT_MASTER_BUTTON,
         };
         *background = BackgroundColor(match (*interaction, captured) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => captured_color,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => captured_color,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if captured {
             ACTIVE_BORDER
@@ -1367,12 +1368,12 @@ pub(crate) fn finalize_contact_button_system(
     mut candidates: ResMut<ContactCandidateState>,
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<FinalizeContactButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let friction_coefficient = if settings.contact_type == ContactType::Tied {
                 0.0
             } else {
@@ -1413,10 +1414,10 @@ pub(crate) fn finalize_contact_button_system(
 
         let ready = draft.master.is_some() && draft.slave.is_some();
         *background = BackgroundColor(match (*interaction, ready) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if ready { ACTIVE_BORDER } else { PANEL_BORDER });
     }
@@ -1470,12 +1471,12 @@ pub(crate) fn detect_contacts_button_system(
     mut state: ResMut<ContactCandidateState>,
     mut spiders: ResMut<RigidSpiderCandidateState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<DetectContactsButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(model) = model.as_deref() {
                 spiders.candidates.clear();
                 spiders.selected = None;
@@ -1484,9 +1485,9 @@ pub(crate) fn detect_contacts_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1523,13 +1524,13 @@ pub(crate) fn accept_contact_button_system(
     mut settings: ResMut<ContactDefinitionSettings>,
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<AcceptContactButton>,
     >,
     mut labels: Query<&mut Text, With<AcceptContactLabel>>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let candidate = state.selected_candidate().cloned();
             let friction_coefficient = if settings.contact_type == ContactType::Tied {
                 0.0
@@ -1574,10 +1575,10 @@ pub(crate) fn accept_contact_button_system(
 
         let ready = state.selected_candidate().is_some();
         let color = match (*interaction, ready) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1595,7 +1596,7 @@ pub(crate) fn contact_candidate_action_button_system(
     mut state: ResMut<ContactCandidateState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &ContactCandidateActionButton,
@@ -1604,7 +1605,7 @@ pub(crate) fn contact_candidate_action_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, action) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             match action.0 {
                 ContactCandidateAction::Previous => state.select_previous(),
                 ContactCandidateAction::Next => state.select_next(),
@@ -1613,9 +1614,9 @@ pub(crate) fn contact_candidate_action_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1628,23 +1629,23 @@ pub(crate) fn contact_candidate_action_button_system(
 pub(crate) fn contact_ghost_toggle_button_system(
     mut review: ResMut<ContactReviewSettings>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ContactGhostToggleButton>,
     >,
     mut labels: Query<&mut Text, With<ContactGhostToggleLabel>>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             review.ghost_others = !review.ghost_others;
         }
 
         let active = review.ghost_others;
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1786,7 +1787,7 @@ pub(crate) fn rebuild_contact_definitions_list(
 fn contact_definition_button(parent: &mut ChildSpawnerCommands, index: usize, label: &str) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 width: percent(100.0),
                 min_height: px(42.0),
@@ -1818,7 +1819,7 @@ pub(crate) fn defined_contact_button_system(
     mut draft: ResMut<ContactDraftPreview>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &DefinedContactButton,
@@ -1827,7 +1828,7 @@ pub(crate) fn defined_contact_button_system(
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             preview.selected = Some(button.0);
             mpc_preview.active = false;
             mpc_pair_draft.clear();
@@ -1836,10 +1837,10 @@ pub(crate) fn defined_contact_button_system(
 
         let selected = preview.selected == Some(button.0);
         let color = match (*interaction, selected) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
         *background = BackgroundColor(color);
         *border = BorderColor::all(if selected {

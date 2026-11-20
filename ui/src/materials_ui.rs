@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use crate::layout::{DeleteSetupEntry, ScrollableList, SidebarPage, SidebarPageContent};
 use crate::material_editor::spawn_material_exact_editor;
 use crate::material_library::{
@@ -289,7 +290,7 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                                         (SelectedSectionType::Beam, "Beam"),
                                     ] {
                                         row.spawn((
-                                            Button,
+                                            InteractionButton,
                                             Node {
                                                 flex_grow: 1.0,
                                                 height: px(22.0),
@@ -332,7 +333,7 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                         });
                     section
                         .spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 width: percent(100.0),
                                 min_height: px(30.0),
@@ -468,7 +469,7 @@ pub(crate) fn setup_entry_row(
                 },
             ));
             row.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     width: px(16.0),
                     height: px(16.0),
@@ -540,7 +541,7 @@ pub(crate) fn section_type_button_system(
     mut selected: ResMut<SelectedSectionType>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &SectionTypeButton,
@@ -549,16 +550,16 @@ pub(crate) fn section_type_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             *selected = btn.0;
         }
 
         let active = *selected == btn.0;
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -573,7 +574,7 @@ pub(crate) fn egrp_select_button_system(
     page: Res<SidebarPage>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &EgrpSelectButton,
@@ -583,7 +584,7 @@ pub(crate) fn egrp_select_button_system(
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
         if *page == SidebarPage::Materials
-            && *interaction == Interaction::Pressed
+            && *interaction == ButtonInteraction::Pressed
             && interaction.is_changed()
         {
             choose_assignment_target(
@@ -596,10 +597,10 @@ pub(crate) fn egrp_select_button_system(
 
         let active = selected.0.as_ref() == Some(&btn.0);
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -614,7 +615,7 @@ pub(crate) fn material_select_button_system(
     page: Res<SidebarPage>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &MaterialSelectButton,
@@ -625,7 +626,7 @@ pub(crate) fn material_select_button_system(
     for (interaction, mut bg, mut border, btn) in &mut buttons {
         if *page == SidebarPage::Materials
             && target.0.is_some()
-            && *interaction == Interaction::Pressed
+            && *interaction == ButtonInteraction::Pressed
             && interaction.is_changed()
         {
             selected.0 = Some(btn.0.clone());
@@ -634,10 +635,10 @@ pub(crate) fn material_select_button_system(
 
         let active = selected.0.as_deref() == Some(&btn.0);
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -699,7 +700,7 @@ pub(crate) fn add_section_button_system(
     mut library: ResMut<MaterialLibraryState>,
     slider_query: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<AddSectionButton>,
     >,
     mut labels: Query<&mut Text, With<AddSectionLabel>>,
@@ -731,7 +732,7 @@ pub(crate) fn add_section_button_system(
     let enabled =
         *page == SidebarPage::Materials && target.is_some() && name.is_some() && valid_size;
     for (interaction, mut bg, mut border) in &mut buttons {
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let before = setup.materials.len();
             let final_name = if let Some(draft) = draft.clone() {
                 use_material(setup.bypass_change_detection(), draft)
@@ -754,8 +755,8 @@ pub(crate) fn add_section_button_system(
             Color::srgb(0.06, 0.07, 0.08)
         } else {
             match *interaction {
-                Interaction::Pressed => BUTTON_PRESSED,
-                Interaction::Hovered => BUTTON_HOVERED,
+                ButtonInteraction::Pressed => BUTTON_PRESSED,
+                ButtonInteraction::Hovered => BUTTON_HOVERED,
                 _ => BUTTON_NORMAL,
             }
         }));
@@ -786,7 +787,7 @@ fn assignment_button(row: &mut ChildSpawnerCommands, target: AssignmentTarget, l
         Some(group) => format!("Assignment_{}_GROUP_{group}", target.mesh_index),
     };
     row.spawn((
-        Button,
+        InteractionButton,
         Node {
             padding: UiRect::axes(px(6.0), px(3.0)),
             border: UiRect::all(px(1.0)),
@@ -885,7 +886,7 @@ pub(crate) fn rebuild_section_def_panel(
             for mat in &setup.materials {
                 let name = mat.name.clone();
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         padding: UiRect::axes(px(8.0), px(3.0)),
                         border: UiRect::all(px(1.0)),
@@ -940,7 +941,7 @@ pub(crate) fn spawn_material_color_controls(parent: &mut ChildSpawnerCommands) {
                 ),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: 1.0,
                         height: px(23.0),
@@ -969,17 +970,17 @@ pub(crate) fn spawn_material_color_controls(parent: &mut ChildSpawnerCommands) {
 
 pub(crate) fn material_color_button_system(
     mut mode: ResMut<visualization::MaterialColorMode>,
-    mut buttons: Query<(Ref<Interaction>, &MaterialColorButton, &mut BackgroundColor)>,
+    mut buttons: Query<(Ref<ButtonInteraction>, &MaterialColorButton, &mut BackgroundColor)>,
 ) {
     for (interaction, button, _) in &buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             mode.set_if_neq(button.0);
         }
     }
     for (interaction, button, mut background) in &mut buttons {
         *background = BackgroundColor(if *mode == button.0 {
             BUTTON_ACTIVE
-        } else if *interaction != Interaction::None {
+        } else if *interaction != ButtonInteraction::None {
             BUTTON_HOVERED
         } else {
             BUTTON_NORMAL

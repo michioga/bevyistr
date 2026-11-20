@@ -1,5 +1,6 @@
 //! Explicit first/previous/play/next/last controls. Widget activation avoids
 //! treating a press passing through a closed popup as a timeline operation.
+use crate::{ButtonInteraction, InteractionButton};
 use crate::{
     results_ui::{PlaybackState, result_frame_count},
     slider::{SliderId, SliderState, SliderTrack},
@@ -40,7 +41,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 (Action::Last, ">|"),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     WidgetButton,
                     action,
                     bevy::input_focus::tab_navigation::TabIndex(0),
@@ -159,7 +160,7 @@ pub(crate) fn sync(
     playback: Res<PlaybackState>,
     results: Option<Res<FemResultSet>>,
     sliders: Query<&SliderState, With<SliderTrack>>,
-    mut buttons: Query<(Entity, &Action, &Interaction, &mut BackgroundColor)>,
+    mut buttons: Query<(Entity, &Action, &ButtonInteraction, &mut BackgroundColor)>,
     mut labels: Query<&mut Text, With<PlayLabel>>,
 ) {
     let count = results.as_deref().map_or(0, result_frame_count);
@@ -176,11 +177,11 @@ pub(crate) fn sync(
         }
         color.set_if_neq(BackgroundColor(if !available {
             Color::srgb(0.065, 0.075, 0.085)
-        } else if *interaction == Interaction::Pressed {
+        } else if *interaction == ButtonInteraction::Pressed {
             Color::srgb(0.22, 0.55, 0.66)
         } else if action == Action::PlayPause && playback.playing {
             Color::srgb(0.18, 0.45, 0.55)
-        } else if *interaction == Interaction::Hovered {
+        } else if *interaction == ButtonInteraction::Hovered {
             Color::srgb(0.18, 0.22, 0.24)
         } else {
             Color::srgb(0.10, 0.12, 0.14)

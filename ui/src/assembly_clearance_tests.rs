@@ -1,3 +1,4 @@
+use crate::ButtonInteraction;
 use super::*;
 
 #[test]
@@ -254,7 +255,7 @@ fn clearance_app(model: FemModel) -> (App, Entity, Entity, Entity) {
     let check = app
         .world_mut()
         .spawn((
-            Interaction::None,
+            ButtonInteraction::None,
             AssemblyClearanceButton,
             BackgroundColor(BUTTON_NORMAL),
             BorderColor::all(PANEL_BORDER),
@@ -263,7 +264,7 @@ fn clearance_app(model: FemModel) -> (App, Entity, Entity, Entity) {
     let next = app
         .world_mut()
         .spawn((
-            Interaction::None,
+            ButtonInteraction::None,
             AssemblyClearanceReviewButton {
                 action: ClearanceReviewAction::Next,
             },
@@ -285,9 +286,9 @@ fn clearance_app(model: FemModel) -> (App, Entity, Entity, Entity) {
 fn press(app: &mut App, entity: Entity) {
     app.world_mut()
         .entity_mut(entity)
-        .insert(Interaction::Pressed);
+        .insert(ButtonInteraction::Pressed);
     app.update();
-    app.world_mut().entity_mut(entity).insert(Interaction::None);
+    app.world_mut().entity_mut(entity).insert(ButtonInteraction::None);
 }
 
 #[test]

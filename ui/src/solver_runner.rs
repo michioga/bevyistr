@@ -4,6 +4,7 @@
 //! export or first Run establishes the working directory and project stem;
 //! Run writes the current model/setup before starting `fistr1` there.
 
+use crate::{ButtonInteraction, InteractionButton};
 use crate::layout::{SidebarPage, SidebarPageContent};
 use crate::app_settings::{AppSettingsText, SolverPreferences};
 use crate::solver_process::{
@@ -558,7 +559,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
 
             panel
                 .spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         height: px(26.0),
                         justify_content: JustifyContent::Center,
@@ -602,7 +603,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 .with_children(|row| {
                     for mode in [SolverLaunchMode::Direct, SolverLaunchMode::Mpi] {
                         row.spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 flex_grow: 1.0,
                                 height: px(24.0),
@@ -675,7 +676,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                             ));
                         }
                         row.spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 width: px(34.0),
                                 height: px(24.0),
@@ -740,7 +741,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                     ));
                     for (delta, label) in [(-1, "-"), (1, "+")] {
                         row.spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 width: px(34.0), height: px(24.0),
                                 justify_content: JustifyContent::Center,
@@ -781,7 +782,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                 },))
                 .with_children(|row| {
                     row.spawn((
-                        Button,
+                        InteractionButton,
                         Node {
                             flex_grow: 1.0,
                             height: px(28.0),
@@ -806,7 +807,7 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                     ));
 
                     row.spawn((
-                        Button,
+                        InteractionButton,
                         Node {
                             width: px(72.0),
                             height: px(28.0),
@@ -866,13 +867,13 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
 pub(crate) fn select_frontistr_executable_system(
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<SelectFrontistrExecutableButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         let enabled = !state.is_running();
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let dialog = rfd::FileDialog::new().set_title("Choose FrontISTR executable");
             #[cfg(windows)]
             let dialog = dialog.add_filter("FrontISTR executable", &["exe"]);
@@ -890,7 +891,7 @@ pub(crate) fn solver_launch_mode_button_system(
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &SolverLaunchModeButton,
@@ -900,7 +901,7 @@ pub(crate) fn solver_launch_mode_button_system(
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
         let enabled = !state.is_running();
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.set_launch_mode(button.0);
         }
         let active = state.launch_mode == button.0;
@@ -908,8 +909,8 @@ pub(crate) fn solver_launch_mode_button_system(
             BUTTON_DISABLED
         } else if active {
             match *interaction {
-                Interaction::Pressed => BUTTON_PRESSED,
-                Interaction::Hovered | Interaction::None => BUTTON_ACTIVE,
+                ButtonInteraction::Pressed => BUTTON_PRESSED,
+                ButtonInteraction::Hovered | ButtonInteraction::None => BUTTON_ACTIVE,
             }
         } else {
             ordinary_button_color(*interaction, true)
@@ -922,7 +923,7 @@ pub(crate) fn mpi_rank_adjust_button_system(
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &MpiRankAdjustButton,
@@ -932,7 +933,7 @@ pub(crate) fn mpi_rank_adjust_button_system(
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
         let enabled = state.launch_mode == SolverLaunchMode::Mpi && !state.is_running();
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.adjust_mpi_ranks(button.0);
         }
         *background = BackgroundColor(ordinary_button_color(*interaction, enabled));
@@ -963,13 +964,13 @@ pub(crate) fn update_mpi_rank_controls_system(
 pub(crate) fn openmp_thread_adjust_button_system(
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor, &OpenMpThreadAdjustButton),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor, &OpenMpThreadAdjustButton),
         With<OpenMpThreadAdjustButton>,
     >,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
         let enabled = !state.is_running();
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.adjust_openmp_threads(button.0);
         }
         *background = BackgroundColor(ordinary_button_color(*interaction, enabled));
@@ -993,13 +994,13 @@ pub(crate) fn run_frontistr_button_system(
     setup: Res<AnalysisSetup>,
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<RunFrontistrButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         let enabled = !state.is_running();
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let Some(model) = model.as_deref() else {
                 state.report_error(
                     SolverRunPhase::Blocked,
@@ -1032,9 +1033,9 @@ pub(crate) fn run_frontistr_button_system(
             BUTTON_DISABLED
         } else {
             match *interaction {
-                Interaction::Pressed => BUTTON_PRESSED,
-                Interaction::Hovered => RUN_HOVERED,
-                Interaction::None => RUN_NORMAL,
+                ButtonInteraction::Pressed => BUTTON_PRESSED,
+                ButtonInteraction::Hovered => RUN_HOVERED,
+                ButtonInteraction::None => RUN_NORMAL,
             }
         });
         *border = BorderColor::all(Color::srgb(0.15, 0.50, 0.28));
@@ -1044,22 +1045,22 @@ pub(crate) fn run_frontistr_button_system(
 pub(crate) fn stop_frontistr_button_system(
     mut state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<StopFrontistrButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         let enabled = state.is_running() && !state.stop_requested;
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.request_stop();
         }
         *background = BackgroundColor(if !enabled {
             BUTTON_DISABLED
         } else {
             match *interaction {
-                Interaction::Pressed => BUTTON_PRESSED,
-                Interaction::Hovered => STOP_HOVERED,
-                Interaction::None => STOP_NORMAL,
+                ButtonInteraction::Pressed => BUTTON_PRESSED,
+                ButtonInteraction::Hovered => STOP_HOVERED,
+                ButtonInteraction::None => STOP_NORMAL,
             }
         });
         *border = BorderColor::all(Color::srgb(0.48, 0.18, 0.18));
@@ -1128,14 +1129,14 @@ pub(crate) fn update_frontistr_run_ui_system(
     }
 }
 
-pub(super) fn ordinary_button_color(interaction: Interaction, enabled: bool) -> Color {
+pub(super) fn ordinary_button_color(interaction: ButtonInteraction, enabled: bool) -> Color {
     if !enabled {
         return BUTTON_DISABLED;
     }
     match interaction {
-        Interaction::Pressed => BUTTON_PRESSED,
-        Interaction::Hovered => BUTTON_HOVERED,
-        Interaction::None => BUTTON_NORMAL,
+        ButtonInteraction::Pressed => BUTTON_PRESSED,
+        ButtonInteraction::Hovered => BUTTON_HOVERED,
+        ButtonInteraction::None => BUTTON_NORMAL,
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::InteractionButton;
 use crate::layout::{SidebarPage, SidebarPageContent};
 use crate::project_io::{ExportButton, ExportStatusText, OpenSetupButton};
 use crate::solver_editor::spawn_solver_exact_editor;
@@ -78,7 +79,7 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
         ))
         .with_children(|row| {
             row.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     flex_grow: 1.0,
                     height: px(28.0),
@@ -103,7 +104,7 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
             ));
 
             row.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     flex_grow: 1.0,
                     height: px(28.0),

@@ -1,3 +1,4 @@
+use crate::ButtonInteraction;
 use super::*;
 use crate::{
     project_io::{CameraFitRequest, apply_pending_cnt_system, mesh_load_system},
@@ -139,7 +140,7 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
         .world_mut()
         .spawn((
             RunFrontistrButton,
-            Interaction::None,
+            ButtonInteraction::None,
             BackgroundColor::default(),
             BorderColor::default(),
         ))
@@ -148,7 +149,7 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
         .world_mut()
         .spawn((
             StopFrontistrButton,
-            Interaction::None,
+            ButtonInteraction::None,
             BackgroundColor::default(),
             BorderColor::default(),
         ))
@@ -174,9 +175,9 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
 }
 
 fn click(app: &mut App, button: Entity) {
-    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::Pressed;
     app.update();
-    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+    *app.world_mut().get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::None;
 }
 
 fn wait_until(app: &mut App, seconds: u64, mut finished: impl FnMut(&World) -> bool) {

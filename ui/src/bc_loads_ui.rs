@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use crate::boundary_editor::{
     BoundaryLoadEditorState, RotationalInputMode, spawn_constraint_exact_editor,
     spawn_dload_exact_editor, spawn_engineering_input_status, spawn_nodal_exact_editor,
@@ -175,7 +176,7 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
                 });
             panel
                 .spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         width: Val::Percent(100.0),
                         min_height: px(24.0),
@@ -216,7 +217,7 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
             );
             panel
                 .spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         width: Val::Percent(100.0),
                         height: px(24.0),
@@ -277,7 +278,7 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
                                 (SelectedDloadKind::Gravity, "Gravity"),
                             ] {
                                 row.spawn((
-                                    Button,
+                                    InteractionButton,
                                     Node {
                                         flex_grow: 1.0,
                                         height: px(22.0),
@@ -317,7 +318,7 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
                     );
                     distributed
                         .spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 width: Val::Percent(100.0),
                                 height: px(24.0),
@@ -349,7 +350,7 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
 
             panel
                 .spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         width: Val::Percent(100.0),
                         height: px(22.0),
@@ -388,7 +389,7 @@ fn action_button<M: Component>(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(28.0),
@@ -421,7 +422,7 @@ fn constraint_preset_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(24.0),
@@ -459,7 +460,7 @@ fn load_direction_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(24.0),
@@ -708,10 +709,10 @@ pub(crate) fn update_apply_load_label(
 /// Clears all boundary conditions and nodal loads at once.
 pub(crate) fn clear_all_bc_loads_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
-    mut buttons: Query<(Ref<Interaction>, &mut BackgroundColor), With<ClearAllBcLoadsButton>>,
+    mut buttons: Query<(Ref<ButtonInteraction>, &mut BackgroundColor), With<ClearAllBcLoadsButton>>,
 ) {
     for (interaction, mut bg) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             setup.boundary_conditions.clear();
             setup.nodal_loads.clear();
             setup.distributed_loads.clear();
@@ -719,8 +720,8 @@ pub(crate) fn clear_all_bc_loads_button_system(
         }
 
         *bg = BackgroundColor(match *interaction {
-            Interaction::Pressed | Interaction::Hovered => Color::srgba(0.60, 0.15, 0.15, 0.95),
-            Interaction::None => Color::srgba(0.40, 0.12, 0.12, 0.80),
+            ButtonInteraction::Pressed | ButtonInteraction::Hovered => Color::srgba(0.60, 0.15, 0.15, 0.95),
+            ButtonInteraction::None => Color::srgba(0.40, 0.12, 0.12, 0.80),
         });
     }
 }
@@ -746,7 +747,7 @@ pub(crate) fn constraint_preset_button_system(
     mut editor: ResMut<BoundaryLoadEditorState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &ConstraintPresetButton,
@@ -755,14 +756,14 @@ pub(crate) fn constraint_preset_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, preset) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             editor.set_constraint_preset(preset.dof_start, preset.dof_end);
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *bg = BackgroundColor(color);
@@ -780,7 +781,7 @@ pub(crate) fn load_direction_button_system(
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &LoadDirectionButton,
@@ -789,7 +790,7 @@ pub(crate) fn load_direction_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let new_dir = (btn.dof, btn.sign);
             if selected.0 == Some(new_dir) {
                 selected.0 = None; // toggle off
@@ -811,10 +812,10 @@ pub(crate) fn load_direction_button_system(
 
         let active = selected.0 == Some((btn.dof, btn.sign));
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *bg = BackgroundColor(color);
@@ -855,7 +856,7 @@ pub(crate) fn apply_load_button_system(
     selection: Res<SelectionState>,
     editor: Res<BoundaryLoadEditorState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ApplyLoadButton>,
     >,
 ) {
@@ -864,7 +865,7 @@ pub(crate) fn apply_load_button_system(
     };
 
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let needs_center = editor.load_moment_mode == RotationalInputMode::AboutCenter
                 && editor.nodal_components[3..]
                     .iter()
@@ -916,9 +917,9 @@ pub(crate) fn apply_load_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *bg = BackgroundColor(color);
@@ -937,7 +938,7 @@ pub(crate) fn dload_kind_button_system(
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &DloadKindButton,
@@ -946,7 +947,7 @@ pub(crate) fn dload_kind_button_system(
     >,
 ) {
     for (interaction, mut bg, mut border, btn) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             *selected = btn.0;
             *active_editor = ActiveLoadEditor::Distributed;
             let (label, units, value) = match btn.0 {
@@ -964,10 +965,10 @@ pub(crate) fn dload_kind_button_system(
 
         let active = *selected == btn.0;
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -1344,7 +1345,7 @@ pub(crate) fn apply_dload_button_system(
     kind: Res<SelectedDloadKind>,
     editor: Res<BoundaryLoadEditorState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ApplyDloadButton>,
     >,
 ) {
@@ -1353,7 +1354,7 @@ pub(crate) fn apply_dload_button_system(
     };
 
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let mut added = false;
             // Pressure needs which face was picked (P1..P6 in the exported
             // .cnt); gravity is a whole-element body force and has no face.
@@ -1409,9 +1410,9 @@ pub(crate) fn apply_dload_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
@@ -1420,23 +1421,23 @@ pub(crate) fn apply_dload_button_system(
 pub(crate) fn toggle_constraints_button_system(
     mut settings: ResMut<visualization::BoundaryVisualSettings>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ToggleConstraintsButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             settings.show_constraints = !settings.show_constraints;
         }
 
         let active = settings.show_constraints;
 
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1448,23 +1449,23 @@ pub(crate) fn toggle_constraints_button_system(
 pub(crate) fn toggle_loads_button_system(
     mut settings: ResMut<visualization::BoundaryVisualSettings>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ToggleLoadsButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             settings.show_loads = !settings.show_loads;
         }
 
         let active = settings.show_loads;
 
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);

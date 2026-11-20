@@ -1,3 +1,4 @@
+use crate::ButtonInteraction;
 use super::*;
 
 #[path = "solve_results_tests.rs"]
@@ -219,7 +220,7 @@ fn run_button_reports_blocked_import_without_starting_or_overwriting_inputs() {
     app.insert_resource(setup);
     let button = app.world_mut().spawn((
         RunFrontistrButton,
-        Interaction::Pressed,
+        ButtonInteraction::Pressed,
         BackgroundColor::default(),
         BorderColor::default(),
     )).id();
@@ -233,7 +234,7 @@ fn run_button_reports_blocked_import_without_starting_or_overwriting_inputs() {
     assert!(state.started_at.is_none());
     assert!(state.completed_results().is_none());
     assert_eq!(std::fs::read_to_string(previous_input).unwrap(), "original input");
-    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+    *app.world_mut().get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::None;
     app.update();
     assert_eq!(app.world().get::<BackgroundColor>(button).unwrap().0, RUN_NORMAL);
 
@@ -253,7 +254,7 @@ fn run_button_is_available_before_export_and_cannot_start_twice() {
         .world_mut()
         .spawn((
             RunFrontistrButton,
-            Interaction::None,
+            ButtonInteraction::None,
             BackgroundColor::default(),
             BorderColor::default(),
         ))
@@ -265,7 +266,7 @@ fn run_button_is_available_before_export_and_cannot_start_twice() {
         RUN_NORMAL
     );
     app.world_mut().resource_mut::<FrontistrRunState>().phase = SolverRunPhase::Running;
-    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::Pressed;
     app.update();
     assert_eq!(
         app.world().get::<BackgroundColor>(button).unwrap().0,
@@ -330,7 +331,7 @@ fn execution_controls_switch_modes_and_freeze_during_a_run() {
         .find(|(_, mode)| mode.0 == SolverLaunchMode::Mpi)
         .unwrap()
         .0;
-    *app.world_mut().get_mut::<Interaction>(mpi_button).unwrap() = Interaction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(mpi_button).unwrap() = ButtonInteraction::Pressed;
     app.update();
     assert_eq!(
         app.world().get::<Node>(controls).unwrap().display,
@@ -343,7 +344,7 @@ fn execution_controls_switch_modes_and_freeze_during_a_run() {
         .find(|(_, delta)| delta.0 == 1)
         .unwrap()
         .0;
-    *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(increment).unwrap() = ButtonInteraction::Pressed;
     app.update();
     assert_eq!(app.world().resource::<FrontistrRunState>().mpi_ranks, 3);
 
@@ -355,10 +356,10 @@ fn execution_controls_switch_modes_and_freeze_during_a_run() {
         .find(|(_, mode)| mode.0 == SolverLaunchMode::Direct)
         .unwrap()
         .0;
-    *app.world_mut().get_mut::<Interaction>(direct).unwrap() = Interaction::Pressed;
-    *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::None;
+    *app.world_mut().get_mut::<ButtonInteraction>(direct).unwrap() = ButtonInteraction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(increment).unwrap() = ButtonInteraction::None;
     app.update();
-    *app.world_mut().get_mut::<Interaction>(increment).unwrap() = Interaction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(increment).unwrap() = ButtonInteraction::Pressed;
     app.update();
     let state = app.world().resource::<FrontistrRunState>();
     assert_eq!(state.launch_mode, SolverLaunchMode::Mpi);

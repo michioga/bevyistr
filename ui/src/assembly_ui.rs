@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use crate::assembly::{
     AssemblyEditorState, AssemblyGizmoMode, axis_color, reference_size as assembly_reference_size,
 };
@@ -157,22 +158,22 @@ pub(crate) fn update_assembly_nudge_visibility(
 
 fn transform_button_colors(
     action: AssemblyTransformAction,
-    interaction: Interaction,
+    interaction: ButtonInteraction,
 ) -> (Color, Color) {
     let Some(axis) = action.axis() else {
         let background = match interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
         return (background, PANEL_BORDER);
     };
 
     let axis = axis_color(axis).to_srgba();
     let intensity = match interaction {
-        Interaction::None => 0.42,
-        Interaction::Hovered => 0.58,
-        Interaction::Pressed => 0.76,
+        ButtonInteraction::None => 0.42,
+        ButtonInteraction::Hovered => 0.58,
+        ButtonInteraction::Pressed => 0.76,
     };
     (
         Color::srgba(
@@ -250,7 +251,7 @@ pub(crate) fn rebuild_assembly_parts(
                 elements
             );
             list.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     width: percent(100.0),
                     padding: UiRect::axes(px(8.0), px(5.0)),
@@ -279,24 +280,24 @@ pub(crate) fn assembly_part_button_system(
     mut state: ResMut<AssemblyEditorState>,
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &AssemblyPartButton,
         &mut BackgroundColor,
         &mut BorderColor,
     )>,
 ) {
     for (interaction, button, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.selected_part = Some(button.part_index);
             measurement.clear();
         }
 
         let active = state.selected_part == Some(button.part_index);
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
     }
@@ -313,7 +314,7 @@ pub(crate) fn assembly_tool_button_system(
     mut selection: ResMut<SelectionState>,
     marked_query: Query<Entity, Or<(With<Selected>, With<Hovered>)>>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &AssemblyToolButton,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -321,7 +322,7 @@ pub(crate) fn assembly_tool_button_system(
     mut hints: Query<&mut Text, With<AssemblyToolHint>>,
 ) {
     let requested = buttons.iter().find_map(|(interaction, button, _, _)| {
-        (*interaction == Interaction::Pressed && interaction.is_changed()).then_some(button.choice)
+        (*interaction == ButtonInteraction::Pressed && interaction.is_changed()).then_some(button.choice)
     });
     if matches!(*page, SidebarPage::Model | SidebarPage::Contact)
         && let Some(choice) = requested
@@ -355,10 +356,10 @@ pub(crate) fn assembly_tool_button_system(
     for (interaction, button, mut background, mut border) in &mut buttons {
         let active = active_choice == button.choice;
         background.set_if_neq(BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         }));
         border.set_if_neq(BorderColor::all(if active {
             ACTIVE_BORDER
@@ -393,7 +394,7 @@ pub(crate) fn assembly_transform_button_system(
     mut contact_candidates: ResMut<ContactCandidateState>,
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &AssemblyTransformButton,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -412,7 +413,7 @@ pub(crate) fn assembly_transform_button_system(
                 .mode()
                 .is_none_or(|mode| mode == state.gizmo_mode);
         let mut changed = false;
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             measurement.clear();
             if let Some(part_index) = state.selected_part {
                 changed = match button.action {

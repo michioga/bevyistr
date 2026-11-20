@@ -1,5 +1,6 @@
 //! A read-only result identity, scoped to one loaded model and one local piece.
 //! No geometry queries are needed to follow a pinned sample through playback.
+use crate::InteractionButton;
 use crate::{layout::SidebarPage, results_ui::PlaybackState};
 use bevy::{
     prelude::*,
@@ -139,7 +140,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     crate::probe_comparison::spawn_pin_guide(parent);
     parent
         .spawn((
-            Button,
+            InteractionButton,
             WidgetButton,
             ClearPin,
             bevy::input_focus::tab_navigation::TabIndex(0),

@@ -4,6 +4,7 @@
 //! from also becoming the owner of mesh parsing, project transactions, and
 //! export validation.
 
+use crate::{ButtonInteraction, InteractionButton};
 use bevy::prelude::*;
 use camera::OrbitCamera;
 use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
@@ -52,7 +53,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
         },))
         .with_children(|row| {
             row.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     padding: UiRect::axes(px(14.0), px(5.0)),
                     border: UiRect::all(px(1.0)),
@@ -76,7 +77,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
             ));
 
             row.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     padding: UiRect::axes(px(14.0), px(5.0)),
                     border: UiRect::all(px(1.0)),
@@ -119,7 +120,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
         },))
         .with_children(|row| {
             row.spawn((
-                Button,
+                InteractionButton,
                 Node {
                     flex_grow: 1.0,
                     padding: UiRect::axes(px(8.0), px(4.0)),
@@ -171,12 +172,12 @@ pub(crate) fn open_mesh_button_system(
     mut status: ResMut<MeshLoadStatus>,
     mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenMeshButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("Open mesh")
                 .add_filter("All supported meshes", &["msh", "geo", "inp"])
@@ -192,9 +193,9 @@ pub(crate) fn open_mesh_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -207,12 +208,12 @@ pub(crate) fn add_mesh_button_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<AddMeshButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("Add mesh as new part")
                 .add_filter("All supported meshes", &["msh", "geo", "inp"])
@@ -227,9 +228,9 @@ pub(crate) fn add_mesh_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -494,12 +495,12 @@ pub(crate) fn open_project_button_system(
     version: Res<FemModelVersion>,
     mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenProjectButton>,
     >,
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let Some(ctrl_path) = rfd::FileDialog::new()
                 .set_title("Open FrontISTR project (hecmw_ctrl.dat)")
                 .add_filter("FrontISTR project", &["dat"])
@@ -529,9 +530,9 @@ pub(crate) fn open_project_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => Color::srgb(0.12, 0.44, 0.22),
-            Interaction::Hovered => Color::srgb(0.14, 0.52, 0.26),
-            Interaction::None => Color::srgb(0.10, 0.30, 0.18),
+            ButtonInteraction::Pressed => Color::srgb(0.12, 0.44, 0.22),
+            ButtonInteraction::Hovered => Color::srgb(0.14, 0.52, 0.26),
+            ButtonInteraction::None => Color::srgb(0.10, 0.30, 0.18),
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(Color::srgb(0.15, 0.46, 0.26));
@@ -601,14 +602,14 @@ pub(crate) fn export_button_system(
     setup: Res<fem_core::AnalysisSetup>,
     mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ExportButton>,
     >,
     mut status_query: Query<&mut Text, With<ExportStatusText>>,
 ) {
     for (interaction, mut bg, mut border) in &mut buttons {
         let enabled = !run_state.is_running();
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let Some(model) = model.as_deref() else {
                 set_export_status(&mut status_query, "Error: no mesh loaded");
                 continue;
@@ -659,9 +660,9 @@ pub(crate) fn export_button_system(
 
         let color = match (*interaction, enabled) {
             (_, false) => Color::srgba(0.08, 0.09, 0.10, 0.72),
-            (Interaction::Pressed, true) => Color::srgb(0.12, 0.44, 0.22),
-            (Interaction::Hovered, true) => Color::srgb(0.14, 0.52, 0.26),
-            (Interaction::None, true) => Color::srgb(0.10, 0.32, 0.18),
+            (ButtonInteraction::Pressed, true) => Color::srgb(0.12, 0.44, 0.22),
+            (ButtonInteraction::Hovered, true) => Color::srgb(0.14, 0.52, 0.26),
+            (ButtonInteraction::None, true) => Color::srgb(0.10, 0.32, 0.18),
         };
         *bg = BackgroundColor(color);
         *border = BorderColor::all(Color::srgb(0.15, 0.50, 0.28));
@@ -678,14 +679,14 @@ fn set_export_status(query: &mut Query<&mut Text, With<ExportStatusText>>, msg: 
 pub(crate) fn open_setup_button_system(
     mut pending_path: Local<Option<std::path::PathBuf>>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<OpenSetupButton>,
     >,
     mut model: Option<ResMut<FemModel>>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("Open analysis control file")
                 .add_filter("FrontISTR control (.cnt)", &["cnt"])
@@ -696,9 +697,9 @@ pub(crate) fn open_setup_button_system(
         }
 
         let color = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         };
         *background = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);

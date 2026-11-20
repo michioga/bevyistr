@@ -6,13 +6,14 @@
 //! six X-ray arrows at the selection centroid. Magnitude still belongs to the
 //! shared numeric measurement box and is committed only by Apply Load.
 
+use crate::ButtonInteraction;
 use crate::assembly::VIEWPORT_GIZMO_RENDER_LAYER;
 use crate::bc_loads_ui::{ActiveLoadEditor, SelectedLoadDirection};
 use crate::boundary_editor::BoundaryLoadEditorState;
 use crate::measurement::MeasurementBoxState;
 use crate::slider::{SliderId, SliderState, SliderTrack};
 use bevy::camera::visibility::RenderLayers;
-use bevy::math::primitives::{Cone, Cuboid, Cylinder};
+use bevy::shape::{Cone, Cuboid, Cylinder};
 use bevy::mesh::Mesh3d;
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
@@ -204,7 +205,7 @@ pub(crate) fn load_direction_picker_button_system(
     selection: Res<SelectionState>,
     mut state: ResMut<LoadDirectionPickerState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<LoadDirectionPickerButton>,
     >,
     mut labels: Query<&mut Text, With<LoadDirectionPickerLabel>>,
@@ -214,7 +215,7 @@ pub(crate) fn load_direction_picker_button_system(
         return;
     };
 
-    if *interaction == Interaction::Pressed && interaction.is_changed() {
+    if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
         if *tool == ViewportTool::LoadDirection {
             *tool = ViewportTool::Selection;
             state.hovered = None;
@@ -228,10 +229,10 @@ pub(crate) fn load_direction_picker_button_system(
 
     let active = *tool == ViewportTool::LoadDirection;
     *background = BackgroundColor(match (*interaction, active) {
-        (Interaction::Pressed, _) => BUTTON_PRESSED,
-        (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-        (Interaction::Hovered, false) => BUTTON_HOVERED,
-        (Interaction::None, false) => BUTTON_NORMAL,
+        (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+        (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+        (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+        (ButtonInteraction::None, false) => BUTTON_NORMAL,
     });
     *border = BorderColor::all(if active { ACTIVE_BORDER } else { PANEL_BORDER });
 

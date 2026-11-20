@@ -1,4 +1,5 @@
 //! Layout for the contiguous part-position workflow.
+use crate::{ButtonInteraction, InteractionButton};
 use super::*;
 use crate::assembly_clearance::spawn_assembly_clearance_ui;
 use crate::layout::ScrollableList;
@@ -72,7 +73,7 @@ fn spawn_transform_controls(parent: &mut ChildSpawnerCommands) {
             for (index, choice) in AssemblyToolChoice::ALL.into_iter().enumerate() {
                 let (radius, border) = segment_style(index == 0, index == 2);
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: 1.0,
                         height: px(29.0),
@@ -204,7 +205,7 @@ fn assembly_axis_nudge_row(parent: &mut ChildSpawnerCommands, mode: AssemblyGizm
             };
             for (axis, label) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().zip(labels) {
                 let action = AssemblyTransformAction::for_axis(mode, axis);
-                let (background, border) = transform_button_colors(action, Interaction::None);
+                let (background, border) = transform_button_colors(action, ButtonInteraction::None);
                 row.spawn((
                     Node {
                         flex_grow: 1.0,
@@ -259,7 +260,7 @@ fn axis_step_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 flex_basis: px(0.0),
@@ -300,7 +301,7 @@ fn action_button<M: Component>(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(28.0),

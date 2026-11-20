@@ -1,4 +1,5 @@
 //! File output scheduling, separate from quantity menus and result playback.
+use crate::InteractionButton;
 use crate::{
     layout::{SidebarPage, UiInputCapture},
     measurement::editable_value,
@@ -33,7 +34,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             })
             .with_children(|row| {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     WidgetButton,
                     bevy::input_focus::tab_navigation::TabIndex(0),
                     Toggle(target),
@@ -61,6 +62,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                         border: UiRect::all(px(1)),
                         ..default()
                     },
+                    bevy::ui_widgets::TextInput,
                     EditableText {
                         allow_newlines: false,
                         max_characters: Some(10),

@@ -3,11 +3,22 @@ use bevy::{
     camera::NormalizedRenderTarget,
     picking::{
         backend::HitData,
-        events::{Click, Pointer, Press, Release},
+        events::{Pointer, PointerClick, PointerPress, PointerRelease},
         pointer::{Location, PointerButton, PointerId},
     },
     prelude::*,
 };
+
+pub(crate) fn enable_menu_widgets(app: &mut App) {
+    // Tab navigation checks inherited visibility before focusing menu items.
+    app.init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+        .add_plugins((
+            bevy::camera::visibility::VisibilityPlugin,
+            bevy::ui_widgets::ButtonPlugin,
+            bevy::ui_widgets::MenuPlugin,
+        ));
+}
 
 pub(crate) fn enable_keyboard(app: &mut App) {
     app.add_message::<bevy::input::keyboard::KeyboardInput>()
@@ -59,44 +70,38 @@ fn location() -> Location {
 }
 
 pub(crate) fn press(world: &mut World, entity: Entity) {
-    world.trigger(Pointer::new(
-        PointerId::Mouse,
-        location(),
-        Press {
-            button: PointerButton::Primary,
-            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-            count: 1,
-        },
+    // Pointer traversal queries both components, even in tests without a window.
+    world.register_component::<ChildOf>();
+    world.register_component::<Window>();
+    world.trigger(PointerPress {
         entity,
-    ));
+        pointer: Pointer::new(PointerId::Mouse, location()),
+        button: PointerButton::Primary,
+        hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        count: 1,
+    });
     world.flush();
 }
 
 pub(crate) fn click(world: &mut World, entity: Entity) {
     press(world, entity);
     // Bevy emits Click before Release (both the widget and menu test Pressed).
-    world.trigger(Pointer::new(
-        PointerId::Mouse,
-        location(),
-        Click {
-            button: PointerButton::Primary,
-            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-            duration: std::time::Duration::from_millis(50),
-            count: 1,
-        },
+    world.trigger(PointerClick {
         entity,
-    ));
+        pointer: Pointer::new(PointerId::Mouse, location()),
+        button: PointerButton::Primary,
+        hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        duration: std::time::Duration::from_millis(50),
+        count: 1,
+    });
     world.flush();
     if world.get_entity(entity).is_ok() {
-        world.trigger(Pointer::new(
-            PointerId::Mouse,
-            location(),
-            Release {
-                button: PointerButton::Primary,
-                hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-            },
+        world.trigger(PointerRelease {
             entity,
-        ));
+            pointer: Pointer::new(PointerId::Mouse, location()),
+            button: PointerButton::Primary,
+            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        });
         world.flush();
     }
 }

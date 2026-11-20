@@ -222,6 +222,7 @@ pub(crate) fn spawn_measurement_box(mut commands: Commands) {
                     border_radius: BorderRadius::all(px(4.0)),
                     ..default()
                 },
+                bevy::ui_widgets::TextInput,
                 EditableText {
                     visible_width: Some(20.0),
                     max_characters: Some(32),
@@ -264,6 +265,23 @@ pub(crate) fn spawn_measurement_box(mut commands: Commands) {
         });
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct TextInputEscape(Option<Entity>);
+
+/// Bevy releases text input focus during keyboard dispatch. Remember the
+/// editor that owned Escape so viewport shortcuts ignore that same press.
+pub(crate) fn capture_text_input_escape(
+    keys: Res<ButtonInput<KeyCode>>,
+    input_focus: Option<Res<InputFocus>>,
+    text_inputs: Query<(), With<EditableText>>,
+    mut escape: ResMut<TextInputEscape>,
+) {
+    escape.0 = input_focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .filter(|entity| keys.just_pressed(KeyCode::Escape) && text_inputs.contains(*entity));
+}
+
 /// Records whether a text editor or result menu currently owns keyboard focus.
 /// Shortcut systems in other plugins read this shared resource so typing a
 /// value cannot accidentally change the selection filter, result step, or
@@ -271,12 +289,14 @@ pub(crate) fn spawn_measurement_box(mut commands: Commands) {
 pub(crate) fn update_ui_keyboard_state(
     input_focus: Option<Res<InputFocus>>,
     editable_text: Query<(), Or<(With<EditableText>, With<bevy::ui_widgets::MenuItem>, With<bevy::ui_widgets::MenuButton>)>>,
+    escape: Res<TextInputEscape>,
     mut keyboard_state: ResMut<UiKeyboardState>,
 ) {
-    keyboard_state.text_editing = input_focus
-        .as_deref()
-        .and_then(InputFocus::get)
-        .is_some_and(|entity| editable_text.contains(entity));
+    keyboard_state.text_editing = escape.0.is_some()
+        || input_focus
+            .as_deref()
+            .and_then(InputFocus::get)
+            .is_some_and(|entity| editable_text.contains(entity));
 }
 
 /// Applies or cancels an exact numeric correction for the most recent
@@ -288,6 +308,7 @@ pub(crate) fn measurement_box_input_system(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     mut input_focus: ResMut<InputFocus>,
+    escape: Res<TextInputEscape>,
     mut keyboard_state: ResMut<UiKeyboardState>,
     mut state: ResMut<MeasurementBoxState>,
     mut model: Option<ResMut<FemModel>>,
@@ -301,7 +322,7 @@ pub(crate) fn measurement_box_input_system(
     let Ok((input_entity, input)) = input_query.single_mut() else {
         return;
     };
-    if input_focus.get() != Some(input_entity) {
+    if input_focus.get() != Some(input_entity) && escape.0 != Some(input_entity) {
         return;
     }
 
@@ -645,6 +666,45 @@ fn assembly_translation_correction(axis: Vec3, committed: f32, requested: f32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_stays_captured_for_the_frame_that_blurs_the_text_input() {
+        use bevy::input::{InputPlugin, InputSystems};
+        use bevy::input_focus::{InputDispatchPlugin, InputFocusSystems};
+        use bevy::picking::events::PointerRelease;
+        use bevy::ui_widgets::{TextInput, TextInputPlugin};
+        use bevy::window::{Ime, PrimaryWindow};
+
+        let mut app = App::new();
+        app.add_plugins((InputPlugin, InputDispatchPlugin, TextInputPlugin))
+            .add_message::<Ime>()
+            .add_message::<PointerRelease>()
+            .init_resource::<UiScale>()
+            .init_resource::<Time<bevy::time::Real>>()
+            .init_resource::<bevy::picking::events::PointerState>()
+            .init_resource::<TextInputEscape>()
+            .init_resource::<UiKeyboardState>()
+            .add_systems(
+                PreUpdate,
+                capture_text_input_escape
+                    .after(InputSystems)
+                    .before(InputFocusSystems::Dispatch),
+            )
+            .add_systems(Update, update_ui_keyboard_state);
+        app.world_mut().register_component::<ChildOf>();
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        let editor = app.world_mut().spawn((TextInput, EditableText::new("42"))).id();
+        app.insert_resource(InputFocus::from_entity(editor));
+
+        crate::widget_test_input::key(&mut app, KeyCode::Escape);
+
+        assert_eq!(app.world().resource::<InputFocus>().get(), None);
+        assert_eq!(app.world().resource::<TextInputEscape>().0, Some(editor));
+        assert!(app.world().resource::<UiKeyboardState>().text_editing);
+
+        app.update();
+        assert!(!app.world().resource::<UiKeyboardState>().text_editing);
+    }
 
     #[test]
     fn measurement_parser_accepts_signed_decimal_and_exponent() {

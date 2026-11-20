@@ -5,6 +5,7 @@
 //! expose all six structural degrees of freedom and are copied to
 //! [`fem_core::AnalysisSetup`] only by an explicit Apply action.
 
+use crate::{ButtonInteraction, InteractionButton};
 use crate::bc_loads_ui::{ActiveLoadEditor, SelectedDloadKind, SelectedLoadDirection};
 use crate::layout::UiInputCapture;
 use crate::measurement::{editable_value, format_measurement, parse_measurement};
@@ -304,7 +305,7 @@ fn spawn_rotational_input_controls(parent: &mut ChildSpawnerCommands, kind: Rota
                 ("About center", RotationalInputMode::AboutCenter),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: 1.0,
                         height: px(22.0),
@@ -345,7 +346,7 @@ fn spawn_rotational_input_controls(parent: &mut ChildSpawnerCommands, kind: Rota
                 ("Clear", RotationCenterButton::Clear, 0.0),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         flex_grow: grow,
                         min_width: if grow > 0.0 { px(0.0) } else { px(52.0) },
@@ -491,7 +492,7 @@ fn compact_value_field(
                     return;
                 };
                 cell.spawn((
-                    Button,
+                    InteractionButton,
                     Node {
                         width: px(28.0),
                         height: px(25.0),
@@ -574,6 +575,7 @@ fn numeric_input(parent: &mut ChildSpawnerCommands, field: EngineeringField) {
             border_radius: BorderRadius::all(px(3.0)),
             ..default()
         },
+        bevy::ui_widgets::TextInput,
         EditableText {
             visible_width: Some(10.0),
             max_characters: Some(32),
@@ -614,7 +616,7 @@ fn apply_button(
 ) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 width: percent(100.0),
                 height: px(24.0),
@@ -736,7 +738,7 @@ pub(crate) fn engineering_numeric_input_system(
 pub(crate) fn constraint_dof_toggle_system(
     mut state: ResMut<BoundaryLoadEditorState>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &ConstraintDofToggle,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -747,15 +749,15 @@ pub(crate) fn constraint_dof_toggle_system(
         if index >= 6 {
             continue;
         }
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             state.constraint_enabled[index] = !state.constraint_enabled[index];
         }
         let active = state.constraint_enabled[index];
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active {
             INPUT_FOCUS_BORDER
@@ -768,14 +770,14 @@ pub(crate) fn constraint_dof_toggle_system(
 pub(crate) fn rotational_input_mode_button_system(
     mut state: ResMut<BoundaryLoadEditorState>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &RotationalInputModeButton,
         &mut BackgroundColor,
         &mut BorderColor,
     )>,
 ) {
     for (interaction, button, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             match button.kind {
                 RotationalInputKind::Constraint => {
                     state.constraint_rotation_mode = button.mode;
@@ -789,10 +791,10 @@ pub(crate) fn rotational_input_mode_button_system(
             RotationalInputKind::Load => state.load_moment_mode == button.mode,
         };
         *background = BackgroundColor(match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) | (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) | (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         });
         *border = BorderColor::all(if active {
             INPUT_FOCUS_BORDER
@@ -807,14 +809,14 @@ pub(crate) fn rotation_center_button_system(
     selection: Res<SelectionState>,
     mut state: ResMut<BoundaryLoadEditorState>,
     mut buttons: Query<(
-        Ref<Interaction>,
+        Ref<ButtonInteraction>,
         &RotationCenterButton,
         &mut BackgroundColor,
         &mut BorderColor,
     )>,
 ) {
     for (interaction, action, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             match action {
                 RotationCenterButton::Capture => {
                     let selected_nodes: Vec<_> = selection
@@ -854,9 +856,9 @@ pub(crate) fn rotation_center_button_system(
             }
         }
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(INPUT_BORDER);
     }
@@ -894,7 +896,7 @@ pub(crate) fn apply_constraint_button_system(
     selection: Res<SelectionState>,
     state: Res<BoundaryLoadEditorState>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &mut BorderColor),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
         With<ApplyConstraintButton>,
     >,
 ) {
@@ -902,7 +904,7 @@ pub(crate) fn apply_constraint_button_system(
         return;
     };
     for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let needs_center = state.constraint_rotation_mode == RotationalInputMode::AboutCenter
                 && state.constraint_enabled[3..].iter().any(|enabled| *enabled);
             if needs_center && state.resolved_rotation_center().is_none() {
@@ -940,9 +942,9 @@ pub(crate) fn apply_constraint_button_system(
             }
         }
         *background = BackgroundColor(match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
         });
         *border = BorderColor::all(INPUT_BORDER);
     }

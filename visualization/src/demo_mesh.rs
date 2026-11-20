@@ -1,6 +1,6 @@
 use crate::material_colors::{MaterialColorMode, MaterialIdentity, resolve_materials};
 use bevy::asset::RenderAssetUsages;
-use bevy::math::primitives::{Cuboid, Cylinder};
+use bevy::shape::{Cuboid, Cylinder};
 use bevy::mesh::{Mesh3d, PrimitiveTopology};
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;

@@ -1,4 +1,4 @@
-use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::render::view::Tonemapping;
 use bevy::dev_tools::infinite_grid::{InfiniteGrid, InfiniteGridPlugin, InfiniteGridSettings};
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::pbr::wireframe::{WireframeConfig, WireframePlugin};
@@ -216,7 +216,7 @@ fn setup(mut commands: Commands, model: Option<Res<FemModel>>) {
 
 /// Spawns the infinite reference grid in the XZ plane.
 ///
-/// This is a Bevy 0.19 first-class feature (`InfiniteGridPlugin` +
+/// This uses Bevy's built-in grid (`InfiniteGridPlugin` +
 /// `InfiniteGrid` component). For a FEM viewer the grid serves as an
 /// immediate visual frame of reference — model scale, orientation, and
 /// rough dimensions are all readable at a glance without needing to measure

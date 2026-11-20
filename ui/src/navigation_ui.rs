@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use bevy::prelude::*;
 use camera::NavigationScheme;
 
@@ -22,7 +23,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 (NavigationScheme::TouchpadSpace, "Touchpad (Space)"),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     NavigationButton(scheme),
                     Node {
                         flex_grow: 1.0,
@@ -60,11 +61,11 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
 pub(crate) fn update(
     mut scheme: ResMut<NavigationScheme>,
     settings: Res<AppSettings>,
-    mut buttons: Query<(&NavigationButton, Ref<Interaction>, &mut BackgroundColor)>,
+    mut buttons: Query<(&NavigationButton, Ref<ButtonInteraction>, &mut BackgroundColor)>,
     mut help: Query<&mut Text, With<NavigationHelp>>,
 ) {
     for (option, interaction, _) in &mut buttons {
-        if interaction.is_changed() && *interaction == Interaction::Pressed {
+        if interaction.is_changed() && *interaction == ButtonInteraction::Pressed {
             scheme.set_if_neq(option.0);
         }
     }

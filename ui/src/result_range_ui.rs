@@ -1,4 +1,5 @@
 //! Explicit view-only color range choice, independent of deformation.
+use crate::InteractionButton;
 use bevy::{
     prelude::*,
     ui::InteractionDisabled,
@@ -40,7 +41,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 (ContourRangeMode::AllFrames, "All frames"),
             ] {
                 row.spawn((
-                    Button,
+                    InteractionButton,
                     WidgetButton,
                     RangeButton(mode),
                     bevy::input_focus::tab_navigation::TabIndex(0),

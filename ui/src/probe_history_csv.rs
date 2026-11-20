@@ -1,4 +1,5 @@
 //! Snapshot-based, asynchronous CSV export. Never changes result/setup state.
+use crate::{ButtonInteraction, InteractionButton};
 use crate::{
     layout::SidebarPage,
     probe_history_data::{Sample, samples},
@@ -240,7 +241,7 @@ pub(crate) struct ExportStatus;
 pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             WidgetButton,
             ExportButton,
             bevy::input_focus::tab_navigation::TabIndex(0),
@@ -290,7 +291,7 @@ pub(crate) fn update(
             Entity,
             Option<&bevy::ui::InteractionDisabled>,
             &mut BackgroundColor,
-            &Interaction,
+            &ButtonInteraction,
         ),
         With<ExportButton>,
     >,
@@ -330,7 +331,7 @@ pub(crate) fn update(
         }
         color.set_if_neq(BackgroundColor(if inactive {
             Color::srgb(0.07, 0.08, 0.09)
-        } else if *interaction == Interaction::Hovered {
+        } else if *interaction == ButtonInteraction::Hovered {
             Color::srgb(0.18, 0.22, 0.24)
         } else {
             Color::srgb(0.10, 0.14, 0.17)

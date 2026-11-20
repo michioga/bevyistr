@@ -164,6 +164,7 @@ fn material_value_row(parent: &mut ChildSpawnerCommands, field: MaterialField) {
                     border_radius: BorderRadius::all(px(3.0)),
                     ..default()
                 },
+                bevy::ui_widgets::TextInput,
                 EditableText {
                     visible_width: Some(14.0),
                     max_characters: Some(48),

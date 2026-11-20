@@ -1,4 +1,7 @@
 //! Result-driven popup menu, following the supplied bevy_menu example.
+#[cfg(test)]
+use crate::ButtonInteraction;
+use crate::InteractionButton;
 use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
 use bevy::{
     input_focus::{
@@ -61,8 +64,8 @@ mod tests {
         use crate::result_open::{OpenResultRequested, ResultOpenState, request_result_open, open_result_button_system};
         use crate::results_ui::{OpenResultButton, ResultLoadError};
         let mut app = App::new();
-        app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
-            .init_resource::<FemResultSet>()
+        crate::widget_test_input::enable_menu_widgets(&mut app);
+        app.init_resource::<FemResultSet>()
             .init_resource::<VisualizationSettings>()
             .init_resource::<crate::results_ui::PlaybackState>()
             .init_resource::<crate::solve_results_ui::SolveResultsState>()
@@ -76,7 +79,7 @@ mod tests {
             })
             .add_systems(Update, (sync, open_result_button_system).chain());
         crate::widget_test_input::enable_keyboard(&mut app);
-        let open = app.world_mut().spawn((Button, WidgetButton, OpenResultButton, BackgroundColor::default()))
+        let open = app.world_mut().spawn((InteractionButton, WidgetButton, OpenResultButton, BackgroundColor::default()))
             .observe(request_result_open).id();
         app.world_mut().resource_mut::<FemResultSet>().by_mesh = vec![vec![fem_core::StepResult {
             fields: ["VELOCITY", "VELOCITY[1]", "VELOCITY[2]"].map(|name| ResultField::NodeScalar {
@@ -92,7 +95,7 @@ mod tests {
                 .find(|(_, c)| c.name == name).unwrap().0;
             // A popup may overlap Open Results when it opens above its anchor.
             // Simulate the stale legacy pressed state as the popup disappears.
-            app.world_mut().entity_mut(open).insert(Interaction::Pressed);
+            app.world_mut().entity_mut(open).insert(ButtonInteraction::Pressed);
             crate::widget_test_input::click(app.world_mut(), choice);
             app.update(); // Must not enter the native file dialog.
             assert!(app.world().get::<OpenResultRequested>(open).is_none());
@@ -122,8 +125,8 @@ mod tests {
     #[test]
     fn result_popup_keyboard_navigation_selects_and_escape_preserves_field() {
         let mut app = App::new();
-        app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
-            .init_resource::<FemResultSet>().init_resource::<VisualizationSettings>()
+        crate::widget_test_input::enable_menu_widgets(&mut app);
+        app.init_resource::<FemResultSet>().init_resource::<VisualizationSettings>()
             .init_resource::<crate::results_ui::PlaybackState>().init_resource::<InputFocus>()
             .insert_resource(SidebarPage::Results)
             .add_systems(Startup, |mut commands: Commands| { commands.spawn(Node::default()).with_children(spawn); })
@@ -161,7 +164,7 @@ mod tests {
     #[test]
     fn popup_lists_loaded_fields_and_activation_changes_only_the_color_field() {
         let mut app = App::new();
-        app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin));
+        crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<FemResultSet>()
             .init_resource::<VisualizationSettings>()
             .init_resource::<crate::results_ui::PlaybackState>()
@@ -440,7 +443,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         .with_children(|anchor| {
             anchor
                 .spawn((
-                    Button,
+                    InteractionButton,
                     // The UI marker alone does not emit Activate in Bevy 0.19.
                     WidgetButton,
                     MenuButton,
@@ -462,7 +465,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     crate::result_probe_pin::spawn(parent);
     parent
         .spawn((
-            Button,
+            InteractionButton,
             WidgetButton,
             DeformationButton,
             button_node(),

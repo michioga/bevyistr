@@ -1,4 +1,5 @@
 //! Draft-based multi-select popup for project output controls, not contours.
+use crate::InteractionButton;
 use crate::layout::{ScrollableList, SidebarPage, UiInputCapture};
 use bevy::{
     input_focus::{
@@ -64,8 +65,8 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             .observe(menu_event)
             .with_children(|menu| {
                 menu.spawn((
-                    Button,
-                    // UI Button supplies layout/Interaction; WidgetButton emits Activate.
+                    InteractionButton,
+                    // WidgetButton emits Activate for this menu trigger.
                     WidgetButton,
                     MenuButton,
                     TabIndex(0),
@@ -325,9 +326,9 @@ mod tests {
     #[test]
     fn output_popup_keyboard_edits_stay_draft_and_escape_cancels() {
         let mut app = App::new();
+        crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>().init_resource::<InputFocus>()
             .insert_resource(SidebarPage::Solve)
-            .add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
             .add_systems(Startup, |mut commands: Commands| { commands.spawn(Node::default()).with_children(spawn); })
             .add_systems(Update, sync);
         crate::widget_test_input::enable_keyboard(&mut app);
@@ -364,10 +365,10 @@ mod tests {
     #[test]
     fn output_popup_opens_and_applies_through_pointer_events() {
         let mut app = App::new();
+        crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>()
             .init_resource::<InputFocus>()
             .insert_resource(SidebarPage::Solve)
-            .add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin))
             .add_systems(Startup, |mut commands: Commands| {
                 commands.spawn(Node::default()).with_children(spawn);
             })
@@ -455,6 +456,7 @@ mod tests {
     #[test]
     fn popup_opens_multiple_choices_stay_open_and_dismissal_discards_draft() {
         let mut app = App::new();
+        crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>()
             .init_resource::<InputFocus>();
         let root = app
@@ -516,6 +518,7 @@ mod tests {
     #[test]
     fn choices_are_drafts_until_apply_and_stale_apply_is_rejected() {
         let mut app = App::new();
+        crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>();
         let original = OutputSettings::default();
         let popup = app
@@ -573,6 +576,7 @@ mod tests {
     #[test]
     fn sync_initializes_and_discards_stale_drafts() {
         let mut app = App::new();
+        crate::widget_test_input::enable_menu_widgets(&mut app);
         app.init_resource::<AnalysisSetup>()
             .init_resource::<InputFocus>()
             .insert_resource(SidebarPage::Solve)

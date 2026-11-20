@@ -7,7 +7,7 @@ use bevy::input::{
 
 fn app() -> App {
     let mut app = App::new();
-    app.add_plugins((bevy::ui_widgets::ButtonPlugin, bevy::ui_widgets::MenuPlugin));
+    crate::widget_test_input::enable_menu_widgets(&mut app);
     app.init_resource::<AnalysisSetup>()
         .init_resource::<InputFocus>()
         .init_resource::<UndoStack>()

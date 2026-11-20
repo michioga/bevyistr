@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -83,7 +84,7 @@ pub(super) fn spawn(parent: &mut ChildSpawnerCommands) {
 pub(super) fn button(parent: &mut ChildSpawnerCommands, action: impl Component, label: &str) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(24),
@@ -110,7 +111,7 @@ pub(super) fn button(parent: &mut ChildSpawnerCommands, action: impl Component, 
 
 pub(crate) fn update_mpi_tools(
     mut run: ResMut<FrontistrRunState>,
-    mut buttons: Query<(&MpiToolButton, Ref<Interaction>, &mut BackgroundColor)>,
+    mut buttons: Query<(&MpiToolButton, Ref<ButtonInteraction>, &mut BackgroundColor)>,
     mut sections: Query<&mut Node, With<MpiTools>>,
     mut paths: Query<(&MpiToolPath, &mut Text)>,
 ) {
@@ -127,7 +128,7 @@ pub(crate) fn update_mpi_tools(
     }
     let enabled = visible && !run.is_running();
     for (button, interaction, mut background) in &mut buttons {
-        if enabled && *interaction == Interaction::Pressed && interaction.is_changed() {
+        if enabled && *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if button.reset {
                 *button.tool.path(&mut run) = None;
             } else {
@@ -178,7 +179,7 @@ mod tests {
                     tool: Tool::Partitioner,
                     reset: true,
                 },
-                Interaction::Pressed,
+                ButtonInteraction::Pressed,
                 BackgroundColor::default(),
             ))
             .id();
@@ -199,9 +200,9 @@ mod tests {
         app.world_mut()
             .resource_mut::<FrontistrRunState>()
             .launch_mode = SolverLaunchMode::Mpi;
-        *app.world_mut().get_mut::<Interaction>(reset).unwrap() = Interaction::None;
+        *app.world_mut().get_mut::<ButtonInteraction>(reset).unwrap() = ButtonInteraction::None;
         app.update();
-        *app.world_mut().get_mut::<Interaction>(reset).unwrap() = Interaction::Pressed;
+        *app.world_mut().get_mut::<ButtonInteraction>(reset).unwrap() = ButtonInteraction::Pressed;
         app.update();
         assert_eq!(
             app.world().get::<Node>(section).unwrap().display,

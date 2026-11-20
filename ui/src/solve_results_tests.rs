@@ -1,3 +1,4 @@
+use crate::ButtonInteraction;
 use super::*;
 use crate::{
     results_ui::{PlaybackState, apply_slider_to_results},
@@ -77,7 +78,7 @@ fn fixture(phase: SolverRunPhase) -> (tempfile::TempDir, App, Entity, Entity) {
         .world_mut()
         .spawn((
             OpenRunResultsButton,
-            Interaction::None,
+            ButtonInteraction::None,
             BackgroundColor::default(),
         ))
         .id();
@@ -190,11 +191,11 @@ fn successful_handoff_replaces_results_resets_timeline_and_survives_reopen() {
         0
     );
     app.world_mut()
-        .get_mut::<Interaction>(button)
+        .get_mut::<ButtonInteraction>(button)
         .unwrap()
-        .set_if_neq(Interaction::None);
+        .set_if_neq(ButtonInteraction::None);
     app.update();
-    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+    *app.world_mut().get_mut::<ButtonInteraction>(button).unwrap() = ButtonInteraction::Pressed;
     wait(&mut app);
     assert_eq!(app.world().resource::<FemResultSet>().by_mesh[0].len(), 2);
     assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 1.0);

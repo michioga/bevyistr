@@ -3,6 +3,7 @@ mod assembly_clearance;
 mod assembly_ui;
 mod bc_loads_ui;
 mod boundary_editor;
+mod button_interaction;
 mod contact_ui;
 mod layout;
 mod load_direction;
@@ -52,6 +53,7 @@ mod solver_process;
 mod solver_runner;
 
 use bevy::prelude::*;
+use button_interaction::{ButtonInteraction, InteractionButton};
 use interaction::InteractionSystems;
 
 use assembly::{
@@ -118,7 +120,8 @@ use materials_ui::{
     update_material_workflow,
 };
 use measurement::{
-    MeasurementBoxState, measurement_box_input_system, spawn_measurement_box,
+    MeasurementBoxState, TextInputEscape, capture_text_input_escape, measurement_box_input_system,
+    spawn_measurement_box,
     update_measurement_box_visuals, update_ui_keyboard_state,
 };
 use mpc_ui::{
@@ -164,6 +167,7 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        button_interaction::register(app);
         app.add_systems(
             Update,
             (
@@ -199,6 +203,13 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::PendingCntLoad>();
         app.init_resource::<fem_core::UiPointerState>();
         app.init_resource::<fem_core::UiKeyboardState>();
+        app.init_resource::<TextInputEscape>();
+        app.add_systems(
+            PreUpdate,
+            capture_text_input_escape
+                .after(bevy::input::InputSystems)
+                .before(bevy::input_focus::InputFocusSystems::Dispatch),
+        );
         app.init_resource::<fem_core::ViewportTool>();
         app.init_resource::<fem_core::ContactCandidateState>();
         app.init_resource::<fem_core::RigidSpiderCandidateState>();

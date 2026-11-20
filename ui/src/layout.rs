@@ -1,3 +1,4 @@
+use crate::{ButtonInteraction, InteractionButton};
 use crate::assembly_ui::spawn_assembly_ui;
 use crate::bc_loads_ui::{BoundaryLoadsListContainer, spawn_boundary_load_editor};
 use crate::contact_ui::{
@@ -366,7 +367,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                                 },))
                                     .with_children(|row| {
                                         row.spawn((
-                                            Button,
+                                            InteractionButton,
                                             Node {
                                                 flex_grow: 1.0,
                                                 height: px(28.0),
@@ -540,7 +541,7 @@ fn spawn_view_toolbar(parent: &mut ChildSpawnerCommands) {
                     for (index, mode) in VisualizationMode::ALL.iter().enumerate() {
                         let (radius, border) = segment_style(index == 0, index + 1 == count);
                         row.spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 flex_grow: 1.0,
                                 height: px(26.0),
@@ -609,7 +610,7 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                     for (index, (level, label)) in levels.iter().enumerate() {
                         let (radius, border) = segment_style(index == 0, index == count - 1);
                         row.spawn((
-                            Button,
+                            InteractionButton,
                             Node {
                                 flex_grow: 1.0,
                                 height: px(26.0),
@@ -670,7 +671,7 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                                 SurfaceSelectionMode::Smooth,
                             ] {
                                 row.spawn((
-                                    Button,
+                                    InteractionButton,
                                     Node {
                                         flex_grow: 1.0,
                                         padding: UiRect::axes(px(6.0), px(4.0)),
@@ -760,7 +761,7 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
 fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 width: percent(100.0),
                 min_height: px(24.0),
@@ -811,7 +812,7 @@ fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
 fn sidebar_page_button(parent: &mut ChildSpawnerCommands, page: SidebarPage, label: &'static str) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             Node {
                 flex_grow: 1.0,
                 height: px(26.0),
@@ -923,7 +924,7 @@ pub(crate) fn sidebar_page_button_system(
     mut measurement: ResMut<MeasurementBoxState>,
     mut buttons: Query<
         (
-            Ref<Interaction>,
+            Ref<ButtonInteraction>,
             &mut BackgroundColor,
             &mut BorderColor,
             &SidebarPageButton,
@@ -933,7 +934,7 @@ pub(crate) fn sidebar_page_button_system(
     mut scroll_areas: Query<&mut ScrollPosition, With<PanelScrollArea>>,
 ) {
     for (interaction, mut background, mut border, button) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             let page_changed = *page != button.page;
             *page = button.page;
             if page_changed {
@@ -950,11 +951,11 @@ pub(crate) fn sidebar_page_button_system(
         let active = *page == button.page;
 
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1107,7 +1108,7 @@ pub(crate) fn update_ui_pointer_state(
     mut state: ResMut<UiPointerState>,
     windows: Query<&Window>,
     capture_regions: Query<(&ComputedNode, &UiGlobalTransform), With<UiInputCapture>>,
-    interactions: Query<&Interaction, With<Button>>,
+    interactions: Query<&ButtonInteraction, With<InteractionButton>>,
 ) {
     let over_capture_region = windows
         .single()
@@ -1128,7 +1129,7 @@ pub(crate) fn update_ui_pointer_state(
 
     let over_interactive_widget = interactions
         .iter()
-        .any(|interaction| *interaction != Interaction::None);
+        .any(|interaction| *interaction != ButtonInteraction::None);
 
     state.over_ui = over_capture_region || over_interactive_widget;
 }
@@ -1137,27 +1138,27 @@ pub(crate) fn render_mode_button_system(
     mut settings: ResMut<VisualizationSettings>,
     mut buttons: Query<
         (
-            &Interaction,
+            &ButtonInteraction,
             &RenderModeButton,
             &mut BackgroundColor,
             &mut BorderColor,
-            &mut Button,
+            &mut InteractionButton,
         ),
         Without<SelectionLevelButton>,
     >,
 ) {
     for (interaction, button, mut background, mut border, mut bevy_button) in &mut buttons {
-        if *interaction == Interaction::Pressed && settings.mode != button.mode {
+        if *interaction == ButtonInteraction::Pressed && settings.mode != button.mode {
             settings.mode = button.mode;
         }
 
         let active = settings.mode == button.mode;
         let color = match (*interaction, active) {
-            (Interaction::Pressed, _) => BUTTON_PRESSED,
-            (Interaction::Hovered, true) => BUTTON_ACTIVE,
-            (Interaction::Hovered, false) => BUTTON_HOVERED,
-            (Interaction::None, true) => BUTTON_ACTIVE,
-            (Interaction::None, false) => BUTTON_NORMAL,
+            (ButtonInteraction::Pressed, _) => BUTTON_PRESSED,
+            (ButtonInteraction::Hovered, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::Hovered, false) => BUTTON_HOVERED,
+            (ButtonInteraction::None, true) => BUTTON_ACTIVE,
+            (ButtonInteraction::None, false) => BUTTON_NORMAL,
         };
 
         *background = BackgroundColor(color);
@@ -1175,12 +1176,12 @@ pub(crate) fn render_mode_button_system(
 pub(crate) fn delete_setup_entry_button_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     mut buttons: Query<
-        (Ref<Interaction>, &mut BackgroundColor, &DeleteSetupEntry),
+        (Ref<ButtonInteraction>, &mut BackgroundColor, &DeleteSetupEntry),
         With<DeleteSetupEntry>,
     >,
 ) {
     for (interaction, mut bg, entry) in &mut buttons {
-        if *interaction == Interaction::Pressed && interaction.is_changed() {
+        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             match *entry {
                 DeleteSetupEntry::BoundaryCondition(i) => setup.remove_boundary_condition(i),
                 DeleteSetupEntry::LoadGroup(i) => setup.remove_load_group(i),
@@ -1191,8 +1192,8 @@ pub(crate) fn delete_setup_entry_button_system(
         }
 
         *bg = BackgroundColor(match *interaction {
-            Interaction::Pressed | Interaction::Hovered => Color::srgba(0.75, 0.22, 0.22, 0.95),
-            Interaction::None => Color::srgba(0.55, 0.18, 0.18, 0.85),
+            ButtonInteraction::Pressed | ButtonInteraction::Hovered => Color::srgba(0.75, 0.22, 0.22, 0.95),
+            ButtonInteraction::None => Color::srgba(0.55, 0.18, 0.18, 0.85),
         });
     }
 }

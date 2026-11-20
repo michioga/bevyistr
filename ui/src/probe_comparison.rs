@@ -1,4 +1,5 @@
 //! Explicit, bounded comparison of part-local identities. Never modifies the pin.
+use crate::{ButtonInteraction, InteractionButton};
 use crate::{
     layout::SidebarPage,
     result_probe_pin::{ProbePin, Target},
@@ -180,7 +181,7 @@ fn text(value: &str) -> impl Bundle {
 fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
     parent
         .spawn((
-            Button,
+            InteractionButton,
             WidgetButton,
             action,
             bevy::input_focus::tab_navigation::TabIndex(0),
@@ -286,7 +287,7 @@ pub(crate) fn update(
             Entity,
             &Action,
             &mut Node,
-            &Interaction,
+            &ButtonInteraction,
             &mut BackgroundColor,
             Option<&bevy::ui::InteractionDisabled>,
         ),
@@ -352,7 +353,7 @@ pub(crate) fn update(
         }
         bg.set_if_neq(BackgroundColor(if disabled {
             Color::srgb(0.07, 0.09, 0.10)
-        } else if *interaction != Interaction::None {
+        } else if *interaction != ButtonInteraction::None {
             Color::srgb(0.18, 0.32, 0.39)
         } else {
             Color::srgb(0.10, 0.14, 0.17)
