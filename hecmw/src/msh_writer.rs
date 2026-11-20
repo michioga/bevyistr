@@ -187,7 +187,7 @@ fn write_msh_assembly_impl(
         for node in &mesh.nodes {
             writeln!(
                 combined,
-                " {},{:.6},{:.6},{:.6}",
+                " {},{:.8e},{:.8e},{:.8e}",
                 node.id.0 + noff,
                 node.position.x,
                 node.position.y,
@@ -700,7 +700,7 @@ fn build_msh(
     for node in &mesh.nodes {
         writeln!(
             out,
-            " {},{:.6},{:.6},{:.6}",
+            " {},{:.8e},{:.8e},{:.8e}",
             node.id.0, node.position.x, node.position.y, node.position.z,
         )
         .unwrap();
@@ -849,6 +849,24 @@ mod tests {
             name: name.into(),
             surfaces: vec![ElementFaceRef::new(ElementId(0), LocalFaceId(local_face))],
         });
+    }
+
+    #[test]
+    fn preserves_mesh_coordinates_through_export() {
+        let mesh = crate::parse_mesh_str(
+            "!NODE,SYSTEM=C\n1,2,90,0\n!! keep reading nodes\n2,4,,1e-7\n!NODE\n3,-1e-7,1.2345679,0\n",
+        )
+        .unwrap();
+        assert!(mesh.nodes[0].position.x.abs() < 1e-12);
+        assert_eq!(mesh.nodes[0].position.y, 2.0);
+        assert_eq!(mesh.nodes[1].position.y, 0.0);
+        assert_eq!(mesh.nodes[1].position.z, 1e-7);
+        let exported = build_msh(&mesh, 0, &[], None);
+        let reloaded = crate::parse_mesh_str(&exported).unwrap();
+        for (actual, expected) in reloaded.nodes.iter().zip(&mesh.nodes) {
+            assert_eq!(actual.position, expected.position);
+        }
+        assert_eq!(reloaded.nodes.len(), mesh.nodes.len());
     }
 
     #[test]

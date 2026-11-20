@@ -123,7 +123,7 @@ impl From<HecmwParseError> for HecmwLoadError {
 enum Section {
     Ignore,
 
-    Node { group: Option<usize> },
+    Node { group: Option<usize>, cylindrical: bool },
 
     Element { element_type: ElementType, group: Option<usize> },
 
@@ -719,7 +719,7 @@ pub fn parse_mesh_str(source: &str) -> Result<FemMesh, HecmwParseError> {
         let line_number = line_index + 1;
         let line = raw_line.trim();
 
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() || line.starts_with('#') || line.starts_with("!!") {
             continue;
         }
 
@@ -730,8 +730,8 @@ pub fn parse_mesh_str(source: &str) -> Result<FemMesh, HecmwParseError> {
 
         match &section {
             Section::Ignore => {}
-            Section::Node { group } => {
-                let node = parse_node(line, line_number)?;
+            Section::Node { group, cylindrical } => {
+                let node = parse_node(line, line_number, *cylindrical)?;
                 if let Some(index) = group {
                     mesh.node_sets[*index].nodes.push(node.id);
                 }
@@ -791,7 +791,12 @@ fn parse_section(
 
     if command.starts_with("!NODE") {
         let group = parse_attribute(line, "NGRP").map(|name| node_group_index(mesh, name));
-        return Ok(Section::Node { group });
+        let cylindrical = match parse_attribute(line, "SYSTEM").as_deref() {
+            None | Some("R" | "r") => false,
+            Some("C" | "c") => true,
+            Some(_) => return Err(HecmwParseError::new(line_number, "invalid !NODE SYSTEM")),
+        };
+        return Ok(Section::Node { group, cylindrical });
     }
 
     if command.starts_with("!ELEMENT") {
@@ -858,22 +863,45 @@ fn element_group_index(mesh: &mut FemMesh, name: String) -> usize {
     }
 }
 
-fn parse_node(line: &str, line_number: usize) -> Result<FemNode, HecmwParseError> {
-    let fields = split_fields(line);
-
-    if fields.len() < 4 {
-        return Err(HecmwParseError::new(
-            line_number,
-            "node line must contain id, x, y, z",
-        ));
+fn parse_node(
+    line: &str,
+    line_number: usize,
+    cylindrical: bool,
+) -> Result<FemNode, HecmwParseError> {
+    let fields: Vec<_> = line
+        .split(',')
+        .flat_map(|field| {
+            field
+                .split_whitespace()
+                .chain(field.trim().is_empty().then_some(""))
+        })
+        .collect();
+    let coordinate = |index, label| {
+        let field = fields.get(index).copied().unwrap_or("");
+        if field == "" {
+            return Ok(0.0);
+        }
+        field
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| HecmwParseError::new(line_number, format!("invalid {label}: {field}")))
+    };
+    let id = parse_u32(fields[0], line_number, "node id")?;
+    let x = coordinate(1, "x")?;
+    let y = coordinate(2, "y")?;
+    let z = coordinate(3, "z")?;
+    let (x, y) = if cylindrical {
+        let (sin, cos) = y.to_radians().sin_cos();
+        (x * cos, x * sin)
+    } else {
+        (x, y)
+    };
+    let [x, y, z] = [x as f32, y as f32, z as f32];
+    if ![x, y, z].into_iter().all(f32::is_finite) {
+        return Err(HecmwParseError::new(line_number, "node coordinate exceeds model precision"));
     }
-
-    Ok(FemNode::from_xyz(
-        NodeId(parse_u32(fields[0], line_number, "node id")?),
-        parse_f32(fields[1], line_number, "x")?,
-        parse_f32(fields[2], line_number, "y")?,
-        parse_f32(fields[3], line_number, "z")?,
-    ))
+    Ok(FemNode::from_xyz(NodeId(id), x, y, z))
 }
 
 fn parse_element(
@@ -1089,15 +1117,6 @@ fn parse_u32(field: &str, line_number: usize, label: &str) -> Result<u32, HecmwP
         HecmwParseError::new(
             line_number,
             format!("failed to parse {label} as unsigned integer: {field}"),
-        )
-    })
-}
-
-fn parse_f32(field: &str, line_number: usize, label: &str) -> Result<f32, HecmwParseError> {
-    field.parse::<f32>().map_err(|_| {
-        HecmwParseError::new(
-            line_number,
-            format!("failed to parse {label} as float: {field}"),
         )
     })
 }
