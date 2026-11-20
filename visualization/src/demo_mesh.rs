@@ -2241,7 +2241,8 @@ fn spawn_shell_element_visual(
     };
 
     let thickness = match section.map(|s| &s.kind) {
-        Some(fem_core::SectionKind::Shell { thickness }) => *thickness,
+        Some(fem_core::SectionKind::Shell { thickness })
+        | Some(fem_core::SectionKind::ShellWithIntegration { thickness, .. }) => *thickness,
         _ => {
             let Some((min, max)) = bounds(corners) else {
                 return;
@@ -2355,7 +2356,10 @@ fn spawn_beam_element_visual(
         .sum::<f32>();
 
     let radius = match section.map(|s| &s.kind) {
-        Some(fem_core::SectionKind::Beam { area }) => (area / std::f32::consts::PI).sqrt(),
+        Some(fem_core::SectionKind::Beam { area })
+        | Some(fem_core::SectionKind::BeamWithProperties { area, .. }) => {
+            (area / std::f32::consts::PI).sqrt()
+        }
         // Same model-scale safety ceiling as the shell thickness fallback
         // above — see its comment for why a purely element-relative value
         // is risky for outlier/degenerate elements.

@@ -524,7 +524,12 @@ fn format_section_line(section: &fem_core::Section) -> String {
     let kind_label = match section.kind {
         fem_core::SectionKind::Solid => "Solid".to_string(),
         fem_core::SectionKind::Shell { thickness } => format!("Shell t={thickness:.3}"),
-        fem_core::SectionKind::Beam { area } => format!("Beam A={area:.3}"),
+        fem_core::SectionKind::ShellWithIntegration { thickness, integration_points } => {
+            format!("Shell t={thickness:.3}, {integration_points} integration points")
+        }
+        fem_core::SectionKind::Beam { area } | fem_core::SectionKind::BeamWithProperties { area, .. } => {
+            format!("Beam A={area:.3}")
+        }
     };
 
     let scope = section

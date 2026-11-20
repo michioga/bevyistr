@@ -621,34 +621,40 @@ fn write_mesh_section(out: &mut String, section: &Section, element_group: &str) 
             )
             .unwrap();
         }
-        SectionKind::Shell { thickness } => {
+        SectionKind::Shell { thickness }
+        | SectionKind::ShellWithIntegration { thickness, .. } => {
             writeln!(
                 out,
                 "!SECTION,TYPE=SHELL,EGRP={element_group},MATERIAL={}",
                 section.material_name,
             )
             .unwrap();
-            // Five through-thickness integration points is the conventional
-            // FrontISTR shell default used by its examples.
-            writeln!(out, " {thickness},5").unwrap();
+            let integration_points = match section.kind {
+                SectionKind::ShellWithIntegration { integration_points, .. } => integration_points,
+                _ => 5,
+            };
+            writeln!(out, " {thickness},{integration_points}").unwrap();
         }
-        SectionKind::Beam { area } => {
+        SectionKind::Beam { .. } | SectionKind::BeamWithProperties { .. } => {
             writeln!(
                 out,
                 "!SECTION,TYPE=BEAM,EGRP={element_group},MATERIAL={}",
                 section.material_name,
             )
             .unwrap();
-            // The current UI captures area only. Use an equivalent circular
-            // section for the missing second moments/torsion constant until
-            // the detailed beam-section editor exposes those values.
-            let second_moment = area * area / (4.0 * std::f32::consts::PI);
-            let torsion_constant = second_moment * 2.0;
-            writeln!(
-                out,
-                " 0.0,1.0,0.0,{area},{second_moment},{second_moment},{torsion_constant}",
-            )
-            .unwrap();
+            let (axis, area, iyy, izz, torsion) = match section.kind {
+                SectionKind::BeamWithProperties { axis, area, iyy, izz, torsion } => {
+                    (axis, area, iyy, izz, torsion)
+                }
+                SectionKind::Beam { area } => {
+                    // The area-only editor uses an equivalent circular section.
+                    let moment = area * area / (4.0 * std::f32::consts::PI);
+                    ([0.0, 1.0, 0.0], area, moment, moment, 2.0 * moment)
+                }
+                _ => unreachable!(),
+            };
+            let [vx, vy, vz] = axis;
+            writeln!(out, " {vx},{vy},{vz},{area},{iyy},{izz},{torsion}").unwrap();
         }
     }
 }
@@ -849,6 +855,30 @@ mod tests {
             name: name.into(),
             surfaces: vec![ElementFaceRef::new(ElementId(0), LocalFaceId(local_face))],
         });
+    }
+
+    #[test]
+    fn preserves_imported_section_properties() {
+        let source = "!SECTION,TYPE=SHELL,EGRP=SKIN,MATERIAL=STEEL\n!! thickness and quadrature\n0.025,3\n!SECTION,TYPE=BEAM,EGRP=FRAME,MATERIAL=STEEL\n1,0,0,2,3,4,5\n";
+        let (_, sections) = crate::parse_msh_setup(source, 0);
+        assert_eq!(sections[0].kind, SectionKind::ShellWithIntegration {
+            thickness: 0.025,
+            integration_points: 3,
+        });
+        assert_eq!(sections[1].kind, SectionKind::BeamWithProperties {
+            axis: [1.0, 0.0, 0.0],
+            area: 2.0,
+            iyy: 3.0,
+            izz: 4.0,
+            torsion: 5.0,
+        });
+        let mut output = String::new();
+        for section in &sections {
+            write_mesh_section(&mut output, section, section.name.as_str());
+        }
+        let (_, reloaded) = crate::parse_msh_setup(&output, 0);
+        assert_eq!(reloaded.iter().map(|s| s.kind).collect::<Vec<_>>(),
+                   sections.iter().map(|s| s.kind).collect::<Vec<_>>());
     }
 
     #[test]

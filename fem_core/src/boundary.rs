@@ -392,6 +392,7 @@ pub enum SectionKind {
 
     /// Shell elements — uniform thickness.
     Shell { thickness: f32 },
+    ShellWithIntegration { thickness: f32, integration_points: u32 },
 
     /// Beam elements — cross-sectional area (used for axial stiffness and,
     /// in [`visualization`](../../visualization), to scale the beam's
@@ -399,6 +400,13 @@ pub enum SectionKind {
     /// out of scope for now; `area` alone is enough for a representative
     /// circular-tube rendering.
     Beam { area: f32 },
+    BeamWithProperties {
+        axis: [f32; 3],
+        area: f32,
+        iyy: f32,
+        izz: f32,
+        torsion: f32,
+    },
 }
 
 // ─── collected resource ──────────────────────────────────────────────────────

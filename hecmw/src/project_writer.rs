@@ -478,14 +478,28 @@ fn validate_analysis_setup(
         }
         match section.kind {
             SectionKind::Solid => {}
-            SectionKind::Shell { thickness } => {
+            SectionKind::Shell { thickness }
+            | SectionKind::ShellWithIntegration { thickness, .. } => {
                 if !thickness.is_finite() || thickness <= 0.0 {
                     report.error(&location, "shell thickness must be finite and positive");
                 }
+                if let SectionKind::ShellWithIntegration { integration_points, .. } = section.kind {
+                    if !(1..=i32::MAX as u32).contains(&integration_points) {
+                        report.error(&location, "shell integration point count must be positive");
+                    }
+                }
             }
-            SectionKind::Beam { area } => {
+            SectionKind::Beam { area } | SectionKind::BeamWithProperties { area, .. } => {
                 if !area.is_finite() || area <= 0.0 {
                     report.error(&location, "beam area must be finite and positive");
+                }
+                if let SectionKind::BeamWithProperties { axis, iyy, izz, torsion, .. } = section.kind {
+                    if !axis.into_iter().all(f32::is_finite) || axis == [0.0; 3] {
+                        report.error(&location, "beam reference axis must be finite and nonzero");
+                    }
+                    if ![iyy, izz, torsion].into_iter().all(|value| value.is_finite() && value > 0.0) {
+                        report.error(&location, "beam inertias and torsion must be finite and positive");
+                    }
                 }
             }
         }

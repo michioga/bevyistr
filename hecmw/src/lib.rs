@@ -649,44 +649,33 @@ fn parse_msh_setup(
 
             let mat_name = keyword_parameter(line, "MATERIAL").unwrap_or_default();
 
-            let kind = match sec_type.as_str() {
-                "SHELL" => {
-                    // Next data line may have thickness
-                    i += 1;
-                    let thickness = if i < lines.len() {
-                        let next = lines[i].trim();
-                        if !next.starts_with('!') {
-                            next.split(',')
-                                .next()
-                                .and_then(|v| v.trim().parse::<f32>().ok())
-                                .unwrap_or(1.0)
-                        } else {
-                            i -= 1;
-                            1.0
-                        }
-                    } else {
-                        1.0
-                    };
-                    SectionKind::Shell { thickness }
+            let properties = lines[i + 1..]
+                .iter()
+                .map(|line| line.trim())
+                .find(|line| !line.is_empty() && !line.starts_with("!!") && !line.starts_with('#'))
+                .filter(|line| !line.starts_with('!'))
+                .map(|line| line.split(',').map(str::trim).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            let kind = match (sec_type.as_str(), properties.as_slice()) {
+                ("SHELL", [thickness, points]) => SectionKind::ShellWithIntegration {
+                    thickness: thickness.parse().unwrap_or(f32::NAN),
+                    integration_points: points.parse().unwrap_or(0),
+                },
+                ("SHELL", _) => SectionKind::Shell {
+                    thickness: f32::NAN,
+                },
+                ("BEAM", [vx, vy, vz, area, iyy, izz, torsion]) => {
+                    let parse = |field: &str| field.parse().unwrap_or(f32::NAN);
+                    SectionKind::BeamWithProperties {
+                        axis: [parse(vx), parse(vy), parse(vz)],
+                        area: parse(area),
+                        iyy: parse(iyy),
+                        izz: parse(izz),
+                        torsion: parse(torsion),
+                    }
                 }
-                "BEAM" => {
-                    i += 1;
-                    let area = if i < lines.len() {
-                        let next = lines[i].trim();
-                        if !next.starts_with('!') {
-                            next.split(',')
-                                .next()
-                                .and_then(|v| v.trim().parse::<f32>().ok())
-                                .unwrap_or(1.0)
-                        } else {
-                            i -= 1;
-                            1.0
-                        }
-                    } else {
-                        1.0
-                    };
-                    SectionKind::Beam { area }
-                }
+                ("BEAM", _) => SectionKind::Beam { area: f32::NAN },
                 _ => SectionKind::Solid,
             };
 
