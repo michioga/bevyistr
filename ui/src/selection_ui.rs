@@ -315,6 +315,8 @@ pub(crate) fn selection_context_for_page(page: SidebarPage) -> SelectionPageCont
 pub(crate) fn update_selection_context(
     mut commands: Commands,
     page: Res<SidebarPage>,
+    step: Res<crate::step_import::StepImport>,
+    mut preview_was_active: Local<bool>,
     mut filter: ResMut<SelectionFilter>,
     mut hover: ResMut<HoverResult>,
     mut selection: ResMut<SelectionState>,
@@ -327,19 +329,24 @@ pub(crate) fn update_selection_context(
     let page_changed = page.is_changed();
     let filter_changed = filter.is_changed();
 
-    if !page_changed && !filter_changed {
+    let preview_active = *page == SidebarPage::Model && step.is_active();
+    if !page_changed && !filter_changed && *preview_was_active == preview_active {
         return;
     }
+    *preview_was_active = preview_active;
 
     let context = selection_context_for_page(*page);
     let has_targets = !context.levels.is_empty();
 
     for mut toolbar in &mut toolbars {
-        toolbar.display = if has_targets {
+        toolbar.display = if has_targets && !preview_active {
             Display::Flex
         } else {
             Display::None
         };
+    }
+    if preview_active {
+        return;
     }
     for mut label in &mut labels {
         **label = context.label.to_string();

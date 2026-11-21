@@ -9,7 +9,7 @@ use bevy::window::RequestRedraw;
 use fem_core::UiPointerState;
 use std::time::Duration;
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 #[require(PanOrbitCamera = screen_space_orbit())]
 pub struct OrbitCamera {
     pub focus: Vec3,

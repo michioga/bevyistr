@@ -92,11 +92,13 @@ pub struct UiPointerState {
     pub over_ui: bool,
     /// Navigation owns this drag gesture, including its release frame.
     pub navigating: bool,
+    /// A read-only meshing preview owns the viewport. Camera navigation is still available.
+    pub mesh_preview: bool,
 }
 
 impl UiPointerState {
     pub fn blocks_viewport_tools(&self) -> bool {
-        self.over_ui || self.navigating
+        self.over_ui || self.navigating || self.mesh_preview
     }
 }
 

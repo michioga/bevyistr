@@ -11,20 +11,19 @@ use bevy::{
         NumberInputValue,
     },
     prelude::*,
-    tasks::{IoTaskPool, Task, futures::check_ready},
     ui_widgets::ValueChange,
 };
 use camera::OrbitCamera;
 use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
-use gmsh::{StepMeshOptions, StepMeshProgress};
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use gmsh::StepMeshOptions;
+use std::path::Path;
 use visualization::VisualizationSettings;
 
-use crate::{assembly::AssemblyEditorState, solver_runner::FrontistrRunState};
+use crate::{
+    assembly::AssemblyEditorState,
+    solver_runner::FrontistrRunState,
+    step_import::{StepImport, StepSource, StepWidget, spawn_step_import_ui},
+};
 
 const DEFAULT_STEP_CURVE_RESOLUTION: i32 = StepMeshOptions::DEFAULT_ELEMENTS_PER_TURN as i32;
 const MAX_STEP_CURVE_RESOLUTION: i32 = 100;
@@ -61,7 +60,7 @@ pub(crate) struct MeshStatsText;
 
 #[derive(Resource, Default)]
 pub(crate) struct StepMeshSettings {
-    options: StepMeshOptions,
+    pub(crate) options: StepMeshOptions,
 }
 
 #[derive(Component)]
@@ -78,46 +77,6 @@ pub(crate) struct SaveStepMeshControls;
 
 #[derive(Component)]
 pub(crate) struct SaveStepMeshStatus;
-
-pub(crate) struct StepMeshJob {
-    path: PathBuf,
-    import: bool,
-    task: Task<Result<fem_core::FemMesh, gmsh::GmshError>>,
-    progress: Arc<Mutex<StepMeshProgress>>,
-    started_at: Instant,
-    displayed: Option<(StepMeshProgress, u64)>,
-}
-
-impl StepMeshJob {
-    fn update_status(&mut self, status: &mut ResMut<MeshLoadStatus>) {
-        let step = *self.progress.lock().unwrap_or_else(|error| error.into_inner());
-        let seconds = self.started_at.elapsed().as_secs();
-        if self.displayed == Some((step, seconds)) {
-            return;
-        }
-        self.displayed = Some((step, seconds));
-        status.message = format_step_progress(step, seconds);
-    }
-}
-
-fn format_step_progress(step: StepMeshProgress, elapsed: u64) -> String {
-    let (phase, percent) = match step {
-        StepMeshProgress::ReadingStep => ("Reading STEP solid", None),
-        StepMeshProgress::MeshingCurves(percent) => ("Meshing curves (1D)", percent),
-        StepMeshProgress::MeshingSurfaces(percent) => ("Meshing surfaces (2D)", percent),
-        StepMeshProgress::MeshingVolume(Some(nodes)) => {
-            return format!("Meshing volume (3D)\nAdded nodes: {nodes}\nElapsed: {elapsed} s");
-        }
-        StepMeshProgress::MeshingVolume(None) => ("Meshing volume (3D)", None),
-        StepMeshProgress::Optimizing => ("Optimizing mesh", None),
-        StepMeshProgress::WritingMesh => ("Writing Gmsh mesh", None),
-        StepMeshProgress::ImportingMesh => ("Importing generated mesh", None),
-    };
-    match percent {
-        Some(percent) => format!("{phase}: {percent}%\nElapsed: {elapsed} s"),
-        None => format!("{phase}\nElapsed: {elapsed} s"),
-    }
-}
 
 fn is_step(path: &Path) -> bool {
     path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
@@ -269,6 +228,8 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 .observe(update_step_curve_resolution);
         });
 
+    spawn_step_import_ui(parent);
+
     parent
         .spawn((
             SaveStepMeshControls,
@@ -315,6 +276,8 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
         },
         TextColor(TEXT_MUTED),
         MeshStatsText,
+        StepWidget::CommittedStats,
+        Node::default(),
     ));
 
     parent
@@ -401,8 +364,8 @@ pub(crate) fn open_mesh_button_system(
             {
                 if !is_step(&path) {
                     run_state.clear_export_target();
+                    status.loading(path.clone());
                 }
-                status.loading(path.clone());
                 request.request(path);
             }
         }
@@ -438,7 +401,9 @@ pub(crate) fn add_mesh_button_system(
                 .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
                 .pick_file()
             {
-                status.loading(path.clone());
+                if !is_step(&path) {
+                    status.loading(path.clone());
+                }
                 request.request_import(path);
             }
         }
@@ -456,12 +421,16 @@ pub(crate) fn add_mesh_button_system(
 
 pub(crate) fn save_step_mesh_button_system(
     model: Option<Res<FemModel>>,
+    step: Res<StepImport>,
     editor: Res<AssemblyEditorState>,
     mut controls: Query<&mut Node, With<SaveStepMeshControls>>,
     mut buttons: Query<(Ref<ButtonInteraction>, &mut BackgroundColor), With<SaveStepMeshButton>>,
     mut status: Query<&mut Text, With<SaveStepMeshStatus>>,
 ) {
     let Some((part, mesh)) = model.as_deref().and_then(|model| {
+        if step.is_active() {
+            return None;
+        }
         let part = model.parts.get(editor.selected_part?)?;
         let mesh = model.meshes.get(part.mesh_index)?;
         is_step(Path::new(&part.name)).then_some((part, mesh))
@@ -531,72 +500,57 @@ pub(crate) fn mesh_load_system(
     mut setup: ResMut<fem_core::AnalysisSetup>,
     step_settings: Option<Res<StepMeshSettings>>,
     mut run_state: Option<ResMut<FrontistrRunState>>,
-    mut step_job: Local<Option<StepMeshJob>>,
+    mut step: ResMut<StepImport>,
+    pending_cnt: Option<ResMut<fem_core::PendingCntLoad>>,
 ) {
+    let options = step_settings
+        .as_deref()
+        .map(|settings| settings.options)
+        .unwrap_or_default();
+
     let Some((path, import)) = request.take() else {
-        let Some(job) = step_job.as_mut() else {
-            return;
-        };
-        let Some(result) = check_ready(&mut job.task) else {
-            job.update_status(&mut status);
-            return;
-        };
-        let Some(StepMeshJob { path, import, .. }) = step_job.take() else {
-            return;
-        };
-        match result {
-            Ok(mesh) => {
-                let size = mesh.bounds().map(|(min, max)| max - min);
-                if !import && let Some(run) = run_state.as_deref_mut() {
-                    run.clear_export_target();
-                }
-                apply_mesh(
-                    mesh, &path, import, &mut model, &mut status, &mut version,
-                    &mut camera_fit, &mut setup,
-                );
-                if let Some(size) = size {
-                    status.message = format!(
-                        "STEP meshed | {:.6} x {:.6} x {:.6} mm (X x Y x Z)",
-                        size.x, size.y, size.z
-                    );
-                }
+        if step.has_action()
+            && let Some((source, mesh)) = step.apply_action(options)
+        {
+            let size = mesh.bounds().map(|(min, max)| max - min);
+            if !source.add_part && let Some(run) = run_state.as_deref_mut() {
+                run.clear_export_target();
             }
-            Err(error) => status.failed(path, error.to_string()),
+            apply_mesh(
+                mesh,
+                &source.path,
+                source.add_part,
+                &mut model,
+                &mut status,
+                &mut version,
+                &mut camera_fit,
+                &mut setup,
+            );
+            if let Some(size) = size {
+                status.message = format!(
+                    "STEP meshed | {:.6} x {:.6} x {:.6} mm (X x Y x Z)",
+                    size.x, size.y, size.z
+                );
+            }
+        }
+        if step.is_meshing() {
+            step.poll();
         }
         return;
     };
 
-    // A newer Open/Add request owns the viewport, even if Gmsh is still
-    // writing the superseded STEP job's temporary files.
-    *step_job = None;
+    // A newer load owns the viewport. A previously queued STEP result cannot
+    // become the preview or change the new model once its task is dropped.
+    step.clear();
     if is_step(&path) {
-        let Some(pool) = IoTaskPool::try_get() else {
-            status.failed(path, "Gmsh background task pool is unavailable");
-            return;
-        };
-        status.loading(path.clone());
-        let input = path.clone();
-        let options = step_settings
-            .as_deref()
-            .map(|settings| settings.options)
-            .unwrap_or_default();
-        let progress = Arc::new(Mutex::new(StepMeshProgress::ReadingStep));
-        let latest = Arc::clone(&progress);
-        let task = pool.spawn(async move {
-            gmsh::mesh_step_with_progress(&input, options, |step| {
-                *latest.lock().unwrap_or_else(|error| error.into_inner()) = step;
-            })
-        });
-        let mut job = StepMeshJob {
-            path,
-            import,
-            task,
-            progress,
-            started_at: Instant::now(),
-            displayed: None,
-        };
-        job.update_status(&mut status);
-        *step_job = Some(job);
+        if let Some(mut pending_cnt) = pending_cnt {
+            // A control file from a superseded project must not attach to the accepted STEP.
+            *pending_cnt = default();
+        }
+        step.start(
+            StepSource { path, add_part: import },
+            options,
+        );
         return;
     }
 
@@ -826,12 +780,20 @@ pub(crate) fn camera_refit_on_reload(
     let Some((min, max)) = display_model.and_then(FemModel::bounds) else {
         return;
     };
-    let (focus, radius) = camera::fit_bounds(min, max);
-    let (min_radius, max_radius) = camera::radius_limits(radius);
-
     let Ok((mut transform, mut orbit)) = camera_query.single_mut() else {
         return;
     };
+    fit_orbit_camera(&mut transform, &mut orbit, min, max);
+}
+
+pub(crate) fn fit_orbit_camera(
+    transform: &mut Transform,
+    orbit: &mut OrbitCamera,
+    min: Vec3,
+    max: Vec3,
+) {
+    let (focus, radius) = camera::fit_bounds(min, max);
+    let (min_radius, max_radius) = camera::radius_limits(radius);
     orbit.focus = focus;
     orbit.target_focus = focus;
     orbit.radius = radius;

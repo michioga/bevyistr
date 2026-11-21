@@ -52,6 +52,8 @@ mod solve_results_ui;
 mod solver_log;
 mod solver_process;
 mod solver_runner;
+mod step_import;
+mod step_preview_view;
 
 use bevy::prelude::*;
 use button_interaction::{ButtonInteraction, InteractionButton};
@@ -205,6 +207,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<fem_core::MeshLoadRequest>();
         app.init_resource::<fem_core::MeshLoadStatus>();
         app.init_resource::<project_io::StepMeshSettings>();
+        app.init_resource::<step_import::StepImport>();
         app.init_resource::<fem_core::FemModelVersion>();
         app.init_resource::<fem_core::PendingCntLoad>();
         app.init_resource::<fem_core::UiPointerState>();
@@ -327,17 +330,26 @@ impl Plugin for UiPlugin {
         app.add_systems(
             Update,
             (
-                update_ui_pointer_state.in_set(InteractionSystems::UiInput),
+                update_ui_pointer_state
+                    .after(mesh_load_system)
+                    .after(sidebar_page_button_system)
+                    .in_set(InteractionSystems::UiInput),
                 sidebar_page_button_system,
-                update_sidebar_page_visibility.after(sidebar_page_button_system),
+                update_sidebar_page_visibility
+                    .after(sidebar_page_button_system)
+                    .after(mesh_load_system),
                 open_project_button_system,
                 open_mesh_button_system,
                 add_mesh_button_system,
+                step_import::step_action_buttons,
                 mesh_load_system
+                    .after(step_import::step_action_buttons)
                     .after(open_mesh_button_system)
                     .after(add_mesh_button_system)
                     .after(open_project_button_system),
-                camera_refit_on_reload.after(mesh_load_system),
+                camera_refit_on_reload
+                    .after(mesh_load_system)
+                    .after(step_preview_view::draw_step_preview),
                 save_step_mesh_button_system
                     .after(mesh_load_system)
                     .after(assembly_part_button_system),
@@ -351,8 +363,19 @@ impl Plugin for UiPlugin {
         );
         app.add_systems(
             Update,
+            (
+                step_import::update_step_import_ui.after(mesh_load_system),
+                step_preview_view::draw_step_preview
+                    .after(mesh_load_system)
+                    .after(sidebar_page_button_system)
+                    .after(InteractionSystems::Navigation),
+            ),
+        );
+        app.add_systems(
+            Update,
             update_selection_context
                 .after(sidebar_page_button_system)
+                .after(mesh_load_system)
                 .after(selection::selection_filter_shortcut_system)
                 .before(selection_level_button_system)
                 .in_set(InteractionSystems::UiInput),
@@ -732,7 +755,7 @@ impl Plugin for UiPlugin {
                 update_assembly_part_overlays,
                 update_assembly_gizmo_visuals,
                 update_load_direction_gizmo_visuals,
-                sync_assembly_overlay_camera,
+                sync_assembly_overlay_camera.after(step_preview_view::draw_step_preview),
                 update_measurement_box_visuals
                     .after(sync_load_measurement_box)
                     .after(sync_contact_measurement_box),

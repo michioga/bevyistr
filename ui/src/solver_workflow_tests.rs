@@ -1,4 +1,4 @@
-use crate::ButtonInteraction;
+use crate::{ButtonInteraction, step_import::StepImport};
 use super::*;
 use crate::{
     project_io::{CameraFitRequest, apply_pending_cnt_system, mesh_load_system},
@@ -114,6 +114,7 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
         .insert_resource(SidebarPage::Solve)
         .init_resource::<FemModel>()
         .init_resource::<MeshLoadStatus>()
+        .init_resource::<StepImport>()
         .init_resource::<FemModelVersion>()
         .init_resource::<CameraFitRequest>()
         .init_resource::<AnalysisSetup>()
@@ -389,12 +390,18 @@ fn installed_frontistr_workflow_mpi() {
     check_latest_results(installed_run(SolverLaunchMode::Mpi), false);
 }
 
-
 #[test]
 #[ignore = "Requires Gmsh on PATH"]
 fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
-    use crate::assembly::AssemblyEditorState;
-    use crate::project_io::{SaveStepMeshControls, save_step_mesh_button_system};
+    use crate::{
+        assembly::AssemblyEditorState,
+        project_io::{SaveStepMeshControls, StepMeshSettings, save_step_mesh_button_system},
+        step_import::{StepImportAction, step_action_buttons},
+        step_preview_view::draw_step_preview,
+    };
+    use bevy::camera::visibility::RenderLayers;
+    use camera::OrbitCamera;
+    use fem_core::MainViewportCamera;
 
     let input = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -416,19 +423,78 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
     bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
     let mut request = MeshLoadRequest::default();
     request.request(input.path().join("box.step"));
+    let old_path = input.path().join("old.msh");
+    let original = FemModel::single_mesh("old.msh", FemMesh::new(vec![], vec![]));
+    let mut status = MeshLoadStatus::default();
+    status.loaded(old_path.clone());
+    let mut run = FrontistrRunState::default();
+    run.register_export(input.path().into(), "old".into());
+
+    let mut pending_cnt = PendingCntLoad::default();
+    pending_cnt.request(input.path().join("superseded.cnt"), 0, 0);
     let mut app = App::new();
     app.insert_resource(request)
-        .init_resource::<FemModel>()
-        .init_resource::<MeshLoadStatus>()
+        .insert_resource(pending_cnt)
+        .insert_resource(original)
+        .insert_resource(status)
+        .insert_resource(run)
+        .init_resource::<StepImport>()
+        .init_resource::<StepMeshSettings>()
         .init_resource::<FemModelVersion>()
         .init_resource::<CameraFitRequest>()
         .init_resource::<AnalysisSetup>()
-        .init_resource::<FrontistrRunState>()
         .init_resource::<AssemblyEditorState>()
+        .init_resource::<SidebarPage>()
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<StandardMaterial>>()
         .add_systems(
             Update,
-            (mesh_load_system, save_step_mesh_button_system).chain(),
+            (
+                step_action_buttons,
+                mesh_load_system,
+                draw_step_preview,
+                save_step_mesh_button_system,
+            )
+                .chain(),
         );
+    app.world_mut()
+        .resource_mut::<AnalysisSetup>()
+        .materials
+        .push(FemMaterial {
+            name: "OLD".into(),
+            young_modulus: Some(1000.0),
+            poisson_ratio: Some(0.25),
+            density: None,
+        });
+    let initial_view = Transform::from_xyz(4.0, 10.0, 20.0);
+    let original_layers = RenderLayers::layer(0);
+    let camera = app
+        .world_mut()
+        .spawn((
+            MainViewportCamera,
+            initial_view,
+            original_layers.clone(),
+            OrbitCamera {
+                focus: Vec3::ZERO,
+                target_focus: Vec3::ZERO,
+                radius: 10.0,
+                min_radius: 1.0,
+                max_radius: 100.0,
+            },
+        ))
+        .id();
+    let accept = app
+        .world_mut()
+        .spawn((StepImportAction::Accept, ButtonInteraction::None))
+        .id();
+    let retry = app
+        .world_mut()
+        .spawn((StepImportAction::Regenerate, ButtonInteraction::None))
+        .id();
+    let discard = app
+        .world_mut()
+        .spawn((StepImportAction::Discard, ButtonInteraction::None))
+        .id();
     let save_controls = app
         .world_mut()
         .spawn((
@@ -440,17 +506,63 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         ))
         .id();
     app.update();
-    assert!(
-        app.world()
-            .resource::<MeshLoadStatus>()
-            .message
-            .contains("Elapsed:")
-    );
+    assert!(app.world().resource::<StepImport>().is_meshing());
+    assert!(app.world().resource::<PendingCntLoad>().path.is_none());
     wait_until(&mut app, 30, |world| {
-        let status = world.resource::<MeshLoadStatus>();
-        assert!(status.error.is_none(), "{status:?}");
-        world.resource::<FemModelVersion>().value > 0
+        world.resource::<StepImport>().preview().is_some()
     });
+    let world = app.world();
+    assert_eq!(world.resource::<FemModel>().parts[0].name, "old.msh");
+    assert_eq!(world.resource::<AnalysisSetup>().materials[0].name, "OLD");
+    assert_eq!(
+        world.resource::<MeshLoadStatus>().last_path.as_deref(),
+        Some(old_path.as_path())
+    );
+    assert_eq!(
+        world
+            .resource::<FrontistrRunState>()
+            .project()
+            .unwrap()
+            .stem,
+        "old"
+    );
+    assert_eq!(world.resource::<FemModelVersion>().value, 0);
+    assert_ne!(world.get::<RenderLayers>(camera), Some(&original_layers));
+
+    click(&mut app, discard);
+    assert!(app.world().resource::<StepImport>().preview().is_none());
+    assert_eq!(
+        app.world().get::<RenderLayers>(camera),
+        Some(&original_layers)
+    );
+    assert_eq!(app.world().get::<Transform>(camera), Some(&initial_view));
+
+    app.world_mut()
+        .resource_mut::<MeshLoadRequest>()
+        .request(input.path().join("box.step"));
+    wait_until(&mut app, 30, |world| {
+        world.resource::<StepImport>().preview().is_some()
+    });
+    app.world_mut()
+        .resource_mut::<StepMeshSettings>()
+        .options
+        .max_size_mm = Some(4.0);
+    click(&mut app, accept);
+    assert_eq!(app.world().resource::<FemModelVersion>().value, 0);
+
+    click(&mut app, retry);
+    assert!(app.world().resource::<StepImport>().is_meshing());
+    wait_until(&mut app, 30, |world| {
+        world.resource::<StepImport>().preview().is_some()
+    });
+    click(&mut app, accept);
+    assert!(app.world().resource::<StepImport>().preview().is_none());
+    assert_eq!(app.world().resource::<FemModelVersion>().value, 1);
+    assert!(app.world().resource::<AnalysisSetup>().materials.is_empty());
+    assert_eq!(
+        app.world().get::<RenderLayers>(camera),
+        Some(&original_layers)
+    );
     let world = app.world();
     assert_eq!(
         world.get::<Node>(save_controls).unwrap().display,
@@ -577,4 +689,14 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         );
         assert!(cnt.nodal_loads.iter().all(|load| load.value == NODAL_FORCE));
     }
+
+    app.world_mut()
+        .resource_mut::<MeshLoadRequest>()
+        .request_import(input.path().join("box.step"));
+    wait_until(&mut app, 30, |world| {
+        world.resource::<StepImport>().preview().is_some()
+    });
+    assert_eq!(app.world().resource::<FemModel>().parts.len(), 1);
+    click(&mut app, accept);
+    assert_eq!(app.world().resource::<FemModel>().parts.len(), 2);
 }

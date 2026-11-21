@@ -358,6 +358,7 @@ pub(crate) fn spawn_assembly_viewport_visuals(
 /// its centroid.
 pub(crate) fn sync_assembly_overlay_camera(
     tool: Res<ViewportTool>,
+    pointer: Res<UiPointerState>,
     main_camera: Query<(&Transform, &Projection), MainAssemblyCameraFilter>,
     mut overlay_camera: Query<
         (&mut Camera, &mut Transform, &mut Projection),
@@ -367,7 +368,8 @@ pub(crate) fn sync_assembly_overlay_camera(
     let Ok((mut camera, mut transform, mut projection)) = overlay_camera.single_mut() else {
         return;
     };
-    camera.is_active = matches!(*tool, ViewportTool::Assembly | ViewportTool::LoadDirection);
+    camera.is_active = !pointer.mesh_preview
+        && matches!(*tool, ViewportTool::Assembly | ViewportTool::LoadDirection);
     if !camera.is_active {
         return;
     }
@@ -464,7 +466,7 @@ pub(crate) fn assembly_viewport_input_system(
     mut measurement: ResMut<MeasurementBoxState>,
     mut part_visuals: Query<(&FemPartVisual, &mut Transform)>,
 ) {
-    if *tool != ViewportTool::Assembly {
+    if *tool != ViewportTool::Assembly || ui_pointer.mesh_preview {
         if state.is_dragging() {
             measurement.clear();
         }

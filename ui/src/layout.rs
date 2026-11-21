@@ -20,6 +20,7 @@ use crate::selection_ui::{
 };
 use crate::slider::{SliderConfig, SliderId, spawn_slider};
 use crate::solve_ui::spawn_solve_ui;
+use crate::step_import::StepImport;
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 use bevy::ui_widgets::{ControlOrientation, ScrollArea, Scrollbar, ScrollbarThumb};
@@ -126,6 +127,7 @@ impl SidebarPageContent {
     const MATERIALS: u8 = 1 << 3;
     const SOLVE: u8 = 1 << 4;
     const RESULTS: u8 = 1 << 5;
+    const HIDE_DURING_STEP_PREVIEW: u8 = 1 << 6;
 
     pub(crate) const fn page(page: SidebarPage) -> Self {
         Self(match page {
@@ -144,6 +146,10 @@ impl SidebarPageContent {
 
     const fn part_position() -> Self {
         Self(Self::MODEL | Self::CONTACT)
+    }
+
+    const fn hide_during_step_preview(self) -> Self {
+        Self(self.0 | Self::HIDE_DURING_STEP_PREVIEW)
     }
 
     pub(crate) const fn contains(self, page: SidebarPage) -> bool {
@@ -248,7 +254,7 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
 
             sidebar_page_group(
                 panel,
-                SidebarPageContent::part_position(),
+                SidebarPageContent::part_position().hide_during_step_preview(),
                 "PartPositionPage",
                 |panel| {
                     // ── § Assembly ──────────────────────────────────────────────
@@ -261,7 +267,7 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
 
             sidebar_page_group(
                 panel,
-                SidebarPageContent::page(SidebarPage::Model),
+                SidebarPageContent::page(SidebarPage::Model).hide_during_step_preview(),
                 "ModelSelectionPage",
                 |panel| {
                     // ── § Selection ─────────────────────────────────────────────
@@ -274,7 +280,7 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
 
             sidebar_page_group(
                 panel,
-                SidebarPageContent::page(SidebarPage::Model),
+                SidebarPageContent::page(SidebarPage::Model).hide_during_step_preview(),
                 "ModelSetsPage",
                 |panel| {
                     // ── § Sets / Groups ──────────────────────────────────────────
@@ -993,14 +999,18 @@ fn page_supports_tool(page: SidebarPage, tool: ViewportTool) -> bool {
 /// select one of those pages.
 pub(crate) fn update_sidebar_page_visibility(
     page: Res<SidebarPage>,
+    step: Res<StepImport>,
+    mut was_preview: Local<bool>,
     mut content: Query<(&SidebarPageContent, &mut Node)>,
 ) {
-    if !page.is_changed() {
+    let preview = *page == SidebarPage::Model && step.is_active();
+    if !page.is_changed() && *was_preview == preview {
         return;
     }
-
+    *was_preview = preview;
     for (pages, mut node) in &mut content {
-        node.display = sidebar_page_display(*pages, *page);
+        let hidden = preview && pages.0 & SidebarPageContent::HIDE_DURING_STEP_PREVIEW != 0;
+        node.display = if hidden { Display::None } else { sidebar_page_display(*pages, *page) };
     }
 }
 
@@ -1030,6 +1040,8 @@ pub(crate) fn spawn_vertical_scrollbar(parent: &mut ChildSpawnerCommands, target
 
 pub(crate) fn update_ui_pointer_state(
     mut state: ResMut<UiPointerState>,
+    page: Res<SidebarPage>,
+    step: Res<StepImport>,
     windows: Query<&Window>,
     capture_regions: Query<(&ComputedNode, &UiGlobalTransform), With<UiInputCapture>>,
     interactions: Query<&ButtonInteraction, With<InteractionButton>>,
@@ -1056,6 +1068,7 @@ pub(crate) fn update_ui_pointer_state(
         .any(|interaction| *interaction != ButtonInteraction::None);
 
     state.over_ui = over_capture_region || over_interactive_widget;
+    state.mesh_preview = *page == SidebarPage::Model && step.is_active();
 }
 
 pub(crate) fn render_mode_button_system(
