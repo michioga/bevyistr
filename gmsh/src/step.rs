@@ -132,12 +132,27 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
             let input = directory.path().join("fixture.step");
+            let existing_mesh = input.with_extension("msh");
+            fs::write(&existing_mesh, "existing mesh").unwrap();
             let result = mesh_step(&input, Some(2.5));
             if let Some(dimensions) = size {
                 let mesh = result.unwrap_or_else(|error| panic!("{name}: {error}"));
                 let (min, max) = mesh.bounds().unwrap();
                 assert!((max - min).abs_diff_eq(dimensions, 1.0e-3), "{name}");
                 assert!(!mesh.cached_boundary_faces().is_empty(), "{name}");
+                if name == "box" {
+                    let metres = directory.path().join("metres.stp");
+                    let source = fs::read_to_string(&input).unwrap();
+                    assert!(source.contains("SI_UNIT(.MILLI.,.METRE.)"));
+                    fs::write(
+                        &metres,
+                        source.replace("SI_UNIT(.MILLI.,.METRE.)", "SI_UNIT($,.METRE.)"),
+                    )
+                    .unwrap();
+                    let mesh = mesh_step(&metres, Some(2500.0)).unwrap();
+                    let (min, max) = mesh.bounds().unwrap();
+                    assert!((max - min).abs_diff_eq(dimensions * 1000.0, 0.01));
+                }
                 if name == "bracket" {
                     assert!(mesh.cached_boundary_faces().iter().any(|face| {
                         face.nodes.iter().all(|node| {
@@ -155,7 +170,7 @@ mod tests {
                 let error = result.unwrap_err().to_string();
                 assert!(error.contains("exactly one solid"), "{error}");
             }
-            assert!(!input.with_extension("msh").exists());
+            assert_eq!(fs::read_to_string(existing_mesh).unwrap(), "existing mesh");
         }
     }
 }

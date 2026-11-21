@@ -4,7 +4,7 @@
 
 ## カメラ
 
-**Mouse** はSolidCraftの標準マウス操作に合わせています。 [SolidCraftのビューポート操作](https://docs.solidcraft.io/guide/ui-tour.html)
+0.5.0向け開発版の **Mouse** はSolidCraftの標準マウス操作に合わせています。 [SolidCraftのビューポート操作](https://docs.solidcraft.io/guide/ui-tour.html)
 
 | 操作 | 動作 |
 | --- | --- |
