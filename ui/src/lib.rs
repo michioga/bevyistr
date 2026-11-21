@@ -46,7 +46,6 @@ mod popup_keyboard;
 mod popup_trigger;
 mod popup_select;
 mod app_settings;
-mod navigation_ui;
 mod run_output;
 mod run_results;
 mod solve_results_ui;
@@ -273,17 +272,10 @@ impl Plugin for UiPlugin {
         app.init_resource::<MpcPairDraftState>();
         app.init_resource::<SolverEditorState>();
         let settings = AppSettings::load_default();
-        app.insert_resource(settings.navigation);
         if !app.world().contains_resource::<FrontistrRunState>() {
             app.insert_resource(FrontistrRunState::from_preferences(&settings.solver));
         }
         app.insert_resource(settings);
-        app.add_systems(
-            Update,
-            navigation_ui::update
-                .in_set(InteractionSystems::UiInput)
-                .before(save_settings_system),
-        );
         app.init_resource::<solve_results_ui::SolveResultsState>();
         app.init_resource::<SelectedDloadKind>();
         app.init_resource::<PlaybackState>();

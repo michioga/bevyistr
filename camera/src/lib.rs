@@ -20,7 +20,6 @@ impl Plugin for CameraPlugin {
         app.init_resource::<fem_core::UiPointerState>();
         app.init_resource::<fem_core::UiKeyboardState>();
         app.init_resource::<NavigationCubeState>();
-        app.init_resource::<NavigationScheme>();
         app.add_systems(Startup, spawn_navigation_cube);
         app.add_systems(
             Update,

@@ -4,7 +4,7 @@
 
 ## カメラ
 
-0.5.0向け開発版の **Mouse** はSolidCraftの標準マウス操作に合わせています。 [SolidCraftのビューポート操作](https://docs.solidcraft.io/guide/ui-tour.html)
+0.5.0向け開発版では、SolidCraftの標準マウス操作を使います。 [SolidCraftのビューポート操作](https://docs.solidcraft.io/guide/ui-tour.html)
 
 | 操作 | 動作 |
 | --- | --- |
@@ -16,22 +16,6 @@
 | 右上のビューキューブ | 面・辺・頂点の向きへ切り替え |
 
 横ドラッグは画面の縦方向を軸に、縦ドラッグは画面の横方向を軸に回転します。モデルの底面を画面下側に置いた状態で側面を正面に向けるには、横にドラッグします。
-
-### タッチパッド
-
-左側の **VIEW** で **Touchpad (Alt)** または **Touchpad (Space)** を選びます。
-AltはBlenderの3ボタンマウスエミュレートと同じ開始操作です。OSがAltドラッグをウィンドウ操作に使う場合はSpaceを選びます。
-標準のマウス操作へ切り替えるには **Mouse** を選びます。選んだ設定は `bevyistr.toml` に保存されます。
-
-| 動作 | Touchpad (Alt) | Touchpad (Space) |
-| --- | --- | --- |
-| 回転 | Alt＋左ドラッグ | Space＋左ドラッグ |
-| 平行移動 | Alt＋Shift＋左ドラッグ | Space＋Shift＋左ドラッグ |
-| 拡大・縮小 | Alt＋Ctrl＋左上下ドラッグ | Space＋Ctrl＋左上下ドラッグ |
-
-修飾キーを押してからビューポート上でドラッグを始めます。ズームは下へドラッグすると拡大します。
-タッチパッドがホイールとして送るスクロールもズームに使えます。
-Touchpad (Alt) で選択対象を除外するにはCtrl＋Shiftを使います。
 
 ## 選択
 

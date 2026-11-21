@@ -569,7 +569,14 @@ fn spawn_view_toolbar(parent: &mut ChildSpawnerCommands) {
                     }
                 });
             spawn_material_color_controls(toolbar);
-            crate::navigation_ui::spawn(toolbar);
+            toolbar.spawn((
+                Text::new("Right drag: orbit | Middle drag: pan\nWheel: zoom | Shift + right/middle drag: snap"),
+                TextFont {
+                    font_size: FontSize::Px(9.5),
+                    ..default()
+                },
+                TextColor(TEXT_MUTED),
+            ));
         });
 }
 

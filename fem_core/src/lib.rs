@@ -31,17 +31,13 @@ pub enum InteractionMode {
     #[default]
     Idle,
 
-    Orbit,
-
     BoxSelect,
-
-    Pan,
 
     AssemblyDrag,
 }
 
 /// Persistent tool chosen for left-button interaction in the 3-D viewport.
-/// Navigation remains available with the middle mouse button in either mode.
+/// The right and middle mouse buttons control the camera independently of this tool.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewportTool {
     #[default]
