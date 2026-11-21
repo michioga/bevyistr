@@ -1,16 +1,58 @@
-use crate::{GmshError, gmsh_command, load_msh_file};
+use crate::{GmshError, StepMeshProgress, load_msh_file, step_process::run_step_mesher};
 use fem_core::{ElementType, FemMesh};
-use std::{fs, io, path::Path};
+use std::{fs, path::Path};
+
+/// Target element sizes for meshing one STEP solid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StepMeshOptions {
+    /// Upper bound on the target mesh size in millimetres.
+    pub max_size_mm: Option<f32>,
+    /// Target number of elements per full turn on curved features. Zero disables this constraint.
+    pub elements_per_turn: u32,
+}
+
+impl StepMeshOptions {
+    pub const DEFAULT_ELEMENTS_PER_TURN: u32 = 20;
+}
+
+impl Default for StepMeshOptions {
+    fn default() -> Self {
+        Self {
+            max_size_mm: None,
+            elements_per_turn: Self::DEFAULT_ELEMENTS_PER_TURN,
+        }
+    }
+}
 
 /// Meshes one solid from a STEP file with first-order tetrahedra.
 /// Refines the mesh around curved CAD features and grades it into the interior.
 /// Coordinates and the optional upper bound on the target mesh size are in millimetres.
 pub fn mesh_step(input: &Path, max_size_mm: Option<f32>) -> Result<FemMesh, GmshError> {
-    if max_size_mm.is_some_and(|size| !size.is_finite() || size <= 0.0) {
+    mesh_step_with_progress(
+        input,
+        StepMeshOptions {
+            max_size_mm,
+            ..StepMeshOptions::default()
+        },
+        |_| {},
+    )
+}
+
+/// Meshes one STEP solid and reports Gmsh's stages as they happen.
+pub fn mesh_step_with_progress(
+    input: &Path,
+    options: StepMeshOptions,
+    mut progress: impl FnMut(StepMeshProgress),
+) -> Result<FemMesh, GmshError> {
+    if options
+        .max_size_mm
+        .is_some_and(|size| !size.is_finite() || size <= 0.0)
+    {
         return Err(GmshError::StepMeshing(
             "Maximum element size must be finite and positive".into(),
         ));
     }
+    progress(StepMeshProgress::ReadingStep);
     let directory = tempfile::tempdir().map_err(GmshError::Io)?;
     // Keep the import script independent of user filenames and invoke Gmsh
     // only on this job's files, including when an older mesh already exists.
@@ -33,53 +75,21 @@ For index In {0:#faces()-1}
 EndFor
 Mesh.ElementOrder = 1;
 Mesh.Binary = 0;
-// Target 20 elements per full turn of a curved feature. Extend the resulting
-// sizes from the boundary to grade the mesh toward the interior.
-Mesh.MeshSizeFromCurvature = 20;
 Mesh.MeshSizeExtendFromBoundary = 1;
 "#,
     );
-    if let Some(size) = max_size_mm {
+    script.push_str(&format!(
+        "Mesh.MeshSizeFromCurvature = {};\n",
+        options.elements_per_turn
+    ));
+    if let Some(size) = options.max_size_mm {
         script.push_str(&format!("Mesh.MeshSizeMax = {size};\n"));
     }
     fs::write(directory.path().join("mesh.geo"), script).map_err(GmshError::Io)?;
-    let output = gmsh_command()
-        .current_dir(directory.path())
-        .args([
-            "mesh.geo", "-3", "-nopopup", "-format", "msh41", "-o", "mesh.msh",
-        ])
-        .output()
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                GmshError::StepMeshing("Gmsh is required for STEP files. Add gmsh to PATH.".into())
-            } else {
-                GmshError::Io(error)
-            }
-        })?;
-    let diagnostics = String::from_utf8_lossy(&output.stderr);
-    let errors: Vec<_> = diagnostics
-        .lines()
-        .filter_map(|line| {
-            let (level, message) = line.split_once(':')?;
-            (level.trim() == "Error").then_some(message.trim())
-        })
-        .filter(|message| !message.is_empty())
-        .take(3)
-        .collect();
     let mesh_path = directory.path().join("mesh.msh");
-    if !errors.is_empty() {
-        return Err(GmshError::StepMeshing(format!(
-            "Gmsh: {}",
-            errors.join(" / ")
-        )));
-    }
-    if !output.status.success() || !mesh_path.is_file() {
-        return Err(GmshError::StepMeshing(format!(
-            "Gmsh did not produce a STEP volume mesh ({})",
-            output.status
-        )));
-    }
+    run_step_mesher(directory.path(), &mesh_path, &mut progress)?;
 
+    progress(StepMeshProgress::ImportingMesh);
     let mesh = load_msh_file(&mesh_path)?;
     if mesh.elements.is_empty()
         || mesh
@@ -97,6 +107,7 @@ Mesh.MeshSizeExtendFromBoundary = 1;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gmsh_command;
 
     #[test]
     fn rejects_invalid_sizes_before_running_gmsh() {
@@ -166,20 +177,52 @@ BooleanDifference(3) = { Volume{1}; Delete; }{ Volume{2}; Delete; };"#,
             (mean(nearby), mean(faraway))
         };
         let auto = mesh_step(&input, None).unwrap();
-        let rim_nodes = auto
-            .nodes
-            .iter()
-            .filter(|node| {
-                let point = node.position;
-                point.z.abs() < 1.0e-4
-                    && ((point.x - 18.0).hypot(point.y - 20.0) - 2.0).abs() < 1.0e-4
-            })
-            .count();
+        let rim_nodes = |mesh: &FemMesh| {
+            mesh.nodes
+                .iter()
+                .filter(|node| {
+                    let point = node.position;
+                    point.z.abs() < 1.0e-4
+                        && ((point.x - 18.0).hypot(point.y - 20.0) - 2.0).abs() < 1.0e-4
+                })
+                .count()
+        };
+        let default_rim_nodes = rim_nodes(&auto);
+        assert!(default_rim_nodes >= 16);
+        let with_resolution = |elements_per_turn| StepMeshOptions {
+            elements_per_turn,
+            ..StepMeshOptions::default()
+        };
+        let unrefined = mesh_step_with_progress(&input, with_resolution(0), |_| {}).unwrap();
+        let fine = mesh_step_with_progress(&input, with_resolution(40), |_| {}).unwrap();
+        assert!(rim_nodes(&unrefined) < default_rim_nodes);
+        assert!(rim_nodes(&fine) > default_rim_nodes);
+
+        let mut progress = Vec::new();
+        let limited = mesh_step_with_progress(
+            &input,
+            StepMeshOptions {
+                max_size_mm: Some(4.0),
+                ..StepMeshOptions::default()
+            },
+            |event| progress.push(event),
+        )
+        .unwrap();
+        assert_eq!(progress.first(), Some(&StepMeshProgress::ReadingStep));
         assert!(
-            rim_nodes >= 16,
-            "only {rim_nodes} nodes around the hole rim"
+            progress
+                .iter()
+                .any(|p| matches!(p, StepMeshProgress::MeshingCurves(Some(_))))
         );
-        let limited = mesh_step(&input, Some(4.0)).unwrap();
+        assert!(
+            progress
+                .iter()
+                .any(|p| matches!(p, StepMeshProgress::MeshingSurfaces(Some(_))))
+        );
+        assert!(progress.contains(&StepMeshProgress::MeshingVolume(None)));
+        assert!(progress.contains(&StepMeshProgress::Optimizing));
+        assert!(progress.contains(&StepMeshProgress::WritingMesh));
+        assert_eq!(progress.last(), Some(&StepMeshProgress::ImportingMesh));
         let (near_auto, far_auto) = element_size_by_region(&auto);
         let (near_limited, far_limited) = element_size_by_region(&limited);
         eprintln!(

@@ -16,10 +16,18 @@ use bevy::{
 };
 use camera::OrbitCamera;
 use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
-use std::path::{Path, PathBuf};
+use gmsh::{StepMeshOptions, StepMeshProgress};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 use visualization::VisualizationSettings;
 
 use crate::{assembly::AssemblyEditorState, solver_runner::FrontistrRunState};
+
+const DEFAULT_STEP_CURVE_RESOLUTION: i32 = StepMeshOptions::DEFAULT_ELEMENTS_PER_TURN as i32;
+const MAX_STEP_CURVE_RESOLUTION: i32 = 100;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -53,11 +61,14 @@ pub(crate) struct MeshStatsText;
 
 #[derive(Resource, Default)]
 pub(crate) struct StepMeshSettings {
-    max_size_mm: Option<f32>,
+    options: StepMeshOptions,
 }
 
 #[derive(Component)]
 struct StepMeshSize;
+
+#[derive(Component)]
+struct StepCurveResolution;
 
 #[derive(Component)]
 pub(crate) struct SaveStepMeshButton;
@@ -72,6 +83,40 @@ pub(crate) struct StepMeshJob {
     path: PathBuf,
     import: bool,
     task: Task<Result<fem_core::FemMesh, gmsh::GmshError>>,
+    progress: Arc<Mutex<StepMeshProgress>>,
+    started_at: Instant,
+    displayed: Option<(StepMeshProgress, u64)>,
+}
+
+impl StepMeshJob {
+    fn update_status(&mut self, status: &mut ResMut<MeshLoadStatus>) {
+        let step = *self.progress.lock().unwrap_or_else(|error| error.into_inner());
+        let seconds = self.started_at.elapsed().as_secs();
+        if self.displayed == Some((step, seconds)) {
+            return;
+        }
+        self.displayed = Some((step, seconds));
+        status.message = format_step_progress(step, seconds);
+    }
+}
+
+fn format_step_progress(step: StepMeshProgress, elapsed: u64) -> String {
+    let (phase, percent) = match step {
+        StepMeshProgress::ReadingStep => ("Reading STEP solid", None),
+        StepMeshProgress::MeshingCurves(percent) => ("Meshing curves (1D)", percent),
+        StepMeshProgress::MeshingSurfaces(percent) => ("Meshing surfaces (2D)", percent),
+        StepMeshProgress::MeshingVolume(Some(nodes)) => {
+            return format!("Meshing volume (3D)\nAdded nodes: {nodes}\nElapsed: {elapsed} s");
+        }
+        StepMeshProgress::MeshingVolume(None) => ("Meshing volume (3D)", None),
+        StepMeshProgress::Optimizing => ("Optimizing mesh", None),
+        StepMeshProgress::WritingMesh => ("Writing Gmsh mesh", None),
+        StepMeshProgress::ImportingMesh => ("Importing generated mesh", None),
+    };
+    match percent {
+        Some(percent) => format!("{phase}: {percent}%\nElapsed: {elapsed} s"),
+        None => format!("{phase}\nElapsed: {elapsed} s"),
+    }
 }
 
 fn is_step(path: &Path) -> bool {
@@ -82,11 +127,36 @@ fn is_step(path: &Path) -> bool {
 
 fn update_step_mesh_size(
     change: On<ValueChange<f32>>,
-    inputs: Query<(), With<StepMeshSize>>,
+    inputs: Query<&NumberInputValue, With<StepMeshSize>>,
     mut settings: ResMut<StepMeshSettings>,
+    mut commands: Commands,
 ) {
-    if inputs.contains(change.source) && change.value.is_finite() && change.value >= 0.0 {
-        settings.max_size_mm = (change.value > 0.0).then_some(change.value);
+    let Ok(displayed) = inputs.get(change.source) else {
+        return;
+    };
+    if change.value.is_finite() && change.value >= 0.0 {
+        settings.options.max_size_mm = (change.value > 0.0).then_some(change.value);
+        let value = NumberInputValue::F32(change.value);
+        if *displayed != value {
+            commands.entity(change.source).insert(value);
+        }
+    }
+}
+
+fn update_step_curve_resolution(
+    change: On<ValueChange<i32>>,
+    inputs: Query<&NumberInputValue, With<StepCurveResolution>>,
+    mut settings: ResMut<StepMeshSettings>,
+    mut commands: Commands,
+) {
+    let Ok(displayed) = inputs.get(change.source) else {
+        return;
+    };
+    let resolution = change.value.clamp(0, MAX_STEP_CURVE_RESOLUTION);
+    settings.options.elements_per_turn = resolution as u32;
+    let value = NumberInputValue::I32(resolution);
+    if *displayed != value {
+        commands.entity(change.source).insert(value);
     }
 }
 
@@ -156,7 +226,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             row.spawn((
-                Text::new("STEP max size (mm)\n0 = automatic limit\nCurves refine automatically."),
+                Text::new("STEP max size (mm)\n0 = automatic limit"),
                 TextFont { font_size: FontSize::Px(10.0), ..default() },
                 TextColor(TEXT_MUTED),
             ));
@@ -172,6 +242,31 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 })
                 .insert((ChildOf(row_entity), StepMeshSize, Name::new("STEP maximum element size in mm")))
                 .observe(update_step_mesh_size);
+        });
+
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: px(6),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Text::new("STEP curve resolution\nElements per full turn\n0 = off / 20 = default"),
+                TextFont { font_size: FontSize::Px(10.0), ..default() },
+                TextColor(TEXT_MUTED),
+            ));
+            let row_entity = row.target_entity();
+            row.commands()
+                .queue_spawn_scene(bsn! {
+                    @FeathersNumberInput
+                    NumberInputValue::I32(DEFAULT_STEP_CURVE_RESOLUTION)
+                    HardLimit(NumberInputRange::I32(0..=MAX_STEP_CURVE_RESOLUTION))
+                    NumberInputStep(1.0)
+                    Node { width: px(86) }
+                })
+                .insert((ChildOf(row_entity), StepCurveResolution, Name::new("STEP elements per turn")))
+                .observe(update_step_curve_resolution);
         });
 
     parent
@@ -439,7 +534,11 @@ pub(crate) fn mesh_load_system(
     mut step_job: Local<Option<StepMeshJob>>,
 ) {
     let Some((path, import)) = request.take() else {
-        let Some(result) = step_job.as_mut().and_then(|job| check_ready(&mut job.task)) else {
+        let Some(job) = step_job.as_mut() else {
+            return;
+        };
+        let Some(result) = check_ready(&mut job.task) else {
+            job.update_status(&mut status);
             return;
         };
         let Some(StepMeshJob { path, import, .. }) = step_job.take() else {
@@ -476,11 +575,28 @@ pub(crate) fn mesh_load_system(
             return;
         };
         status.loading(path.clone());
-        status.message = "Generating STEP tetrahedra".into();
         let input = path.clone();
-        let max_size_mm = step_settings.and_then(|settings| settings.max_size_mm);
-        let task = pool.spawn(async move { gmsh::mesh_step(&input, max_size_mm) });
-        *step_job = Some(StepMeshJob { path, import, task });
+        let options = step_settings
+            .as_deref()
+            .map(|settings| settings.options)
+            .unwrap_or_default();
+        let progress = Arc::new(Mutex::new(StepMeshProgress::ReadingStep));
+        let latest = Arc::clone(&progress);
+        let task = pool.spawn(async move {
+            gmsh::mesh_step_with_progress(&input, options, |step| {
+                *latest.lock().unwrap_or_else(|error| error.into_inner()) = step;
+            })
+        });
+        let mut job = StepMeshJob {
+            path,
+            import,
+            task,
+            progress,
+            started_at: Instant::now(),
+            displayed: None,
+        };
+        job.update_status(&mut status);
+        *step_job = Some(job);
         return;
     }
 
@@ -1085,4 +1201,68 @@ fn compact_path(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn step_controls_update_job_options_and_displayed_values() {
+        let mut app = App::new();
+        app.init_resource::<StepMeshSettings>();
+        let world = app.world_mut();
+        let max_size = world
+            .spawn((StepMeshSize, NumberInputValue::F32(0.0)))
+            .observe(update_step_mesh_size)
+            .id();
+        let resolution = world
+            .spawn((
+                StepCurveResolution,
+                NumberInputValue::I32(DEFAULT_STEP_CURVE_RESOLUTION),
+            ))
+            .observe(update_step_curve_resolution)
+            .id();
+
+        world.trigger(ValueChange {
+            source: max_size,
+            value: 4.0_f32,
+            is_final: true,
+        });
+        world.trigger(ValueChange {
+            source: resolution,
+            value: 40_i32,
+            is_final: true,
+        });
+        world.flush();
+        assert_eq!(world.get(max_size), Some(&NumberInputValue::F32(4.0)));
+        assert_eq!(world.get(resolution), Some(&NumberInputValue::I32(40)));
+        assert_eq!(
+            world.resource::<StepMeshSettings>().options,
+            StepMeshOptions {
+                max_size_mm: Some(4.0),
+                elements_per_turn: 40,
+            }
+        );
+
+        world.trigger(ValueChange {
+            source: max_size,
+            value: 0.0_f32,
+            is_final: true,
+        });
+        world.trigger(ValueChange {
+            source: resolution,
+            value: 0_i32,
+            is_final: true,
+        });
+        world.flush();
+        assert_eq!(
+            world.resource::<StepMeshSettings>().options,
+            StepMeshOptions {
+                max_size_mm: None,
+                elements_per_turn: 0,
+            }
+        );
+    }
 }

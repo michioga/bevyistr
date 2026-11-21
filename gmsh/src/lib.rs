@@ -18,7 +18,9 @@ use fem_core::{
 };
 
 mod step;
-pub use step::mesh_step;
+mod step_process;
+pub use step::{StepMeshOptions, mesh_step, mesh_step_with_progress};
+pub use step_process::StepMeshProgress;
 
 type EntityKey = (u8, u64);
 type PhysicalKey = (u8, u64);

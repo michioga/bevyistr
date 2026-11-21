@@ -617,7 +617,7 @@ impl Plugin for UiPlugin {
                     .after(accept_contact_button_system)
                     .after(slider::update_sliders),
                 apply_slider_to_results.after(slider::update_sliders).after(playback_advance_system),
-                update_mesh_stats_text,
+                update_mesh_stats_text.after(mesh_load_system),
                 update_selection_stats_text,
                 update_contact_candidate_text,
                 update_result_stats_text,

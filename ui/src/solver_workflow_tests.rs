@@ -439,6 +439,13 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
             },
         ))
         .id();
+    app.update();
+    assert!(
+        app.world()
+            .resource::<MeshLoadStatus>()
+            .message
+            .contains("Elapsed:")
+    );
     wait_until(&mut app, 30, |world| {
         let status = world.resource::<MeshLoadStatus>();
         assert!(status.error.is_none(), "{status:?}");

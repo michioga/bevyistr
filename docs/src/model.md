@@ -16,8 +16,8 @@ HEC-MWの`.msh`は、節点・要素の接続、節点／要素／面グルー�
 
 0.5.0向け開発版では、Gmshを使って単一ソリッドの `.step`／`.stp` から一次四面体メッシュを生成できます。Gmshをインストールし、`gmsh` を `PATH` から実行できるようにします。
 
-1. Modelの **STEP max size (mm)** で、目標要素サイズの上限を設定します。`0` ならモデル寸法から自動で決まります。Gmshは穴や丸みなど曲率の大きい箇所を細かくし、そこから離れた部分へ段階的に粗くします。正の値を入れても局所的な細分化は有効です。 [Gmshの要素サイズ設定](https://www.gmsh.info/doc/texinfo/gmsh.html#Specifying-mesh-element-sizes)
-2. **Open Model** または **Add Part** からSTEPファイルを選び、生成後に表示されるX・Y・Zの寸法を確認します。
+1. Modelの **STEP max size (mm)** で目標要素サイズの上限を設定します。`0` ならGmshがモデル寸法から決めます。**STEP curve resolution** は曲率に応じた細分化の強さです。円一周あたりの目標分割数で、初期値は `20`、`0` で曲率による細分化を無効にします。値を上げると穴や丸みの周辺が細かくなり、離れた部分に向けて段階的に粗くなります。設定は次回のSTEP読み込みから反映されます。 [Gmshの要素サイズ設定](https://www.gmsh.info/doc/texinfo/gmsh.html#Specifying-mesh-element-sizes)
+2. **Open Model** または **Add Part** からSTEPファイルを選びます。処理中はModel欄に現在の工程と経過時間が表示されます。曲線・面の分割では工程内の進捗率、体積の分割では追加した節点数を、Gmshが報告した場合に表示します。生成後はX・Y・Zの寸法を確認します。
 3. **Sets** に、ソリッド全体の要素グループ `STEP_SOLID` と、CAD面ごとの節点グループ `[N] STEP_FACE_*`・面グループ `[S] STEP_FACE_*` が表示されます。番号はGmshによる生成時の面番号です。
 4. メッシュとグループを単体で保存するには、**PART POSITION** でSTEP由来の部品を選び、**Save FrontISTR Mesh (.msh)...** を使います。保存したファイルは **Open Model** で読み込めます。
 5. 解析するには、**Materials** で材料とソリッド断面を設定し、**BC / Loads** で面の節点や要素面を使って拘束と荷重を設定します。座標はミリメートルです。材料と荷重にも整合する単位系を使用してください。
