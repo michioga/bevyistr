@@ -3,7 +3,8 @@ use fem_core::{ElementType, FemMesh};
 use std::{fs, io, path::Path};
 
 /// Meshes one solid from a STEP file with first-order tetrahedra.
-/// Coordinates and the optional maximum element size are in millimetres.
+/// Refines the mesh around curved CAD features and grades it into the interior.
+/// Coordinates and the optional upper bound on the target mesh size are in millimetres.
 pub fn mesh_step(input: &Path, max_size_mm: Option<f32>) -> Result<FemMesh, GmshError> {
     if max_size_mm.is_some_and(|size| !size.is_finite() || size <= 0.0) {
         return Err(GmshError::StepMeshing(
@@ -32,6 +33,10 @@ For index In {0:#faces()-1}
 EndFor
 Mesh.ElementOrder = 1;
 Mesh.Binary = 0;
+// Target 20 elements per full turn of a curved feature. Extend the resulting
+// sizes from the boundary to grade the mesh toward the interior.
+Mesh.MeshSizeFromCurvature = 20;
+Mesh.MeshSizeExtendFromBoundary = 1;
 "#,
     );
     if let Some(size) = max_size_mm {
@@ -101,6 +106,90 @@ mod tests {
         }
     }
 
+    fn write_step_fixture(directory: &Path, geometry: &str) -> std::path::PathBuf {
+        fs::write(
+            directory.join("fixture.geo"),
+            format!("SetFactory(\"OpenCASCADE\");\n{geometry}\nSave \"fixture.step\";\n"),
+        )
+        .unwrap();
+        let output = gmsh_command()
+            .current_dir(directory)
+            .args(["fixture.geo", "-parse_and_exit", "-nopopup"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        directory.join("fixture.step")
+    }
+
+    #[test]
+    #[ignore = "requires Gmsh on PATH"]
+    fn step_mesh_refines_a_small_hole_with_or_without_a_size_cap() {
+        use bevy::prelude::Vec3;
+        let directory = tempfile::tempdir().unwrap();
+        let input = write_step_fixture(
+            directory.path(),
+            r#"Box(1) = {0, 0, 0, 80, 40, 10};
+Cylinder(2) = {18, 20, -1, 0, 0, 12, 2};
+BooleanDifference(3) = { Volume{1}; Delete; }{ Volume{2}; Delete; };"#,
+        );
+
+        let element_size_by_region = |mesh: &FemMesh| {
+            let mut nearby = Vec::new();
+            let mut faraway = Vec::new();
+            for element in &mesh.elements {
+                let [a, b, c, d] = <[_; 4]>::try_from(element.nodes.as_slice())
+                    .unwrap()
+                    .map(|id| mesh.node_position(id).unwrap());
+                let center: Vec3 = (a + b + c + d) / 4.0;
+                let longest_edge = a
+                    .distance(b)
+                    .max(a.distance(c))
+                    .max(a.distance(d))
+                    .max(b.distance(c))
+                    .max(b.distance(d))
+                    .max(c.distance(d));
+                if (center.x - 18.0).hypot(center.y - 20.0) < 4.0 {
+                    nearby.push(longest_edge);
+                }
+                if center.x > 55.0 {
+                    faraway.push(longest_edge);
+                }
+            }
+            let mean = |lengths: Vec<f32>| {
+                assert!(!lengths.is_empty());
+                lengths.iter().sum::<f32>() / lengths.len() as f32
+            };
+            (mean(nearby), mean(faraway))
+        };
+        let auto = mesh_step(&input, None).unwrap();
+        let rim_nodes = auto
+            .nodes
+            .iter()
+            .filter(|node| {
+                let point = node.position;
+                point.z.abs() < 1.0e-4
+                    && ((point.x - 18.0).hypot(point.y - 20.0) - 2.0).abs() < 1.0e-4
+            })
+            .count();
+        assert!(
+            rim_nodes >= 16,
+            "only {rim_nodes} nodes around the hole rim"
+        );
+        let limited = mesh_step(&input, Some(4.0)).unwrap();
+        let (near_auto, far_auto) = element_size_by_region(&auto);
+        let (near_limited, far_limited) = element_size_by_region(&limited);
+        eprintln!(
+            "Mean longest edge in mm: auto {near_auto:.2} near / {far_auto:.2} far, capped {near_limited:.2} near / {far_limited:.2} far"
+        );
+        assert!(far_auto > 2.0 * near_auto);
+        assert!(far_limited > 1.5 * near_limited);
+        assert!(far_limited < far_auto);
+    }
+
     #[test]
     #[ignore = "requires Gmsh on PATH"]
     fn meshes_a_step_box_and_bracket_and_refuses_multiple_solids() {
@@ -124,22 +213,7 @@ mod tests {
             ),
         ] {
             let directory = tempfile::tempdir().unwrap();
-            fs::write(
-                directory.path().join("fixture.geo"),
-                format!("SetFactory(\"OpenCASCADE\");\n{geometry}\nSave \"fixture.step\";\n"),
-            )
-            .unwrap();
-            let output = gmsh_command()
-                .current_dir(directory.path())
-                .args(["fixture.geo", "-parse_and_exit", "-nopopup"])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{name}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let input = directory.path().join("fixture.step");
+            let input = write_step_fixture(directory.path(), geometry);
             let existing_mesh = input.with_extension("msh");
             fs::write(&existing_mesh, "existing mesh").unwrap();
             let result = mesh_step(&input, Some(2.5));

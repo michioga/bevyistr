@@ -16,7 +16,7 @@ HEC-MWの`.msh`は、節点・要素の接続、節点／要素／面グルー�
 
 0.5.0向け開発版では、Gmshを使って単一ソリッドの `.step`／`.stp` から一次四面体メッシュを生成できます。Gmshをインストールし、`gmsh` を `PATH` から実行できるようにします。
 
-1. Modelの **STEP max size (mm)** に要素サイズの上限を入力します。`0` はGmshの自動設定です。
+1. Modelの **STEP max size (mm)** で、目標要素サイズの上限を設定します。`0` ならモデル寸法から自動で決まります。Gmshは穴や丸みなど曲率の大きい箇所を細かくし、そこから離れた部分へ段階的に粗くします。正の値を入れても局所的な細分化は有効です。 [Gmshの要素サイズ設定](https://www.gmsh.info/doc/texinfo/gmsh.html#Specifying-mesh-element-sizes)
 2. **Open Model** または **Add Part** からSTEPファイルを選び、生成後に表示されるX・Y・Zの寸法を確認します。
 3. **Sets** に、ソリッド全体の要素グループ `STEP_SOLID` と、CAD面ごとの節点グループ `[N] STEP_FACE_*`・面グループ `[S] STEP_FACE_*` が表示されます。番号はGmshによる生成時の面番号です。
 4. メッシュとグループを単体で保存するには、**PART POSITION** でSTEP由来の部品を選び、**Save FrontISTR Mesh (.msh)...** を使います。保存したファイルは **Open Model** で読み込めます。

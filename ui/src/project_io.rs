@@ -156,7 +156,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             row.spawn((
-                Text::new("STEP max size (mm)\n0 = automatic"),
+                Text::new("STEP max size (mm)\n0 = automatic limit\nCurves refine automatically."),
                 TextFont { font_size: FontSize::Px(10.0), ..default() },
                 TextColor(TEXT_MUTED),
             ));
