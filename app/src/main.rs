@@ -24,7 +24,7 @@ fn main() {
 
     // The path can point directly at a mesh file, or at a FrontISTR
     // project's `hecmw_ctrl.dat` — the same two entry points the GUI
-    // offers via "Open Mesh" and "Open Project" respectively, so
+    // offers via "Open Model" and "Open Project" respectively, so
     // `bevyistr path/to/hecmw_ctrl.dat` opens the mesh *and* its
     // boundary conditions/loads/materials in one shot, matching what
     // running this from a shell should mean for a FrontISTR project

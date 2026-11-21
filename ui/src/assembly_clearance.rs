@@ -621,7 +621,7 @@ pub(crate) fn update_assembly_clearance_text(
         return;
     }
     let message = if model.parts.len() < 2 {
-        "Use Add Mesh to compare at least two parts"
+        "Use Add Part to compare at least two parts"
     } else if !can_check(&model, editor.selected_part) {
         "Select a part, then check clearance"
     } else {

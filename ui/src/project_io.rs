@@ -115,7 +115,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 Name::new("OpenMeshButton"),
             ))
             .with_child((
-                Text::new("Open Mesh"),
+                Text::new("Open Model..."),
                 TextFont {
                     font_size: FontSize::Px(12.0),
                     ..default()
@@ -139,7 +139,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 Name::new("AddMeshButton"),
             ))
             .with_child((
-                Text::new("Add Mesh"),
+                Text::new("Add Part..."),
                 TextFont {
                     font_size: FontSize::Px(12.0),
                     ..default()
@@ -256,7 +256,13 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
             ));
         });
     parent.spawn((
-        Text::new("Open Mesh replaces the model. Add Mesh adds a part.\nSTEP meshing requires Gmsh.\nOpen Project loads .msh + .cnt."),
+        Text::new(concat!(
+            "Open Model replaces the current model.\n",
+            "Add Part adds to the assembly.\n",
+            "Both accept STEP and mesh files.\n",
+            "STEP meshing requires Gmsh.\n",
+            "Open Project loads .msh + .cnt.",
+        )),
         TextFont {
             font_size: FontSize::Px(10.0),
             ..default()
@@ -290,7 +296,7 @@ pub(crate) fn open_mesh_button_system(
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Open mesh")
+                .set_title("Open Model")
                 .add_filter("All supported meshes and CAD", &["msh", "geo", "inp", "step", "stp"])
                 .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
                 .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
@@ -329,7 +335,7 @@ pub(crate) fn add_mesh_button_system(
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Add mesh as new part")
+                .set_title("Add Part")
                 .add_filter("All supported meshes and CAD", &["msh", "geo", "inp", "step", "stp"])
                 .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
                 .add_filter("HECMW / FrontISTR (.msh)", &["msh"])

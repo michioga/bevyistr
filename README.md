@@ -312,7 +312,7 @@ Unknown HEC-MW element codes are retained as unsupported elements but do not hav
 
 ## Typical workflow
 
-1. Use **Open Mesh**, **Add Mesh**, or **Open Project** on Model.
+1. On Model, use **Open Model** for a STEP or mesh file, **Add Part** to add to the current assembly, or **Open Project** for `hecmw_ctrl.dat`.
 2. Position assembly parts and check clearance where necessary.
 3. Create or review groups with the viewport selection tools.
 4. Define contacts and MPC equations.
@@ -408,7 +408,7 @@ cargo run --package bevyistr -- path/to/hecmw_ctrl.dat
 Passing `hecmw_ctrl.dat` at startup loads its mesh together with the BCs,
 loads, materials, sections, and solver settings represented by the current
 command-line readers. Passing a mesh loads it without a separate `.cnt`, as
-with **Open Mesh**. The GUI's **Open Project** path additionally restores the
+with **Open Model**. The GUI's **Open Project** path additionally restores the
 contact and MPC data represented by the current HEC-MW reader.
 
 Build a release executable:

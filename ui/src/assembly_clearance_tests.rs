@@ -342,7 +342,7 @@ fn controls_enable_only_available_checks_and_review_pairs() {
             .get::<Text>(status)
             .unwrap()
             .0
-            .contains("Add Mesh")
+            .contains("Add Part")
     );
     press(&mut app, check);
     assert!(
