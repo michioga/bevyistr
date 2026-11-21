@@ -19,7 +19,7 @@ use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoad
 use std::path::{Path, PathBuf};
 use visualization::VisualizationSettings;
 
-use crate::solver_runner::FrontistrRunState;
+use crate::{assembly::AssemblyEditorState, solver_runner::FrontistrRunState};
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -58,6 +58,15 @@ pub(crate) struct StepMeshSettings {
 
 #[derive(Component)]
 struct StepMeshSize;
+
+#[derive(Component)]
+pub(crate) struct SaveStepMeshButton;
+
+#[derive(Component)]
+pub(crate) struct SaveStepMeshControls;
+
+#[derive(Component)]
+pub(crate) struct SaveStepMeshStatus;
 
 pub(crate) struct StepMeshJob {
     path: PathBuf,
@@ -163,6 +172,44 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 })
                 .insert((ChildOf(row_entity), StepMeshSize, Name::new("STEP maximum element size in mm")))
                 .observe(update_step_mesh_size);
+        });
+
+    parent
+        .spawn((
+            SaveStepMeshControls,
+            Node {
+                display: Display::None,
+                flex_direction: FlexDirection::Column,
+                row_gap: px(3),
+                ..default()
+            },
+        ))
+        .with_children(|controls| {
+            controls
+                .spawn((
+                    InteractionButton,
+                    SaveStepMeshButton,
+                    Node {
+                        padding: UiRect::axes(px(8), px(4)),
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::all(px(5)),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::all(PANEL_BORDER),
+                ))
+                .with_child((
+                    Text::new("Save FrontISTR Mesh (.msh)..."),
+                    TextFont { font_size: FontSize::Px(10.5), ..default() },
+                    TextColor(TEXT_MAIN),
+                ));
+            controls.spawn((
+                SaveStepMeshStatus,
+                Text::default(),
+                TextFont { font_size: FontSize::Px(10.0), ..default() },
+                TextColor(TEXT_MUTED),
+            ));
         });
 
     parent.spawn((
@@ -303,6 +350,73 @@ pub(crate) fn add_mesh_button_system(
 
         *background = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
+    }
+}
+
+pub(crate) fn save_step_mesh_button_system(
+    model: Option<Res<FemModel>>,
+    editor: Res<AssemblyEditorState>,
+    mut controls: Query<&mut Node, With<SaveStepMeshControls>>,
+    mut buttons: Query<(Ref<ButtonInteraction>, &mut BackgroundColor), With<SaveStepMeshButton>>,
+    mut status: Query<&mut Text, With<SaveStepMeshStatus>>,
+) {
+    let Some((part, mesh)) = model.as_deref().and_then(|model| {
+        let part = model.parts.get(editor.selected_part?)?;
+        let mesh = model.meshes.get(part.mesh_index)?;
+        is_step(Path::new(&part.name)).then_some((part, mesh))
+    }) else {
+        for mut control in &mut controls {
+            if control.display != Display::None {
+                control.display = Display::None;
+            }
+        }
+        for mut text in &mut status {
+            if !text.is_empty() {
+                text.clear();
+            }
+        }
+        return;
+    };
+    for mut control in &mut controls {
+        if control.display != Display::Flex {
+            control.display = Display::Flex;
+        }
+    }
+    for (interaction, mut background) in &mut buttons {
+        background.set_if_neq(BackgroundColor(match *interaction {
+            ButtonInteraction::Pressed => BUTTON_PRESSED,
+            ButtonInteraction::Hovered => BUTTON_HOVERED,
+            ButtonInteraction::None => BUTTON_NORMAL,
+        }));
+        if *interaction != ButtonInteraction::Pressed || !interaction.is_changed() {
+            continue;
+        }
+        let name = Path::new(&part.name).with_extension("msh");
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save FrontISTR mesh geometry and groups")
+            .add_filter("FrontISTR mesh (.msh)", &["msh"])
+            .set_file_name(name.to_string_lossy())
+            .save_file()
+        else {
+            continue;
+        };
+        let message = if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("msh"))
+        {
+            match hecmw::write_msh_geometry_file(&path, mesh) {
+                Ok((nodes, elements)) => {
+                    let file = path.file_name().unwrap_or_default().to_string_lossy();
+                    format!("Saved {file} ({nodes} nodes, {elements} elements)")
+                }
+                Err(error) => format!("Could not save mesh: {error}"),
+            }
+        } else {
+            "Enter a filename ending in .msh.".into()
+        };
+        for mut text in &mut status {
+            **text = message.clone();
+        }
     }
 }
 

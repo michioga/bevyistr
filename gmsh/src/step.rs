@@ -23,6 +23,13 @@ If (#volumes() != 1)
   Error("STEP file must contain exactly one solid volume");
   Exit;
 EndIf
+Physical Volume("STEP_SOLID") = {volumes()};
+boundary() = Boundary{ Volume{volumes()}; };
+faces() = Unique(Abs(boundary()));
+For index In {0:#faces()-1}
+  face = faces(index);
+  Physical Surface(Sprintf("STEP_FACE_%g", face)) = {face};
+EndFor
 Mesh.ElementOrder = 1;
 Mesh.Binary = 0;
 "#,
@@ -98,6 +105,7 @@ mod tests {
     #[ignore = "requires Gmsh on PATH"]
     fn meshes_a_step_box_and_bracket_and_refuses_multiple_solids() {
         use bevy::prelude::Vec3;
+        use std::collections::BTreeSet;
         for (name, geometry, size) in [
             (
                 "box",
@@ -139,7 +147,39 @@ mod tests {
                 let mesh = result.unwrap_or_else(|error| panic!("{name}: {error}"));
                 let (min, max) = mesh.bounds().unwrap();
                 assert!((max - min).abs_diff_eq(dimensions, 1.0e-3), "{name}");
-                assert!(!mesh.cached_boundary_faces().is_empty(), "{name}");
+                let boundary = mesh.cached_boundary_faces();
+                assert!(!boundary.is_empty(), "{name}");
+                let solid = mesh
+                    .element_sets
+                    .iter()
+                    .find(|group| group.name == "STEP_SOLID")
+                    .unwrap();
+                assert_eq!(solid.elements.len(), mesh.elements.len(), "{name}");
+                let grouped_faces = mesh
+                    .surface_sets
+                    .iter()
+                    .flat_map(|group| group.surfaces.iter().copied())
+                    .collect::<BTreeSet<_>>();
+                let exterior = boundary
+                    .iter()
+                    .map(|face| face.element_face_ref().unwrap())
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(grouped_faces, exterior, "{name}");
+                assert_eq!(
+                    mesh.surface_sets
+                        .iter()
+                        .map(|group| group.surfaces.len())
+                        .sum::<usize>(),
+                    boundary.len(),
+                    "{name}: exterior faces must belong to exactly one CAD face"
+                );
+                for group in &mesh.surface_sets {
+                    assert!(group.name.starts_with("STEP_FACE_"), "{name}");
+                    assert!(
+                        mesh.node_sets.iter().any(|nodes| nodes.name == group.name),
+                        "{name}"
+                    );
+                }
                 if name == "box" {
                     let metres = directory.path().join("metres.stp");
                     let source = fs::read_to_string(&input).unwrap();

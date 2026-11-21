@@ -64,6 +64,39 @@ pub fn write_msh_file(
     write_msh_file_impl(path, model, mesh_index, None)
 }
 
+/// Saves the mesh geometry and groups as a standalone HEC-MW file.
+pub fn write_msh_geometry_file(
+    path: impl AsRef<Path>,
+    mesh: &FemMesh,
+) -> io::Result<(usize, usize)> {
+    let path = path.as_ref();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| crate::staged_inputs::is_project_name(name))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid mesh filename"))?;
+    validate_single_mesh_all_groups(mesh)?;
+    if mesh.elements.is_empty()
+        || mesh
+            .elements
+            .iter()
+            .any(|element| element_type_code(&element.element_type).is_none())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "mesh must contain supported HEC-MW elements",
+        ));
+    }
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let staged = crate::staged_inputs::StagedInputs::new(directory)?;
+    std::fs::write(staged.path().join(name), build_msh(mesh, 0, &[], None))?;
+    staged.publish(&[name])?;
+    Ok((mesh.nodes.len(), mesh.elements.len()))
+}
+
 /// Writes one HEC-MW mesh together with the mesh-side material and section
 /// definitions required by a complete FrontISTR project.
 pub fn write_msh_file_with_setup(

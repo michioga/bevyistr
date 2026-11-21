@@ -388,3 +388,186 @@ fn installed_frontistr_workflow_direct() {
 fn installed_frontistr_workflow_mpi() {
     check_latest_results(installed_run(SolverLaunchMode::Mpi), false);
 }
+
+
+#[test]
+#[ignore = "Requires Gmsh on PATH"]
+fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
+    use crate::assembly::AssemblyEditorState;
+    use crate::project_io::{SaveStepMeshControls, save_step_mesh_button_system};
+
+    let input = tempfile::tempdir().unwrap();
+    std::fs::write(
+        input.path().join("box.geo"),
+        "SetFactory(\"OpenCASCADE\");\nBox(1) = {0,0,0,20,10,6};\nSave \"box.step\";\n",
+    )
+    .unwrap();
+    let gmsh = std::process::Command::new("gmsh")
+        .current_dir(input.path())
+        .args(["box.geo", "-parse_and_exit", "-nopopup"])
+        .output()
+        .unwrap();
+    assert!(
+        gmsh.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gmsh.stderr)
+    );
+
+    bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+    let mut request = MeshLoadRequest::default();
+    request.request(input.path().join("box.step"));
+    let mut app = App::new();
+    app.insert_resource(request)
+        .init_resource::<FemModel>()
+        .init_resource::<MeshLoadStatus>()
+        .init_resource::<FemModelVersion>()
+        .init_resource::<CameraFitRequest>()
+        .init_resource::<AnalysisSetup>()
+        .init_resource::<FrontistrRunState>()
+        .init_resource::<AssemblyEditorState>()
+        .add_systems(
+            Update,
+            (mesh_load_system, save_step_mesh_button_system).chain(),
+        );
+    let save_controls = app
+        .world_mut()
+        .spawn((
+            SaveStepMeshControls,
+            Node {
+                display: Display::None,
+                ..default()
+            },
+        ))
+        .id();
+    wait_until(&mut app, 30, |world| {
+        let status = world.resource::<MeshLoadStatus>();
+        assert!(status.error.is_none(), "{status:?}");
+        world.resource::<FemModelVersion>().value > 0
+    });
+    let world = app.world();
+    assert_eq!(
+        world.get::<Node>(save_controls).unwrap().display,
+        Display::Flex
+    );
+    let model = world.resource::<FemModel>();
+    assert_eq!(model.parts[0].name, "box.step");
+    assert!(
+        world
+            .resource::<MeshLoadStatus>()
+            .message
+            .contains("20.000000")
+    );
+    let mesh = &model.meshes[0];
+    let group_at_end = |x: f32| {
+        mesh.node_sets
+            .iter()
+            .find(|group| {
+                group
+                    .nodes
+                    .iter()
+                    .all(|node| (mesh.node_position(*node).unwrap().x - x).abs() < 1.0e-5_f32)
+            })
+            .unwrap()
+    };
+    let fixed = group_at_end(0.0_f32);
+    let loaded = group_at_end(20.0_f32);
+    assert_ne!(fixed.name, loaded.name);
+    assert_eq!(mesh.node_sets.len(), 6);
+    let mesh_path = input.path().join("geometry.msh");
+    assert_eq!(
+        hecmw::write_msh_geometry_file(&mesh_path, mesh).unwrap(),
+        (mesh.nodes.len(), mesh.elements.len())
+    );
+    let geometry = hecmw::load_mesh_project(&mesh_path).unwrap();
+    assert_eq!(geometry.mesh.node_sets, mesh.node_sets);
+    assert_eq!(geometry.mesh.surface_sets, mesh.surface_sets);
+    assert_eq!(geometry.mesh.element_sets, mesh.element_sets);
+    assert_eq!(geometry.mesh.elements, mesh.elements);
+    assert!(geometry.materials.is_empty());
+    assert!(geometry.sections.is_empty());
+
+    let mut setup = AnalysisSetup::default();
+    setup.materials.push(FemMaterial {
+        name: "STEEL".into(),
+        young_modulus: Some(210_000.0),
+        poisson_ratio: Some(0.3),
+        density: None,
+    });
+    setup.sections.push(Section {
+        name: "Solid".into(),
+        mesh_index: 0,
+        material_name: "STEEL".into(),
+        element_set_name: Some("STEP_SOLID".into()),
+        kind: SectionKind::Solid,
+    });
+    setup.boundary_conditions.push(BoundaryCondition {
+        name: "Fixed end".into(),
+        mesh_index: 0,
+        nodes: fixed.nodes.clone(),
+        ngrp_name: Some(fixed.name.clone()),
+        rotation_center: None,
+        dof_start: 1,
+        dof_end: 3,
+        value: 0.0,
+    });
+    setup
+        .nodal_loads
+        .extend(loaded.nodes.iter().map(|&node| NodalLoad {
+            name: "Axial force".into(),
+            mesh_index: 0,
+            node,
+            ngrp_name: Some(loaded.name.clone()),
+            rotation_center: None,
+            dof: 1,
+            value: NODAL_FORCE,
+        }));
+
+    for launch_mode in [SolverLaunchMode::Direct, SolverLaunchMode::Mpi] {
+        let output = tempfile::tempdir().unwrap();
+        let mut run = FrontistrRunState {
+            launch_mode,
+            mpi_ranks: 2,
+            ..default()
+        };
+        assert!(
+            run.prepare_inputs(model, &setup, "box", |_| Some(output.path().into()))
+                .unwrap()
+        );
+        let control = output.path().join("hecmw_ctrl.dat");
+        let references = hecmw::load_hecmw_ctrl(&control).unwrap();
+        assert!(
+            references.import_issues.is_empty(),
+            "{:?}",
+            references.import_issues
+        );
+        let parallel = launch_mode == SolverLaunchMode::Mpi;
+        assert_eq!(references.distributed_mesh_path.is_some(), parallel);
+        assert_eq!(
+            output.path().join("hecmw_part_ctrl.dat").is_file(),
+            parallel
+        );
+        let (mesh_path, cnt_path) = hecmw::resolve_paths(&control, &references);
+        let project = hecmw::load_mesh_project(mesh_path.unwrap()).unwrap();
+        assert_eq!(project.mesh.elements, mesh.elements);
+        assert_eq!(project.mesh.node_sets, mesh.node_sets);
+        assert_eq!(project.mesh.surface_sets, mesh.surface_sets);
+        assert_eq!(project.mesh.element_sets, mesh.element_sets);
+        assert_eq!(project.materials.len(), 1);
+        assert_eq!(project.materials[0].name, "STEEL");
+        assert_eq!(
+            project.sections[0].element_set_name.as_deref(),
+            Some("STEP_SOLID")
+        );
+        let cnt = hecmw::load_cnt_file(cnt_path.unwrap(), &project.mesh, 0).unwrap();
+        assert!(cnt.import_issues.is_empty(), "{:?}", cnt.import_issues);
+        assert_eq!(cnt.boundary_conditions[0].nodes, fixed.nodes);
+        assert_eq!(
+            cnt.nodal_loads
+                .iter()
+                .map(|load| load.node)
+                .collect::<Vec<_>>(),
+            loaded.nodes
+        );
+        assert!(cnt.nodal_loads.iter().all(|load| load.value == NODAL_FORCE));
+    }
+}

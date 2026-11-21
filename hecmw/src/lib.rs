@@ -27,6 +27,7 @@ pub use inp::{InpError, load_inp_file};
 pub use msh_writer::{
     assembly_id_offsets, remap_element, remap_node, write_msh_assembly,
     write_msh_assembly_with_setup, write_msh_file, write_msh_file_with_setup,
+    write_msh_geometry_file,
 };
 pub use project_writer::{
     FrontistrExportError, FrontistrExportSummary, FrontistrValidationIssue,

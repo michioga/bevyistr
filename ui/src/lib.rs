@@ -137,7 +137,7 @@ use mpc_ui::{
 use project_io::{
     CameraFitRequest, add_mesh_button_system, apply_pending_cnt_system, camera_refit_on_reload,
     export_button_system, mesh_load_system, open_mesh_button_system, open_project_button_system,
-    open_setup_button_system, update_mesh_stats_text,
+    open_setup_button_system, save_step_mesh_button_system, update_mesh_stats_text,
 };
 use results_ui::{
     PlaybackState, apply_slider_to_results, open_result_button_system, playback_advance_system,
@@ -338,6 +338,9 @@ impl Plugin for UiPlugin {
                     .after(add_mesh_button_system)
                     .after(open_project_button_system),
                 camera_refit_on_reload.after(mesh_load_system),
+                save_step_mesh_button_system
+                    .after(mesh_load_system)
+                    .after(assembly_part_button_system),
                 rebuild_sets_list.after(mesh_load_system),
                 set_button_system,
                 make_node_group_button_system,
