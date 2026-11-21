@@ -102,10 +102,10 @@ pub(crate) fn draw_step_preview(
         ));
     }
     if let Some(edges) = preview.edges {
+        // Preview edges are a LineList. WGPU only permits depth bias on triangles.
         let material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.035, 0.07, 0.10),
             unlit: true,
-            depth_bias: 1.0,
             ..default()
         });
         commands.spawn((

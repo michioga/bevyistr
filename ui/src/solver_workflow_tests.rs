@@ -529,6 +529,25 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
     assert_eq!(world.resource::<FemModelVersion>().value, 0);
     assert_ne!(world.get::<RenderLayers>(camera), Some(&original_layers));
 
+    // WGPU rejects a nonzero depth bias on the preview's line pipeline.
+    let world = app.world_mut();
+    let mut visuals = world.query_filtered::<
+        (&Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<crate::step_preview_view::StepPreviewVisual>,
+    >();
+    let meshes = world.resource::<Assets<Mesh>>();
+    let materials = world.resource::<Assets<StandardMaterial>>();
+    let mut visible_edge_meshes = 0;
+    for (mesh, material) in visuals.iter(world) {
+        if meshes.get(&mesh.0).unwrap().primitive_topology()
+            == bevy::mesh::PrimitiveTopology::LineList
+        {
+            visible_edge_meshes += 1;
+            assert_eq!(materials.get(&material.0).unwrap().depth_bias, 0.0);
+        }
+    }
+    assert_eq!(visible_edge_meshes, 1);
+
     click(&mut app, discard);
     assert!(app.world().resource::<StepImport>().preview().is_none());
     assert_eq!(
