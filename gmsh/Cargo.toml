@@ -17,6 +17,7 @@ name = "gmsh"
 [dependencies]
 bevy.workspace = true
 fem_core.workspace = true
+tempfile = "3.27"
 
 [dev-dependencies]
 hecmw.workspace = true

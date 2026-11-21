@@ -2231,6 +2231,7 @@ dependencies = [
  "bevy",
  "bevyistr-fem-core",
  "bevyistr-hecmw",
+ "tempfile",
 ]
 
 [[package]]

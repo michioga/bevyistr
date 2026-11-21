@@ -17,6 +17,9 @@ use fem_core::{
     FemNodeSet, FemSurfaceSet, LocalFaceId, NodeId,
 };
 
+mod step;
+pub use step::mesh_step;
+
 type EntityKey = (u8, u64);
 type PhysicalKey = (u8, u64);
 
@@ -25,14 +28,7 @@ type PhysicalKey = (u8, u64);
 pub fn run_gmsh(input: &Path, mesh_size_factor: Option<f32>) -> Result<FemMesh, GmshError> {
     let output = input.with_extension("msh");
 
-    let mut cmd = Command::new("gmsh");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut cmd = gmsh_command();
     cmd.arg(input)
         .arg("-3")
         .arg("-format")
@@ -52,6 +48,18 @@ pub fn run_gmsh(input: &Path, mesh_size_factor: Option<f32>) -> Result<FemMesh, 
     }
 
     load_msh_file(&output)
+}
+
+fn gmsh_command() -> Command {
+    let mut cmd = Command::new("gmsh");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// Parses an ASCII Gmsh MSH 4.x file (revision 4.1 or newer).
@@ -78,6 +86,7 @@ pub enum GmshError {
     TagOutOfRange { kind: &'static str, tag: u64 },
     UnmatchedSurfaceElement { element_tag: u64 },
     GmshFailed { code: Option<i32> },
+    StepMeshing(String),
 }
 
 impl std::fmt::Display for GmshError {
@@ -112,6 +121,7 @@ impl std::fmt::Display for GmshError {
             ),
             Self::GmshFailed { code: Some(code) } => write!(f, "gmsh exited with code {code}"),
             Self::GmshFailed { code: None } => write!(f, "gmsh was terminated by a signal"),
+            Self::StepMeshing(message) => f.write_str(message),
         }
     }
 }
