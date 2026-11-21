@@ -94,7 +94,7 @@ impl SelectionFilter {
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct UiPointerState {
     pub over_ui: bool,
-    /// Navigation owns this left-button gesture, including its release frame.
+    /// Navigation owns this drag gesture, including its release frame.
     pub navigating: bool,
 }
 

@@ -100,11 +100,49 @@ fn screen_space_orbit() -> PanOrbitCamera {
     controller
 }
 
+fn snap_view(rotation: Quat) -> Quat {
+    let view = rotation * Vec3::Z;
+    let mut best_dot = f32::NEG_INFINITY;
+    let mut best = Vec3::Z;
+    for x in -1..=1 {
+        for y in -1..=1 {
+            for z in -1..=1 {
+                let direction = IVec3::new(x, y, z);
+                if direction != IVec3::ZERO {
+                    let direction = direction.as_vec3().normalize();
+                    let dot = direction.dot(view);
+                    if dot > best_dot {
+                        best = direction;
+                        best_dot = dot;
+                    }
+                }
+            }
+        }
+    }
+
+    let heading = Transform::IDENTITY
+        .looking_to(-best, orbit_camera_up(best))
+        .rotation;
+    if best.y.abs() < 0.999 {
+        return heading;
+    }
+    let screen_up = rotation * Vec3::Y;
+    (0..4)
+        .map(|turn| heading * Quat::from_rotation_z(turn as f32 * std::f32::consts::FRAC_PI_2))
+        .max_by(|a, b| {
+            (*a * Vec3::Y)
+                .dot(screen_up)
+                .total_cmp(&(*b * Vec3::Y).dot(screen_up))
+        })
+        .unwrap_or(heading)
+}
+
 pub fn orbit_camera_system(
     buttons: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut motion_evr: MessageReader<MouseMotion>,
     mut wheel_evr: MessageReader<MouseWheel>,
+    windows: Query<&Window>,
     mut query: Query<(
         &mut Transform,
         &mut OrbitCamera,
@@ -116,14 +154,36 @@ pub fn orbit_camera_system(
     mut mode: ResMut<InteractionMode>,
     mut ui_pointer: ResMut<UiPointerState>,
     scheme: Res<NavigationScheme>,
-    mut emulating_middle: Local<bool>,
+    mut left_navigation: Local<bool>,
+    mut mouse_drag: Local<Option<MouseButton>>,
+    mut unsnapped_rotation: Local<Option<Quat>>,
 ) {
     let over_ui = ui_pointer.over_ui;
-    let was_emulating = *emulating_middle;
-    let starts_emulation =
-        buttons.just_pressed(MouseButton::Left) && !over_ui && scheme.modifier_pressed(&keyboard);
-    *emulating_middle = (starts_emulation || was_emulating) && buttons.pressed(MouseButton::Left);
-    let navigating = starts_emulation || was_emulating;
+    let was_left_navigation = *left_navigation;
+    let had_mouse_drag = mouse_drag.is_some();
+    if let Some(button) = *mouse_drag {
+        if !buttons.pressed(button) {
+            *mouse_drag = None;
+        }
+    }
+    let starts_left_navigation = buttons.just_pressed(MouseButton::Left)
+        && !over_ui
+        && !had_mouse_drag
+        && scheme.modifier_pressed(&keyboard);
+    *left_navigation =
+        (starts_left_navigation || was_left_navigation) && buttons.pressed(MouseButton::Left);
+    if mouse_drag.is_none() && !over_ui && !buttons.pressed(MouseButton::Left) {
+        *mouse_drag = [MouseButton::Right, MouseButton::Middle]
+            .into_iter()
+            .find(|button| buttons.just_pressed(*button));
+    }
+    let navigating =
+        starts_left_navigation || was_left_navigation || had_mouse_drag || mouse_drag.is_some();
+    if navigating && *mode == InteractionMode::Idle {
+        *mode = InteractionMode::Orbit;
+    } else if !navigating && *mode == InteractionMode::Orbit {
+        *mode = InteractionMode::Idle;
+    }
     if ui_pointer.navigating != navigating {
         ui_pointer.navigating = navigating;
     }
@@ -139,10 +199,15 @@ pub fn orbit_camera_system(
         rotation_move += ev.delta;
     }
 
-    let dragging = !over_ui && (buttons.pressed(MouseButton::Middle) || *emulating_middle);
+    let dragging = mouse_drag.is_some() || (*left_navigation && !over_ui);
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let pan = (*mouse_drag == Some(MouseButton::Middle) && !shift) || (*left_navigation && shift);
     let ctrl_zoom =
-        *emulating_middle && keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+        *left_navigation && keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let snap = dragging && mouse_drag.is_some() && shift;
+    if !snap {
+        *unsnapped_rotation = None;
+    }
 
     if !dragging || ctrl_zoom {
         if controller.current_motion.is_moving() {
@@ -154,15 +219,15 @@ pub fn orbit_camera_system(
         }
     } else if rotation_move != Vec2::ZERO && camera.logical_viewport_size().is_some() {
         let anchor = Some(-DVec3::Z * f64::from(orbit.radius));
-        if shift && !controller.current_motion.is_panning() {
+        if pan && !controller.current_motion.is_panning() {
             controller.start_pan(anchor);
-        } else if !shift && !controller.current_motion.is_orbiting() {
+        } else if !pan && !controller.current_motion.is_orbiting() {
             controller.start_orbit(anchor);
         }
 
         controller.send_screenspace_input(rotation_move);
-        let rotation = transform.rotation.as_dquat();
-        let translation = transform.translation.as_dvec3();
+        let rotation = unsnapped_rotation.unwrap_or(transform.rotation).as_dquat();
+        let translation = orbit.focus.as_dvec3() + rotation * DVec3::Z * f64::from(orbit.radius);
         if let Some((delta, turn)) = controller.update_transform_and_projection(
             camera,
             &translation,
@@ -171,22 +236,20 @@ pub fn orbit_camera_system(
             &mut redraw,
             Duration::ZERO,
         ) {
-            if shift {
+            if pan {
                 let delta = (rotation * delta).as_vec3();
                 orbit.focus += delta;
                 orbit.target_focus += delta;
             } else {
-                transform.rotation = (rotation * turn).as_quat().normalize();
+                let turned = (rotation * turn).as_quat().normalize();
+                transform.rotation = if snap {
+                    *unsnapped_rotation = Some(turned);
+                    snap_view(turned)
+                } else {
+                    turned
+                };
             }
         }
-    }
-
-    if !over_ui && buttons.just_pressed(MouseButton::Right) {
-        *mode = InteractionMode::Orbit;
-    }
-
-    if buttons.just_released(MouseButton::Right) {
-        *mode = InteractionMode::Idle;
     }
 
     // Each wheel notch changes the radius by a fixed *fraction* rather than
@@ -203,7 +266,34 @@ pub fn orbit_camera_system(
 
         let factor = (1.0 - ev.y * ZOOM_SPEED).max(0.05);
 
-        orbit.radius = (orbit.radius * factor).clamp(orbit.min_radius, orbit.max_radius);
+        let previous_radius = orbit.radius;
+        let radius = (previous_radius * factor).clamp(orbit.min_radius, orbit.max_radius);
+        let focus_normal = transform.rotation * Vec3::Z;
+        let current = Transform {
+            rotation: transform.rotation,
+            translation: orbit.focus + focus_normal * previous_radius,
+            ..default()
+        };
+        let cursor = windows
+            .get(ev.window)
+            .ok()
+            .and_then(Window::cursor_position);
+        if let Some(ray) = cursor.and_then(|cursor| {
+            camera
+                .viewport_to_world(&GlobalTransform::from(current), cursor)
+                .ok()
+        }) {
+            // Zoom about the cursor on the plane through the current view centre.
+            let distance =
+                (orbit.focus - ray.origin).dot(focus_normal) / ray.direction.dot(focus_normal);
+            if distance.is_finite() {
+                let anchor = ray.get_point(distance);
+                let delta = (anchor - orbit.focus) * (1.0 - radius / previous_radius);
+                orbit.focus += delta;
+                orbit.target_focus += delta;
+            }
+        }
+        orbit.radius = radius;
     }
 
     orbit.focus = orbit.focus.lerp(orbit.target_focus, 0.15);
@@ -362,6 +452,51 @@ mod tests {
     }
 
     #[test]
+    fn mouse_middle_pans_right_orbits_and_shift_snaps() {
+        for (button, shift, over_ui) in [
+            (MouseButton::Middle, false, false),
+            (MouseButton::Right, false, false),
+            (MouseButton::Right, true, false),
+            (MouseButton::Middle, true, false),
+            (MouseButton::Right, false, true),
+        ] {
+            let (mut app, _, camera) = test_app(over_ui);
+            if shift {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::ShiftLeft);
+            }
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(button);
+            drag(&mut app, Vec2::new(150.0, 0.0));
+            let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+            let transform = app.world().get::<Transform>(camera).unwrap();
+            assert_eq!(
+                app.world().resource::<UiPointerState>().navigating,
+                !over_ui
+            );
+            if over_ui {
+                assert_eq!(transform.rotation, Quat::IDENTITY);
+                assert_eq!(orbit.focus, Vec3::ZERO);
+            } else if button == MouseButton::Middle && !shift {
+                assert_eq!(transform.rotation, Quat::IDENTITY);
+                assert!(orbit.focus.length() > 0.1);
+            } else {
+                assert_ne!(transform.rotation, Quat::IDENTITY);
+                assert_eq!(orbit.focus, Vec3::ZERO);
+                if shift {
+                    let direction = transform.rotation * Vec3::Z;
+                    assert!(
+                        Vec3::new(direction.x.abs(), direction.y, direction.z)
+                            .abs_diff_eq(Vec3::new(1.0, 0.0, 1.0).normalize(), 1.0e-5,)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn wheel_over_ui_is_discarded_instead_of_zooming_later() {
         let (mut app, window, camera) = test_app(true);
 
@@ -392,7 +527,7 @@ mod tests {
         *app.world_mut().get_mut::<Transform>(camera).unwrap() = top_view;
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Middle);
+            .press(MouseButton::Right);
 
         let quarter_turn_pixels = std::f32::consts::FRAC_PI_2 / 0.005;
         drag(&mut app, Vec2::new(quarter_turn_pixels, 0.0));
@@ -407,7 +542,7 @@ mod tests {
             let (mut app, _, camera) = test_app(false);
             app.world_mut()
                 .resource_mut::<ButtonInput<MouseButton>>()
-                .press(MouseButton::Middle);
+                .press(MouseButton::Right);
             drag(&mut app, Vec2::new(0.0, sign * 280.0));
             let near_pole = app.world().get::<Transform>(camera).unwrap().rotation;
             drag(&mut app, Vec2::new(0.0, sign * 70.0));

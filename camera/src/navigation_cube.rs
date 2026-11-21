@@ -351,12 +351,11 @@ pub(crate) fn navigation_cube_input_system(
 
 pub(crate) fn animate_navigation_cube_view(
     time: Res<Time>,
-    buttons: Res<ButtonInput<MouseButton>>,
     pointer: Res<fem_core::UiPointerState>,
     mut state: ResMut<NavigationCubeState>,
     mut main_camera: Query<(&mut Transform, &OrbitCamera), With<MainViewportCamera>>,
 ) {
-    if buttons.pressed(MouseButton::Middle) || pointer.navigating {
+    if pointer.navigating {
         state.animation = None;
         return;
     }

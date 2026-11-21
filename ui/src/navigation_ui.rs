@@ -78,7 +78,7 @@ pub(crate) fn update(
         color.set_if_neq(BackgroundColor(background));
     }
     let hint = match *scheme {
-        NavigationScheme::Mouse => "Middle: orbit | Shift: pan | Wheel: zoom",
+        NavigationScheme::Mouse => "Right drag: orbit | Middle drag: pan | Wheel: zoom\nShift + right/middle drag: snap orbit",
         NavigationScheme::TouchpadAlt => {
             "Alt + left drag: orbit | +Shift: pan | +Ctrl: zoom\nRemove selection: Ctrl+Shift + click/drag"
         }

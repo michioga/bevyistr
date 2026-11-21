@@ -325,9 +325,10 @@ Unknown HEC-MW element codes are retained as unsupported elements but do not hav
 
 | Input | Action |
 |---|---|
-| Middle drag | Orbit |
-| `Shift` + middle drag | Pan |
-| Mouse wheel | Zoom; over the sidebar it scrolls the panel instead |
+| Right drag | Orbit |
+| Middle drag | Pan |
+| `Shift` + right or middle drag | Orbit and snap to standard views |
+| Mouse wheel | Zoom at the cursor in the viewport or scroll the sidebar |
 | `F` | Focus the current selection |
 | View cube | Snap to axis-aligned or corner views |
 | `Enter` | Apply the focused exact numeric value |
