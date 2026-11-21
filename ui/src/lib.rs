@@ -205,6 +205,7 @@ impl Plugin for UiPlugin {
         }
         app.init_resource::<fem_core::MeshLoadRequest>();
         app.init_resource::<fem_core::MeshLoadStatus>();
+        app.init_resource::<project_io::StepMeshSettings>();
         app.init_resource::<fem_core::FemModelVersion>();
         app.init_resource::<fem_core::PendingCntLoad>();
         app.init_resource::<fem_core::UiPointerState>();
@@ -340,7 +341,10 @@ impl Plugin for UiPlugin {
                 open_project_button_system,
                 open_mesh_button_system,
                 add_mesh_button_system,
-                mesh_load_system,
+                mesh_load_system
+                    .after(open_mesh_button_system)
+                    .after(add_mesh_button_system)
+                    .after(open_project_button_system),
                 camera_refit_on_reload.after(mesh_load_system),
                 rebuild_sets_list.after(mesh_load_system),
                 set_button_system,

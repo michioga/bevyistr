@@ -5,10 +5,18 @@
 //! export validation.
 
 use crate::{ButtonInteraction, InteractionButton};
-use bevy::prelude::*;
+use bevy::{
+    feathers::controls::{
+        FeathersNumberInput, HardLimit, NumberInputPrecision, NumberInputRange, NumberInputStep,
+        NumberInputValue,
+    },
+    prelude::*,
+    tasks::{IoTaskPool, Task, futures::check_ready},
+    ui_widgets::ValueChange,
+};
 use camera::OrbitCamera;
 use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use visualization::VisualizationSettings;
 
 use crate::solver_runner::FrontistrRunState;
@@ -42,6 +50,36 @@ pub(crate) struct ExportStatusText;
 
 #[derive(Component)]
 pub(crate) struct MeshStatsText;
+
+#[derive(Resource, Default)]
+pub(crate) struct StepMeshSettings {
+    max_size_mm: Option<f32>,
+}
+
+#[derive(Component)]
+struct StepMeshSize;
+
+pub(crate) struct StepMeshJob {
+    path: PathBuf,
+    import: bool,
+    task: Task<Result<fem_core::FemMesh, gmsh::GmshError>>,
+}
+
+fn is_step(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("step") || extension.eq_ignore_ascii_case("stp")
+    })
+}
+
+fn update_step_mesh_size(
+    change: On<ValueChange<f32>>,
+    inputs: Query<(), With<StepMeshSize>>,
+    mut settings: ResMut<StepMeshSettings>,
+) {
+    if inputs.contains(change.source) && change.value.is_finite() && change.value >= 0.0 {
+        settings.max_size_mm = (change.value > 0.0).then_some(change.value);
+    }
+}
 
 pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
     parent
@@ -101,6 +139,32 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
             ));
         });
 
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: px(6),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Text::new("STEP max size (mm)\n0 = automatic"),
+                TextFont { font_size: FontSize::Px(10.0), ..default() },
+                TextColor(TEXT_MUTED),
+            ));
+            let row_entity = row.target_entity();
+            row.commands()
+                .queue_spawn_scene(bsn! {
+                    @FeathersNumberInput
+                    NumberInputValue::F32(0.0)
+                    HardLimit(NumberInputRange::F32(0.0..=f32::MAX))
+                    NumberInputPrecision(4)
+                    NumberInputStep(0.1)
+                    Node { width: px(86) }
+                })
+                .insert((ChildOf(row_entity), StepMeshSize, Name::new("STEP maximum element size in mm")))
+                .observe(update_step_mesh_size);
+        });
+
     parent.spawn((
         Text::new("No mesh loaded"),
         TextFont {
@@ -145,7 +209,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
             ));
         });
     parent.spawn((
-        Text::new("Open Mesh = replace model   Add Mesh = add a part\nOpen Project = load .msh + .cnt together"),
+        Text::new("Open Mesh replaces the model. Add Mesh adds a part.\nSTEP meshing requires Gmsh.\nOpen Project loads .msh + .cnt."),
         TextFont {
             font_size: FontSize::Px(10.0),
             ..default()
@@ -180,13 +244,16 @@ pub(crate) fn open_mesh_button_system(
         if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("Open mesh")
-                .add_filter("All supported meshes", &["msh", "geo", "inp"])
+                .add_filter("All supported meshes and CAD", &["msh", "geo", "inp", "step", "stp"])
+                .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
                 .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
                 .add_filter("Gmsh geometry (.geo)", &["geo"])
                 .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
                 .pick_file()
             {
-                run_state.clear_export_target();
+                if !is_step(&path) {
+                    run_state.clear_export_target();
+                }
                 status.loading(path.clone());
                 request.request(path);
             }
@@ -216,7 +283,8 @@ pub(crate) fn add_mesh_button_system(
         if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("Add mesh as new part")
-                .add_filter("All supported meshes", &["msh", "geo", "inp"])
+                .add_filter("All supported meshes and CAD", &["msh", "geo", "inp", "step", "stp"])
+                .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
                 .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
                 .add_filter("Gmsh geometry (.geo)", &["geo"])
                 .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
@@ -238,7 +306,7 @@ pub(crate) fn add_mesh_button_system(
     }
 }
 
-/// Loads `.geo`, `.inp`, HEC-MW `.msh`, or Gmsh `.msh` files.
+/// Loads mesh files and runs STEP meshing off the UI thread.
 pub(crate) fn mesh_load_system(
     mut model: ResMut<FemModel>,
     mut request: ResMut<MeshLoadRequest>,
@@ -246,10 +314,55 @@ pub(crate) fn mesh_load_system(
     mut version: ResMut<FemModelVersion>,
     mut camera_fit: ResMut<CameraFitRequest>,
     mut setup: ResMut<fem_core::AnalysisSetup>,
+    step_settings: Option<Res<StepMeshSettings>>,
+    mut run_state: Option<ResMut<FrontistrRunState>>,
+    mut step_job: Local<Option<StepMeshJob>>,
 ) {
     let Some((path, import)) = request.take() else {
+        let Some(result) = step_job.as_mut().and_then(|job| check_ready(&mut job.task)) else {
+            return;
+        };
+        let Some(StepMeshJob { path, import, .. }) = step_job.take() else {
+            return;
+        };
+        match result {
+            Ok(mesh) => {
+                let size = mesh.bounds().map(|(min, max)| max - min);
+                if !import && let Some(run) = run_state.as_deref_mut() {
+                    run.clear_export_target();
+                }
+                apply_mesh(
+                    mesh, &path, import, &mut model, &mut status, &mut version,
+                    &mut camera_fit, &mut setup,
+                );
+                if let Some(size) = size {
+                    status.message = format!(
+                        "STEP meshed | {:.6} x {:.6} x {:.6} mm (X x Y x Z)",
+                        size.x, size.y, size.z
+                    );
+                }
+            }
+            Err(error) => status.failed(path, error.to_string()),
+        }
         return;
     };
+
+    // A newer Open/Add request owns the viewport, even if Gmsh is still
+    // writing the superseded STEP job's temporary files.
+    *step_job = None;
+    if is_step(&path) {
+        let Some(pool) = IoTaskPool::try_get() else {
+            status.failed(path, "Gmsh background task pool is unavailable");
+            return;
+        };
+        status.loading(path.clone());
+        status.message = "Generating STEP tetrahedra".into();
+        let input = path.clone();
+        let max_size_mm = step_settings.and_then(|settings| settings.max_size_mm);
+        let task = pool.spawn(async move { gmsh::mesh_step(&input, max_size_mm) });
+        *step_job = Some(StepMeshJob { path, import, task });
+        return;
+    }
 
     let ext = path
         .extension()

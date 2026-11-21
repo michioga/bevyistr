@@ -12,6 +12,16 @@ FrontISTRの`hecmw_ctrl.dat`は、メッシュと解析制御データの入力�
 
 HEC-MWの`.msh`は、節点・要素の接続、節点／要素／面グループ、材料・断面などを定義します。接触ペアと多点拘束の書式も、公式サイトの「キーワード → メッシュデータ (msh)」で確認できます。 [FrontISTR公式ドキュメント](https://source-docs.frontistr.com/index.html) · [要素 `!ELEMENT`](https://source-docs.frontistr.com/keyword_reference/msh/element.html) · [接触ペア `!CONTACT PAIR`](https://source-docs.frontistr.com/keyword_reference/msh/contactpair.html) · [多点拘束 `!EQUATION`](https://source-docs.frontistr.com/keyword_reference/msh/equation.html)
 
+## STEPからメッシュを作る
+
+0.5.0向け開発版では、Gmshを使って単一ソリッドの `.step`／`.stp` から一次四面体メッシュを生成できます。Gmshをインストールし、`gmsh` を `PATH` から実行できるようにします。
+
+1. Modelの **STEP max size (mm)** に要素サイズの上限を入力します。`0` はGmshの自動設定です。
+2. **Open Mesh** または **Add Mesh** からSTEPファイルを選びます。
+3. 生成後に表示されるX・Y・Zの寸法を確認し、材料・断面・拘束・荷重を設定します。メッシュ座標はミリメートルです。材料・荷重などの値も整合する単位系で指定してください。
+
+生成に失敗した場合はModel欄に理由が表示されます。複数ソリッドはSTEPファイルを部品ごとに分け、**Add Mesh** で追加できます。 [GmshのSTEP読込](https://gmsh.info/doc/texinfo/#t20)
+
 ## 部品を配置する
 
 1. PART POSITIONで対象部品を選びます。
