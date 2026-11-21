@@ -13,6 +13,7 @@ members = [
     "picking",
     "box_select",
 ]
+exclude = ["patches/rstar-0.13"]
 
 [workspace.package]
 version = "0.4.0"
@@ -44,3 +45,9 @@ hecmw = { package = "bevyistr-hecmw", path = "hecmw", version = "=0.4.0" }
 camera = { package = "bevyistr-camera", path = "camera", version = "=0.4.0" }
 picking = { package = "bevyistr-picking", path = "picking", version = "=0.4.0" }
 box_select = { package = "bevyistr-box-select", path = "box_select", version = "=0.4.0" }
+
+[patch.crates-io]
+# Parry 0.31 still requires rstar 0.13, which resolves to heapless 0.8.
+# Use the published rstar 0.14 implementation until Parry supports it directly.
+# Crates.io consumers do not inherit workspace patches.
+rstar = { path = "patches/rstar-0.13" }
