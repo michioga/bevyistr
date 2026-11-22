@@ -130,7 +130,10 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                     }
                 }
             } else if keyword.eq_ignore_ascii_case("!RESTART")
-                || (result && name.eq_ignore_ascii_case("fstrTEMP"))
+                || (result
+                    && ["fstrTEMP", "fstrDYNA", "result-in"]
+                        .iter()
+                        .any(|role| name.eq_ignore_ascii_case(role)))
                 || (keyword.eq_ignore_ascii_case("!MESH") && parameter("REFINE").is_some())
             {
                 problem = Some("This global control setting cannot be regenerated");
@@ -233,6 +236,15 @@ mod tests {
     const SAMPLE: &str = "#\n!MESH, NAME=fstrMSH, TYPE=HECMW-ENTIRE\n hinge.msh\n\
          !CONTROL, NAME=fstrCNT\n hinge.cnt\n\
          !RESULT, NAME=fstrRES, IO=OUT\n hinge.res\n";
+
+    #[test]
+    fn reports_frequency_result_roles_before_export() {
+        let data = parse_ctrl(&format!(
+            "{SAMPLE}!RESULT, NAME=fstrDYNA, IO=OUT\n history.res\n!RESULT, NAME=result-in, IO=IN\n modes.res\n"
+        ));
+        assert_eq!(data.import_issues.len(), 2);
+        assert_eq!(data.result_path.as_deref(), Some("hinge.res"));
+    }
 
     #[test]
     fn parses_mesh_and_cnt() {

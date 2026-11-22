@@ -20,9 +20,7 @@ Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数
 
 ### 読み込んだ設定に未対応項目がある場合
 
-Open Project／Open Setupで、再出力時に保持できないCNT設定を検出すると、
-画面上部に **CNT re-export blocked** と表示します。これはbevyistrが元の設定を保持して再出力できないという案内です。
-件数は検出したCNT記述の数で、解析エラーや不備の個数ではありません。
+読み込んだCNT・MSH・DATで、保持できない設定や解決できない参照を検出すると、画面上部に **Input re-export blocked** と表示します。件数は再出力を止めた入力上の指摘数です。
 Solveの最下部には元ファイル名・行番号・
 キーワードと理由を表示し、Export／Run FrontISTRを停止します。
 次の表はbevyistrが再出力できる範囲です。FrontISTRで使える構文とパラメータは、公式サイトの「キーワード → 解析制御データ (cnt)」で確認できます。 [FrontISTR公式ドキュメント](https://source-docs.frontistr.com/index.html)
@@ -31,9 +29,9 @@ Solveの最下部には元ファイル名・行番号・
 | --- | --- | --- |
 | 拘束・荷重の`GRPID` | `GRPID=1`。ヒンジ例題のような省略形は既定値1として扱います。 | `GRPID=2`など、グループ1以外の指定 |
 | `!SOLVER` | 対応METHOD、`PRECOND=1`／`2`／`3`、`ITERLOG=YES, TIMELOG=YES`。`NITER`、`RESID`、正の整数の`iterPREmax`を保持します。その他の数値欄は`SIGMA_DIAG=1`、`OMEGA=0`が必要です。 | その他の前処理、`DUMPTYPE`や`DUMPEXIT`、未知のMETHOD |
-| 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、定義済みの拘束・荷重のグループ1をすべて有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析の入力、複数ステップ・自動増分・個別の時間設定・部分グループの有効化 |
+| 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析の入力、複数ステップ・自動増分・個別の時間設定・部分グループの有効化 |
 | 材料 | 対応する書式の等方弾性・密度 | 異方弾性、温度依存テーブル、弾塑性、超弾性 |
-| 接触 | bevyistrで新規に定義した対応形式の接触 | 既存CNTの`!CONTACT`を読み込んで再出力する操作 |
+| 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |
 | 保存間隔・出力項目 | 基本の`!WRITE`。`!OUTPUT_RES`／`!OUTPUT_VIS`のGROUP／ACTIONなどの拡張カードは単体出力で内容を保持します。 | `!WRITE`の追加オプション、名前付き出力GROUPを含む複数部品の統合出力 |
 
 FrontISTRの仕様を確認する際は、設定項目ごとのページを参照してください。 [拘束 `!BOUNDARY`](https://source-docs.frontistr.com/keyword_reference/cnt/boundary.html) · [集中荷重 `!CLOAD`](https://source-docs.frontistr.com/keyword_reference/cnt/cload.html) · [分布荷重 `!DLOAD`](https://source-docs.frontistr.com/keyword_reference/cnt/dload.html) · [線形ソルバー `!SOLVER`](https://source-docs.frontistr.com/keyword_reference/cnt/solver.html) · [ステップ `!STEP`](https://source-docs.frontistr.com/keyword_reference/cnt/step.html) · [固有値 `!EIGEN`](https://source-docs.frontistr.com/keyword_reference/cnt/eigen.html) · [弾性 `!ELASTIC`](https://source-docs.frontistr.com/keyword_reference/cnt/elastic.html) · [接触 `!CONTACT`](https://source-docs.frontistr.com/keyword_reference/cnt/contact.html)
@@ -48,7 +46,9 @@ FrontISTRの仕様を確認する際は、設定項目ごとのページを参�
   警告を消す目的で原本から必要な設定を削除しないでください。
 
 新規作成でもDynamicは時間積分等の設定が未完成のためExport／Runを制限します。
-このチェックはCNTの保持可否の検査であり、MSHを含む全仕様・解析モデルの妥当性の保証ではありません。
+互換性検査は、対応する入力設定と参照を保持できるかを確認します。解析モデルの妥当性は別途確認してください。
+
+`hecmw_ctrl.dat` の `fstrDYNA`、`result-in`、`fstrTEMP` は、既存プロジェクトを開いたときに再出力制限の理由として表示されます。 [結果ファイルの指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html)
 
 公式の`!OUTPUT_RES`と`!OUTPUT_VIS`は、物理量ごとのON／OFFを定義します。GROUP／ACTIONを含むカードや未知の項目を保持するのはbevyistrの再出力動作です。利用するFrontISTRの版で有効な指定は、その版の仕様を確認してください。 [RES出力の開始 `!WRITE, RESULT`](https://source-docs.frontistr.com/keyword_reference/cnt/write_result.html) · [RESの物理量 `!OUTPUT_RES`](https://source-docs.frontistr.com/keyword_reference/cnt/output_res.html) · [可視化の物理量 `!OUTPUT_VIS`](https://source-docs.frontistr.com/keyword_reference/cnt/output_vis.html)
 
@@ -67,7 +67,7 @@ MPIでは`hecmw_part_ctrl.dat`を生成して`hecmw_part1`で領域分割し、`
 **Solve → FRONTISTR EXECUTION → MPI** に実行ファイルの選択欄が表示されます。
 **Choose hecmw_part1...** と **Choose mpiexec / mpirun...** で指定し、**Auto** で自動検索に戻せます。
 分割ツールは`fistr1`と同じフォルダを先に調べ、その後PATHを検索します。ランチャーはPATHを検索します。
-MPI ranksは新しい`hecmw_part_ctrl.dat`の`DOMAIN`に反映され、分割方式は`NODE-BASED / PMETIS`です。
+MPI ranksは新しい`hecmw_part_ctrl.dat`の`DOMAIN`に反映されます。新規作成時は`NODE-BASED / PMETIS`を使い、既存プロジェクトでは対応する分割方式・`DEPTH`・`UCD`・`CONTACT`・`CONTACT_OWNER`を保持します。
 出力先フォルダに、分割と実行に必要な制御ファイルを生成します。
 
 FrontISTRでは、`hecmw_ctrl.dat`の`part_in`／`part_out`で分割対象と出力先を指定し、`hecmw_part_ctrl.dat`の`!PARTITION`で分割数や手法を指定します。 [全体制御データと並列処理手順](https://source-docs.frontistr.com/execution_guide/procedure/02_parallel.html) · [領域分割 `!PARTITION`](https://source-docs.frontistr.com/keyword_reference/part/partition.html) · [4領域に分割するヒンジ例題](https://source-docs.frontistr.com/examples/tutorial_02.html)

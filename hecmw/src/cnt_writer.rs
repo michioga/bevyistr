@@ -200,6 +200,9 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     // CONTACT — one boundary-condition group per accepted pair. Keeping
     // pairs separate allows interaction parameters to diverge later without
     // changing the file layout or the step activation model.
+    if !contacts.is_empty() {
+        writeln!(o, "!CONTACT_ALGO, TYPE=ALAGRANGE").unwrap();
+    }
     for (index, contact) in contacts.iter().enumerate() {
         write_contact(&mut o, contact, index + 1);
     }
@@ -290,14 +293,14 @@ fn write_contact(out: &mut String, contact: &ContactPair, group_id: usize) {
             if let Some(factor) = contact.penalty_factor {
                 writeln!(
                     out,
-                    " {},{:.6e},{factor:.6e}",
+                    " {},{:.8e},{factor:.8e}",
                     contact.name, contact.friction_coefficient
                 )
                 .unwrap();
             } else {
                 writeln!(
                     out,
-                    " {},{:.6e}",
+                    " {},{:.8e}",
                     contact.name, contact.friction_coefficient
                 )
                 .unwrap();
@@ -491,10 +494,12 @@ mod tests {
 
         assert!(text.contains("!CONTACT, GRPID=1, INTERACTION=TIED\n TIED_PAIR\n"));
         assert!(
-            text.contains("!CONTACT, GRPID=2, INTERACTION=SSLID\n SMALL_SLIDING_PAIR,0.000000e0\n")
+            text.contains(
+                "!CONTACT, GRPID=2, INTERACTION=SSLID\n SMALL_SLIDING_PAIR,0.00000000e0\n"
+            )
         );
         assert!(text.contains(
-            "!CONTACT, GRPID=3, INTERACTION=FSLID\n FINITE_SLIDING_PAIR,1.000000e-1,1.000000e5\n"
+            "!CONTACT, GRPID=3, INTERACTION=FSLID\n FINITE_SLIDING_PAIR,1.00000001e-1,1.00000000e5\n"
         ));
     }
 

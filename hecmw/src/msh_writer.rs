@@ -120,7 +120,7 @@ fn write_msh_file_impl(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "mesh index out of range"))?;
 
     validate_single_mesh_all_groups(mesh)?;
-    let contacts = resolve_contact_pairs(model, Some(mesh_index), false)?;
+    let contacts = resolve_contact_pairs(model, Some(mesh_index), None)?;
     let text = build_msh(mesh, mesh_index, &contacts, setup);
     std::fs::write(path, text.as_bytes())?;
 
@@ -256,9 +256,10 @@ fn write_msh_assembly_impl(
         }
     }
 
+    let prefixes = part_group_prefixes(model);
     // ── NGROUP / EGROUP / SGROUP (prefixed by part name to avoid collisions) ──
     for (part_index, (mesh, &(noff, eoff))) in model.meshes.iter().zip(&offsets).enumerate() {
-        let part_name = part_group_prefix(model, part_index);
+        let part_name = &prefixes[part_index];
 
         for nset in &mesh.node_sets {
             write_id_group(
@@ -309,11 +310,7 @@ fn write_msh_assembly_impl(
                 continue;
             }
             let local_group = section.element_set_name.as_deref().unwrap_or("ALL");
-            let exported_group = format!(
-                "{}_{}",
-                part_group_prefix(model, section.mesh_index),
-                local_group,
-            );
+            let exported_group = format!("{}_{}", prefixes[section.mesh_index], local_group,);
             write_mesh_section(&mut combined, section, &exported_group);
         }
         write_mpc_equations(&mut combined, &setup.mpc_equations, |mesh_index, node| {
@@ -323,7 +320,10 @@ fn write_msh_assembly_impl(
         });
     }
 
-    write_contact_pairs(&mut combined, &resolve_contact_pairs(model, None, true)?);
+    write_contact_pairs(
+        &mut combined,
+        &resolve_contact_pairs(model, None, Some(&prefixes))?,
+    );
 
     writeln!(combined, "!END").unwrap();
     std::fs::write(path, combined.as_bytes())?;
@@ -385,19 +385,35 @@ fn sanitize_group_prefix(name: &str) -> String {
         .to_ascii_uppercase()
 }
 
-pub(crate) fn part_group_prefix(model: &FemModel, mesh_index: usize) -> String {
-    model
-        .parts
-        .iter()
-        .find(|part| part.mesh_index == mesh_index)
-        .map(|part| sanitize_group_prefix(&part.name))
-        .unwrap_or_else(|| format!("PART{}", mesh_index + 1))
+pub(crate) fn part_group_prefixes(model: &FemModel) -> Vec<String> {
+    let numbered = || (1..=model.meshes.len()).map(|index| format!("PART{index}"));
+    let mut prefixes: Vec<_> = numbered().collect();
+    for part in &model.parts {
+        if let Some(prefix) = prefixes.get_mut(part.mesh_index) {
+            *prefix = sanitize_group_prefix(&part.name);
+        }
+    }
+    let names: HashSet<_> = prefixes.iter().map(String::as_str).collect();
+    // A_B + C and A + B_C both produce A_B_C. Fall back to
+    // distinct numeric namespaces when names or their prefixes overlap.
+    if names.len() != prefixes.len()
+        || names.contains("")
+        || prefixes.iter().any(|prefix| {
+            prefix
+                .match_indices('_')
+                .any(|(index, _)| names.contains(&prefix[..index]))
+        })
+    {
+        numbered().collect()
+    } else {
+        prefixes
+    }
 }
 
 fn exported_surface_group_name(
     model: &FemModel,
     surface: SurfaceSetRef,
-    prefix_part: bool,
+    prefixes: Option<&[String]>,
 ) -> io::Result<String> {
     let mesh = model.meshes.get(surface.mesh_index).ok_or_else(|| {
         io::Error::new(
@@ -418,11 +434,10 @@ fn exported_surface_group_name(
             )
         })?;
 
-    if prefix_part {
+    if let Some(prefixes) = prefixes {
         Ok(format!(
             "{}_{}",
-            part_group_prefix(model, surface.mesh_index),
-            surface_set.name
+            prefixes[surface.mesh_index], surface_set.name
         ))
     } else {
         Ok(surface_set.name.clone())
@@ -432,7 +447,7 @@ fn exported_surface_group_name(
 fn exported_node_group_name(
     model: &FemModel,
     node_set: NodeSetRef,
-    prefix_part: bool,
+    prefixes: Option<&[String]>,
 ) -> io::Result<String> {
     let mesh_index = node_set.mesh_index;
     let node_set_index = node_set.node_set_index;
@@ -452,12 +467,8 @@ fn exported_node_group_name(
         )
     })?;
 
-    if prefix_part {
-        Ok(format!(
-            "{}_{}",
-            part_group_prefix(model, mesh_index),
-            node_set.name
-        ))
+    if let Some(prefixes) = prefixes {
+        Ok(format!("{}_{}", prefixes[mesh_index], node_set.name))
     } else {
         Ok(node_set.name.clone())
     }
@@ -466,7 +477,7 @@ fn exported_node_group_name(
 fn resolve_contact_pairs(
     model: &FemModel,
     selected_mesh: Option<usize>,
-    prefix_parts: bool,
+    prefixes: Option<&[String]>,
 ) -> io::Result<Vec<ExportContactPair>> {
     let mut resolved = Vec::with_capacity(model.contacts.len());
 
@@ -491,12 +502,11 @@ fn resolve_contact_pairs(
         }
 
         let (slave_group, node_surface) = match contact.slave {
-            ContactSlaveRef::Nodes(reference) => (
-                exported_node_group_name(model, reference, prefix_parts)?,
-                true,
-            ),
+            ContactSlaveRef::Nodes(reference) => {
+                (exported_node_group_name(model, reference, prefixes)?, true)
+            }
             ContactSlaveRef::Surface(reference) => (
-                exported_surface_group_name(model, reference, prefix_parts)?,
+                exported_surface_group_name(model, reference, prefixes)?,
                 false,
             ),
         };
@@ -504,7 +514,7 @@ fn resolve_contact_pairs(
             name: contact.name.clone(),
             node_surface,
             slave_group,
-            master_group: exported_surface_group_name(model, contact.master, prefix_parts)?,
+            master_group: exported_surface_group_name(model, contact.master, prefixes)?,
         });
     }
 
@@ -891,6 +901,15 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_part_names_use_distinct_export_namespaces() {
+        for (left, right) in [("part.step", "part.step"), ("A", "A_B"), ("a-b", "a_b")] {
+            let mut model = FemModel::single_mesh(left, FemMesh::demo_hex8());
+            model.add_mesh(right, FemMesh::demo_hex8());
+            assert_eq!(part_group_prefixes(&model), ["PART1", "PART2"]);
+        }
+    }
+
+    #[test]
     fn preserves_imported_section_properties() {
         let source = "!SECTION,TYPE=SHELL,EGRP=SKIN,MATERIAL=STEEL\n!! thickness and quadrature\n0.025,3\n!SECTION,TYPE=BEAM,EGRP=FRAME,MATERIAL=STEEL\n1,0,0,2,3,4,5\n";
         let (_, sections) = crate::parse_msh_setup(source, 0);
@@ -944,7 +963,7 @@ mod tests {
             ContactType::Tied,
         ));
 
-        let contacts = resolve_contact_pairs(&model, Some(0), false).unwrap();
+        let contacts = resolve_contact_pairs(&model, Some(0), None).unwrap();
         let text = build_msh(&model.meshes[0], 0, &contacts, None);
 
         assert!(text.contains("!CONTACT PAIR, NAME=CP1, TYPE=SURF-SURF\n SLAVE,MASTER\n"));
@@ -963,7 +982,8 @@ mod tests {
             ContactType::SmallSliding,
         ));
 
-        let contacts = resolve_contact_pairs(&model, None, true).unwrap();
+        let contacts =
+            resolve_contact_pairs(&model, None, Some(&part_group_prefixes(&model))).unwrap();
 
         assert_eq!(
             contacts,
@@ -991,7 +1011,7 @@ mod tests {
             ContactType::FiniteSliding,
         ));
 
-        let contacts = resolve_contact_pairs(&model, Some(0), false).unwrap();
+        let contacts = resolve_contact_pairs(&model, Some(0), None).unwrap();
         let text = build_msh(&model.meshes[0], 0, &contacts, None);
 
         assert!(text.contains("!CONTACT PAIR, NAME=CP1, TYPE=NODE-SURF\n SLAVE,MASTER\n"));

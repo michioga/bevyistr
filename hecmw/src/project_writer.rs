@@ -13,7 +13,7 @@ use fem_core::{
     RotationCenter, SectionKind,
 };
 
-use crate::msh_writer::{element_type_code, part_group_prefix, validate_single_mesh_all_groups};
+use crate::msh_writer::{element_type_code, part_group_prefixes, validate_single_mesh_all_groups};
 use crate::{
     HecmwCtrlParams, assembly_id_offsets, remap_element, remap_node, write_cnt_file_with_contacts,
     ctrl_writer::write_hecmw_ctrl_with_settings, write_msh_assembly_with_setup, write_msh_file_with_setup,
@@ -698,7 +698,7 @@ fn validate_contacts(
         let location = format!("Contact[{}] {}", index + 1, contact.name);
         if contact.name.trim().is_empty() {
             report.error(&location, "name is empty");
-        } else if !names.insert(contact.name.as_str()) {
+        } else if !names.insert(contact.name.to_ascii_uppercase()) {
             report.error(&location, "contact name is duplicated");
         }
         validate_surface_ref(report, &location, model, contact.master, "master");
@@ -957,30 +957,27 @@ fn remap_rotation_center(center: &RotationCenter, offsets: &[(u32, u32)]) -> Rot
 /// Keeps compact node-group references in `.cnt` aligned with the part
 /// prefixes used by the flattened assembly's `.msh` groups.
 fn prefix_assembly_group_references(setup: &mut AnalysisSetup, model: &FemModel) {
+    let prefixes = part_group_prefixes(model);
     for condition in &mut setup.boundary_conditions {
         if let Some(group) = &mut condition.ngrp_name {
-            *group = format!(
-                "{}_{}",
-                part_group_prefix(model, condition.mesh_index),
-                group
-            );
+            *group = format!("{}_{}", prefixes[condition.mesh_index], group);
         }
-        prefix_rotation_center_group(condition.rotation_center.as_mut(), model);
+        prefix_rotation_center_group(condition.rotation_center.as_mut(), &prefixes);
     }
     for load in &mut setup.nodal_loads {
         if let Some(group) = &mut load.ngrp_name {
-            *group = format!("{}_{}", part_group_prefix(model, load.mesh_index), group);
+            *group = format!("{}_{}", prefixes[load.mesh_index], group);
         }
-        prefix_rotation_center_group(load.rotation_center.as_mut(), model);
+        prefix_rotation_center_group(load.rotation_center.as_mut(), &prefixes);
     }
 }
 
-fn prefix_rotation_center_group(center: Option<&mut RotationCenter>, model: &FemModel) {
+fn prefix_rotation_center_group(center: Option<&mut RotationCenter>, prefixes: &[String]) {
     let Some(center) = center else {
         return;
     };
     if let Some(group) = &mut center.ngrp_name {
-        *group = format!("{}_{}", part_group_prefix(model, center.mesh_index), group);
+        *group = format!("{}_{}", prefixes[center.mesh_index], group);
     }
 }
 
@@ -1392,6 +1389,45 @@ mod tests {
                 MpcTerm::new(0, NodeId(6), 1, -1.0)
             ]
         );
+
+        assert!(
+            control.import_issues.is_empty(),
+            "{:?}",
+            control.import_issues
+        );
+        model.parts[1].name = model.parts[0].name.clone();
+        write_frontistr_project(&dir, "assembly", &model, &setup).unwrap();
+        let flattened = crate::load_mesh_project(dir.join("assembly.msh")).unwrap();
+        assert!(
+            flattened.import_issues.is_empty(),
+            "{:?}",
+            flattened.import_issues
+        );
+        assert_eq!(flattened.contacts[0].slave_group_name, "PART2_SIDE");
+        assert_eq!(flattened.contacts[0].master_surface_name, "PART1_SIDE");
+        let cnt_path = dir.join("assembly.cnt");
+        let mut cnt = crate::load_cnt_file(&cnt_path, &flattened.mesh, 0).unwrap();
+        let mut flattened_model = FemModel::single_mesh("flattened", flattened.mesh);
+        flattened_model.contacts.push(ContactPair::new(
+            "PAIR",
+            SurfaceSetRef::new(0, 0),
+            SurfaceSetRef::new(0, 1),
+            ContactType::SmallSliding,
+        ));
+        cnt.check_contact_references(&flattened_model.contacts, &cnt_path, true);
+        assert!(cnt.import_issues.is_empty(), "{:?}", cnt.import_issues);
+        assert_eq!(
+            cnt.boundary_conditions[0].ngrp_name.as_deref(),
+            Some("PART2_FIX")
+        );
+        assert_eq!(cnt.apply_contact_settings(&mut flattened_model.contacts), 1);
+        assert_eq!(flattened_model.contacts[0].contact_type, ContactType::Tied);
+        let mut imported = AnalysisSetup {
+            mpc_equations: flattened.equations,
+            ..Default::default()
+        };
+        cnt.merge_into(&mut imported);
+        write_frontistr_project(&dir, "assembly", &flattened_model, &imported).unwrap();
 
         for file in ["hecmw_ctrl.dat", "assembly.msh", "assembly.cnt"] {
             std::fs::remove_file(dir.join(file)).unwrap();

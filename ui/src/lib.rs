@@ -15,6 +15,7 @@ mod materials_ui;
 mod measurement;
 mod mpc_ui;
 mod project_io;
+pub use project_io::StartupInput;
 mod results_ui;
 mod result_open;
 mod result_loading;
@@ -325,6 +326,8 @@ impl Plugin for UiPlugin {
                 .before(add_section_button_system)
                 .in_set(InteractionSystems::UiInput),
         );
+
+        app.add_systems(Startup, project_io::queue_startup_input);
 
         // Group 1: pointer, navigation, mesh loading (≤16 systems)
         app.add_systems(

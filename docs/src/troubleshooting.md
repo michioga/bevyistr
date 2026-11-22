@@ -1,6 +1,6 @@
 # 困ったとき
 
-## Setup incomplete／CNT re-export blockedが表示される
+## Setup incomplete／Input re-export blockedが表示される
 
 元CNTにbevyistrが再出力時に保持できない記述があるため、Export／Runを止めています。
 件数は変換できない記述の数です。Solveでファイル名・行番号・理由を確認できます。
@@ -33,7 +33,7 @@ Solveの状態・内部ログ・実行ファイル・MPIランタイムを確認
 起動前に入力の準備・検査で止まった場合は`Status: Blocked`と`Not started`を表示します。
 公開済み0.3.0では、この場合も`Failed`と表示されます。`Preflight`や`Setup compatibility`の詳細が
 出ている場合、FrontISTRの解析が失敗したという意味ではありません。
-`CNT re-export blocked`の場合は、bevyistrが元設定を保持して再出力できないための停止です。
+`Input re-export blocked`の場合は、bevyistrが元設定を保持して再出力できないための停止です。
 元入力は保管し、保存済みの解析結果はOpen Resultsから閲覧できます。
 
 問題を報告するときは、アプリのブランチ／コミット、OS、操作手順、エラーメッセージ、公開可能な最小データを添えてください。利用許可のない解析データや個人情報は共有しないでください。

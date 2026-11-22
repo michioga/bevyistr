@@ -16,7 +16,7 @@ use bevy::{
 use camera::OrbitCamera;
 use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
 use gmsh::StepMeshOptions;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use visualization::VisualizationSettings;
 
 use crate::{
@@ -40,6 +40,100 @@ pub(crate) struct OpenMeshButton;
 
 #[derive(Component)]
 pub(crate) struct AddMeshButton;
+
+/// Initial input requested by the application's command line.
+#[derive(Resource)]
+pub struct StartupInput(pub PathBuf);
+
+pub(crate) fn queue_startup_input(
+    input: Option<Res<StartupInput>>,
+    mut request: ResMut<MeshLoadRequest>,
+    mut load_status: ResMut<MeshLoadStatus>,
+    mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
+    version: Res<FemModelVersion>,
+    mut run_state: ResMut<FrontistrRunState>,
+) {
+    let Some(input) = input else { return };
+    let path = input.0.clone();
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("dat"))
+    {
+        queue_project_input(
+            path,
+            &mut request,
+            &mut load_status,
+            &mut pending_cnt,
+            version.value,
+            &mut run_state,
+        );
+    } else {
+        request.request(path);
+    }
+}
+
+fn queue_project_input(
+    ctrl_path: PathBuf,
+    request: &mut MeshLoadRequest,
+    load_status: &mut MeshLoadStatus,
+    pending_cnt: &mut fem_core::PendingCntLoad,
+    version: u64,
+    run_state: &mut FrontistrRunState,
+) {
+    let mut content = match hecmw::load_hecmw_ctrl(&ctrl_path) {
+        Ok(content) => content,
+        Err(error) => {
+            load_status.failed(
+                ctrl_path,
+                format!("Could not read project control: {error}"),
+            );
+            return;
+        }
+    };
+    let (Some(mesh_path), Some(cnt_path)) = hecmw::resolve_paths(&ctrl_path, &content) else {
+        load_status.failed(
+            ctrl_path,
+            "Project mesh or analysis control file was not found",
+        );
+        return;
+    };
+    let partition = if content.has_partition_input {
+        let path = ctrl_path.with_file_name("hecmw_part_ctrl.dat");
+        match hecmw::partition_control::load(&path) {
+            Ok(partition) => {
+                run_state.use_imported_ranks(partition.domains.get());
+                Some(partition)
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && content.distributed_mesh_path.is_none() =>
+            {
+                None
+            }
+            Err(error) => {
+                content.import_issues.push(fem_core::SetupImportIssue {
+                    source: path.display().to_string(),
+                    line: 1,
+                    keyword: "!PARTITION".into(),
+                    message: error.to_string(),
+                });
+                None
+            }
+        }
+    } else {
+        None
+    };
+    run_state.clear_export_target();
+    load_status.loading(mesh_path.clone());
+    request.request(mesh_path);
+    pending_cnt.request(cnt_path, 0, version);
+    pending_cnt.project_control = Some(fem_core::FrontistrControlImport {
+        control: content.settings,
+        partition,
+        issues: content.import_issues,
+    });
+}
 
 /// Opens `hecmw_ctrl.dat`, reads mesh/cnt stems, and loads both files in
 /// one click — the "Open Project" shortcut.
@@ -827,47 +921,14 @@ pub(crate) fn open_project_button_system(
                 continue;
             };
 
-            run_state.clear_export_target();
-
-            match hecmw::load_hecmw_ctrl(&ctrl_path) {
-                Ok(mut content) => {
-                    let (mesh_path, cnt_path) = hecmw::resolve_paths(&ctrl_path, &content);
-                    if let (Some(mesh_path), Some(cnt_path)) = (mesh_path, cnt_path) {
-                        load_status.loading(mesh_path.clone());
-                        request.request(mesh_path);
-                        pending_cnt.request(cnt_path, 0, version.value);
-                        let partition = if content.has_partition_input {
-                            let path = ctrl_path.with_file_name("hecmw_part_ctrl.dat");
-                            match hecmw::partition_control::load(&path) {
-                                Ok(partition) => {
-                                    run_state.use_imported_ranks(partition.domains.get());
-                                    Some(partition)
-                                }
-                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                                Err(error) => {
-                                    content.import_issues.push(fem_core::SetupImportIssue {
-                                        source: path.display().to_string(),
-                                        line: 1,
-                                        keyword: "!PARTITION".into(),
-                                        message: error.to_string(),
-                                    });
-                                    None
-                                }
-                            }
-                        } else {
-                            None
-                        };
-                        pending_cnt.project_control = Some(fem_core::FrontistrControlImport {
-                            control: content.settings,
-                            partition,
-                            issues: content.import_issues,
-                        });
-                    } else {
-                        bevy::log::warn!("hecmw_ctrl.dat: mesh or control file not found");
-                    }
-                }
-                Err(e) => bevy::log::warn!("Failed to parse hecmw_ctrl.dat: {e}"),
-            }
+            queue_project_input(
+                ctrl_path,
+                &mut request,
+                &mut load_status,
+                &mut pending_cnt,
+                version.value,
+                &mut run_state,
+            );
         }
 
         let color = match *interaction {
@@ -907,7 +968,8 @@ pub(crate) fn apply_pending_cnt_system(
         setup.import_issues.extend(import.issues);
     }
     match hecmw::load_cnt_file(&path, mesh, mesh_index) {
-        Ok(data) => {
+        Ok(mut data) => {
+            data.check_contact_references(&model.contacts, &path, true);
             for issue in &data.import_issues {
                 bevy::log::warn!("Setup import: {issue}; Export/Run blocked (viewing is available)");
             }
@@ -938,7 +1000,16 @@ pub(crate) fn apply_pending_cnt_system(
                 counts.6,
             );
         }
-        Err(e) => bevy::log::warn!("Failed to parse cnt file {:?}: {e}", path),
+        Err(error) => {
+            let issue = fem_core::SetupImportIssue {
+                source: path.display().to_string(),
+                line: 1,
+                keyword: "CNT".into(),
+                message: format!("Cannot load the project's analysis control file: {error}"),
+            };
+            bevy::log::warn!("Setup import: {issue}; Export/Run blocked");
+            setup.import_issues.push(issue);
+        }
     }
 }
 
@@ -1060,7 +1131,8 @@ pub(crate) fn open_setup_button_system(
         };
 
         match hecmw::load_cnt_file(&path, mesh, 0) {
-            Ok(data) => {
+            Ok(mut data) => {
+                data.check_contact_references(&model.contacts, &path, false);
                 for issue in &data.import_issues {
                     bevy::log::warn!("Setup import: {issue}; Export/Run blocked (viewing is available)");
                 }
@@ -1169,6 +1241,38 @@ fn compact_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_project_keeps_global_control_and_requires_parallel_input_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let ctrl = directory.path().join("parallel.dat");
+        std::fs::write(directory.path().join("mesh.msh"), "").unwrap();
+        std::fs::write(directory.path().join("solver.cnt"), "").unwrap();
+        std::fs::write(
+            &ctrl,
+            "!MESH,NAME=part_in,TYPE=HECMW-ENTIRE\nmesh.msh\n\
+             !MESH,NAME=fstrMSH,TYPE=HECMW-DIST\nmesh_dist\n\
+             !CONTROL,NAME=fstrCNT\nsolver.cnt\n\
+             !RESULT,NAME=fstrRES,IO=OUT,TYPE=BINARY\nsolver.res\n",
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.insert_resource(StartupInput(ctrl))
+            .init_resource::<MeshLoadRequest>()
+            .init_resource::<MeshLoadStatus>()
+            .init_resource::<fem_core::PendingCntLoad>()
+            .init_resource::<FemModelVersion>()
+            .init_resource::<FrontistrRunState>()
+            .add_systems(Startup, queue_startup_input);
+        app.update();
+        let request = app.world().resource::<MeshLoadRequest>();
+        assert_eq!(request.path, Some(directory.path().join("mesh.msh")));
+        let pending = app.world().resource::<fem_core::PendingCntLoad>();
+        let import = pending.project_control.as_ref().unwrap();
+        assert_eq!(import.control.binary_result, Some(true));
+        assert_eq!(import.issues.len(), 1);
+        assert!(import.issues[0].source.ends_with("hecmw_part_ctrl.dat"));
+    }
 
     #[test]
     fn step_controls_update_job_options_and_displayed_values() {

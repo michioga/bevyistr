@@ -14,6 +14,7 @@ pub(super) fn audit(
     let mut issues = Vec::new();
     let mut seen = HashSet::new();
     let mut material = false;
+    let mut contact_names = HashSet::new();
     let mut visual = None;
     let mut i = 0;
     while i < lines.len() {
@@ -62,7 +63,7 @@ pub(super) fn audit(
             i += 1;
         }
         let name = header.name.as_str();
-        let reason = if name == "WRITE"
+        let reason = if matches!(name, "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP")
             && raw
                 .split(',')
                 .skip(1)
@@ -70,13 +71,25 @@ pub(super) fn audit(
                 .count()
                 != header.params.len()
         {
-            Some("Repeated WRITE parameters cannot be preserved unambiguously".to_string())
+            Some("Repeated or empty parameters cannot be preserved unambiguously".to_string())
         } else if matches!(
             name,
-            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP"
+            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP" | "CONTACT_ALGO"
         ) && !seen.insert(header.name.clone())
         {
             Some("Repeated control cards cannot be preserved".to_string())
+        } else if name == "CONTACT"
+            && body.iter().any(|row| {
+                !contact_names.insert(
+                    row.split(',')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_uppercase(),
+                )
+            })
+        {
+            Some("A contact pair must have exactly one interaction definition".to_string())
         } else {
             check_card(&header, &body, data, material)
         };
@@ -107,6 +120,14 @@ pub(super) fn audit(
                     .into(),
         });
     }
+    if !data.contact_settings.is_empty() && !seen.contains("STEP") {
+        issues.push(SetupImportIssue {
+            source: "CNT".into(),
+            line: 1,
+            keyword: "!STEP (missing)".into(),
+            message: "Contact activation requires an explicit supported STEP".into(),
+        });
+    }
     (issues, visual)
 }
 
@@ -122,6 +143,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "BOUNDARY" | "CLOAD" => &["GRPID", "ROT_CENTER"],
         "DLOAD" => &["GRPID"],
         "CONTACT" => &["GRPID", "INTERACTION"],
+        "CONTACT_ALGO" => &["TYPE"],
         "MATERIAL" => &["NAME"],
         "NGROUP" | "NGRP" => &["NGRP"],
         "WRITE" => &["RESULT", "VISUAL", "FREQUENCY"],
@@ -242,6 +264,12 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
             if !data.nodal_loads.is_empty() || !data.distributed_loads.is_empty() {
                 expected.push("LOAD,1".to_string());
             }
+            let groups: HashSet<_> = data
+                .contact_settings
+                .iter()
+                .map(|contact| contact.group_id)
+                .collect();
+            expected.extend(groups.into_iter().map(|group| format!("CONTACT,{group}")));
             let mut actual: Vec<_> = body
                 .iter()
                 .map(|row| {
@@ -256,11 +284,10 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
             if solver.analysis_type != AnalysisType::NlStatic
                 || (h.params.contains_key("TYPE") && !is("TYPE", "STATIC"))
                 || (h.params.contains_key("INC_TYPE") && !is("INC_TYPE", "FIXED"))
-                || !data.contact_settings.is_empty()
                 || expected != actual
             {
                 Some(
-                    "Only a single nonlinear static fixed-increment STEP activating all boundary/load groups 1 is preserved; timing/contact/partial activation remains blocked",
+                    "Only one fixed-increment nonlinear static STEP activating all boundary, load and contact groups is supported",
                 )
             } else if !valid_integer("SUBSTEPS") || !valid_integer("MAXITER") || !valid_tol {
                 Some("STEP substeps/iterations/tolerance must be valid positive values")
@@ -308,17 +335,20 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 "Boundary/load row is unsupported or malformed; extra columns and invalid values cannot be dropped",
             )
         }
-        "CLOAD"
+        "BOUNDARY" | "CLOAD"
             if body.iter().any(|row| {
                 let target = row.split(',').next().unwrap().trim();
-                target.parse::<u32>().is_err()
-                    && !data
-                        .nodal_loads
+                if name == "BOUNDARY" {
+                    !data
+                        .boundary_conditions
                         .iter()
-                        .any(|load| load.ngrp_name.as_deref() == Some(target))
+                        .any(|condition| condition.name == target)
+                } else {
+                    !data.nodal_loads.iter().any(|load| load.name == target)
+                }
             }) =>
         {
-            Some("Unresolved CLOAD node group would produce no loads")
+            Some("Unresolved boundary/load target would be omitted on export")
         }
         "DLOAD"
             if body.iter().any(|row| {
@@ -360,9 +390,56 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         {
             Some("Distributed load row is incomplete or its target cannot be resolved")
         }
-        "CONTACT" => Some(
-            "Contact activation groups and detailed interaction settings are not fully preserved yet",
-        ),
+        "CONTACT" => {
+            let interaction = value("INTERACTION");
+            let tied = interaction.as_deref() == Some("TIED");
+            let valid_group = h
+                .params
+                .get("GRPID")
+                .is_none_or(|group| group.parse::<i32>().is_ok_and(|group| group > 0));
+            let nonlinear = data
+                .solver
+                .as_ref()
+                .is_some_and(|s| s.analysis_type == AnalysisType::NlStatic);
+            if !nonlinear
+                || !valid_group
+                || !matches!(
+                    interaction.as_deref(),
+                    None | Some("SSLID" | "FSLID" | "TIED")
+                )
+            {
+                Some(
+                    "Contact requires nonlinear static analysis, a positive GRPID and SSLID, FSLID or TIED",
+                )
+            } else if body.is_empty()
+                || body.iter().any(|row| {
+                    let fields: Vec<_> = row.split(',').map(str::trim).collect();
+                    fields[0].is_empty()
+                        || if tied {
+                            fields.len() != 1
+                        } else {
+                            fields.len() > 3
+                                || fields.get(1).is_some_and(|v| {
+                                    !v.parse::<f32>().is_ok_and(|v| v.is_finite() && v >= 0.0)
+                                })
+                                || fields.get(2).is_some_and(|v| {
+                                    !v.parse::<f32>().is_ok_and(|v| v.is_finite() && v > 0.0)
+                                })
+                        }
+                })
+            {
+                Some(
+                    "Unsupported contact data; use a pair name and optional friction coefficient and positive friction penalty for sliding",
+                )
+            } else {
+                None
+            }
+        }
+        "CONTACT_ALGO"
+            if !is("TYPE", "ALAGRANGE") || !body.is_empty() || data.contact_settings.is_empty() =>
+        {
+            Some("Only the default ALAGRANGE contact algorithm without extra options is preserved")
+        }
         "ELASTIC" | "DENSITY" | "ITEM=1" | "ITEM=2" => {
             let elastic = matches!(name, "ELASTIC" | "ITEM=1");
             let values: Option<Vec<f32>> = body.first().and_then(|row| {
@@ -494,6 +571,85 @@ mod tests {
             .remove(0);
         assert_eq!(issue.line, 3);
         assert_eq!(issue.keyword, "!SOLUTION, TYPE=HEAT");
+    }
+
+    #[test]
+    fn unresolved_boundary_blocks_export_but_implicit_all_is_resolved() {
+        let data = read("!BOUNDARY\nMISSING,1,3,0\nALL,3,3,0\n!END\n");
+        assert!(
+            data.import_issues
+                .iter()
+                .any(|issue| issue.message.contains("Unresolved"))
+        );
+        assert_eq!(data.boundary_conditions.len(), 1);
+        let all = &data.boundary_conditions[0];
+        assert_eq!(all.nodes.len(), FemModel::demo_hex8().meshes[0].nodes.len());
+        assert!(all.ngrp_name.is_none());
+        assert!(
+            read("!BOUNDARY\nALL,3,3,0\n!END\n")
+                .import_issues
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn supported_contact_groups_round_trip_and_partial_activation_blocks() {
+        use fem_core::{ContactPair, ContactType, SurfaceSetRef};
+        let mut setup = AnalysisSetup::default();
+        setup.solver.analysis_type = AnalysisType::NlStatic;
+        let pairs = [
+            ContactPair::new(
+                "PAIR_A",
+                SurfaceSetRef::new(0, 0),
+                SurfaceSetRef::new(0, 1),
+                ContactType::FiniteSliding,
+            )
+            .with_contact_parameters(0.12345678, Some(12_345.678)),
+            ContactPair::new(
+                "PAIR_B",
+                SurfaceSetRef::new(0, 0),
+                SurfaceSetRef::new(0, 1),
+                ContactType::Tied,
+            ),
+        ];
+        let text = crate::cnt_writer::build_cnt(&setup, &pairs);
+        let mut loaded = read(&text);
+        loaded.check_contact_references(&pairs, std::path::Path::new("input.cnt"), true);
+        assert!(
+            loaded.import_issues.is_empty(),
+            "{:?}",
+            loaded.import_issues
+        );
+        assert_eq!(
+            loaded.contact_settings[0].friction_coefficient,
+            pairs[0].friction_coefficient
+        );
+        assert_eq!(
+            loaded.contact_settings[0].penalty_factor,
+            pairs[0].penalty_factor
+        );
+        assert_eq!(loaded.contact_settings[1].contact_type, ContactType::Tied);
+
+        let mut unmatched = read(&text);
+        unmatched.check_contact_references(&pairs[..1], std::path::Path::new("input.cnt"), true);
+        assert!(
+            unmatched
+                .import_issues
+                .iter()
+                .any(|issue| issue.message.contains("PAIR_B"))
+        );
+        for unsupported in [
+            text.replace("CONTACT, 2\n", ""),
+            text.replace("TYPE=ALAGRANGE", "TYPE=SLAGRANGE"),
+            text.replace("INTERACTION=FSLID", "INTERACTION=FSLID, NPENALTY=100"),
+            text.replace("INTERACTION=FSLID", "INTERACTION=UNKNOWN"),
+            text.replace("PAIR_B\n", "PAIR_A\n"),
+        ] {
+            assert!(
+                !read(&unsupported).import_issues.is_empty(),
+                "{unsupported}"
+            );
+        }
     }
 
     #[test]

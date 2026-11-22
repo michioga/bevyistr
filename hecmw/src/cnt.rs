@@ -113,7 +113,9 @@ impl Default for CntData {
 /// Solver-side settings attached to a mesh `!CONTACT PAIR` by name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CntContactSettings {
+    line: usize,
     pub pair_name: String,
+    pub group_id: u32,
 
     pub contact_type: ContactType,
 
@@ -166,6 +168,50 @@ impl CntData {
         for issue in self.import_issues {
             if !setup.import_issues.contains(&issue) {
                 setup.import_issues.push(issue);
+            }
+        }
+    }
+
+    /// Checks that imported CNT interactions and the mesh contact definitions agree.
+    /// A complete project must activate every imported mesh pair. Open Setup may
+    /// update only the interactions present in the selected file.
+    pub fn check_contact_references(
+        &mut self,
+        contacts: &[ContactPair],
+        source: &Path,
+        require_all: bool,
+    ) {
+        let source = source.display().to_string();
+        for settings in &self.contact_settings {
+            if !contacts
+                .iter()
+                .any(|contact| contact.name.eq_ignore_ascii_case(&settings.pair_name))
+            {
+                self.import_issues.push(fem_core::SetupImportIssue {
+                    source: source.clone(),
+                    line: settings.line,
+                    keyword: "!CONTACT".into(),
+                    message: format!("Unknown mesh contact pair {}", settings.pair_name),
+                });
+            }
+        }
+        if require_all {
+            for contact in contacts {
+                if !self
+                    .contact_settings
+                    .iter()
+                    .any(|settings| contact.name.eq_ignore_ascii_case(&settings.pair_name))
+                {
+                    self.import_issues.push(fem_core::SetupImportIssue {
+                        source: source.clone(),
+                        line: 1,
+                        keyword: "!CONTACT (missing)".into(),
+                        message: format!(
+                            "Mesh contact pair {} has no interaction definition",
+                            contact.name
+                        ),
+                    });
+                }
             }
         }
     }
@@ -484,6 +530,11 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     _ => ContactType::SmallSliding,
                 };
                 i += 1;
+                let group_id = header
+                    .params
+                    .get("GRPID")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(1);
 
                 while i < lines.len() && !is_keyword(lines[i]) {
                     let line = strip_comment(lines[i]);
@@ -497,7 +548,9 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         continue;
                     };
                     data.contact_settings.push(CntContactSettings {
+                        line: i,
                         pair_name: (*pair_name).to_string(),
+                        group_id,
                         contact_type,
                         friction_coefficient: parts
                             .get(1)
@@ -529,7 +582,13 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         continue;
                     }
 
-                    let ngrp = if parts[0].parse::<u32>().is_err() {
+                    let ngrp = if parts[0].parse::<u32>().is_err()
+                        && (!parts[0].eq_ignore_ascii_case("ALL")
+                            || mesh
+                                .node_sets
+                                .iter()
+                                .any(|set| set.name.eq_ignore_ascii_case("ALL")))
+                    {
                         Some(parts[0].to_string())
                     } else {
                         None
@@ -577,7 +636,13 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         continue;
                     }
 
-                    let ngrp = if parts[0].parse::<u32>().is_err() {
+                    let ngrp = if parts[0].parse::<u32>().is_err()
+                        && (!parts[0].eq_ignore_ascii_case("ALL")
+                            || mesh
+                                .node_sets
+                                .iter()
+                                .any(|set| set.name.eq_ignore_ascii_case("ALL")))
+                    {
                         Some(parts[0].to_string())
                     } else {
                         None
@@ -878,6 +943,10 @@ fn resolve_node_group(
         return set.nodes.clone();
     }
 
+    if token.eq_ignore_ascii_case("ALL") {
+        return mesh.nodes.iter().map(|node| node.id).collect();
+    }
+
     Vec::new()
 }
 
@@ -908,6 +977,10 @@ fn resolve_element_group(token: &str, mesh: &FemMesh) -> Vec<ElementId> {
         .find(|s| s.name.eq_ignore_ascii_case(token))
     {
         return set.elements.clone();
+    }
+
+    if token.eq_ignore_ascii_case("ALL") {
+        return mesh.elements.iter().map(|element| element.id).collect();
     }
 
     Vec::new()

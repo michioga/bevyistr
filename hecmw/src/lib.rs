@@ -198,7 +198,7 @@ pub fn load_mesh_project(path: impl AsRef<Path>) -> Result<HecmwMeshProject, Hec
     let contacts = parse_msh_contact_pairs(&source);
     let equation_source = expand_msh_equation_inputs(&source, path)?;
     let equations = parse_msh_equations(&equation_source, &mesh);
-    let import_issues = msh_compatibility::audit(&source, path);
+    let import_issues = msh_compatibility::audit(&source, path, &mesh);
     Ok(HecmwMeshProject { mesh, materials, sections, contacts, equations, import_issues })
 }
 
@@ -525,15 +525,18 @@ fn parse_msh_contact_pairs(source: &str) -> Vec<HecmwContactPairDefinition> {
 
         while index < lines.len() {
             let data_line = lines[index].trim();
-            if data_line.starts_with('!') {
+            if data_line.starts_with('!') && !data_line.starts_with("!!") {
                 break;
             }
-            if data_line.is_empty() || data_line.starts_with('#') {
+            if data_line.is_empty() || data_line.starts_with('#') || data_line.starts_with("!!") {
                 index += 1;
                 continue;
             }
 
             let surfaces: Vec<&str> = data_line
+                .split('#')
+                .next()
+                .unwrap_or("")
                 .split(',')
                 .map(str::trim)
                 .filter(|token| !token.is_empty())

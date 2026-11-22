@@ -23,7 +23,7 @@ fn surface_colors_follow_element_assignments_without_changing_geometry() {
     assignments.insert(ElementId(0), MaterialIdentity::Assigned("STEEL".into()));
     // Second element intentionally has no assignment.
     let plain = build_part_surface_mesh(&mesh).unwrap();
-    let colored = build_material_surface_mesh(&mesh, Some(&assignments)).unwrap();
+    let colored = build_material_surface_mesh(&mesh, Some(&assignments), |_| true).unwrap();
     assert_eq!(
         plain
             .attribute(Mesh::ATTRIBUTE_POSITION)

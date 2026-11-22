@@ -10,77 +10,18 @@ use std::path::PathBuf;
 use box_select::BoxSelectPlugin;
 use camera::{CameraPlugin, OrbitCamera, fit_bounds, radius_limits};
 use fem_core::{FemModel, MainViewportCamera};
-use gmsh;
 use interaction::InteractionPlugin;
 use picking::PickingPlugin;
 use selection::SelectionPlugin;
-use ui::UiPlugin;
+use ui::{StartupInput, UiPlugin};
 use visualization::VisualizationPlugin;
 
 mod icon;
 
 fn main() {
-    let arg_path = std::env::args_os().nth(1).map(PathBuf::from);
-
-    // The path can point directly at a mesh file, or at a FrontISTR
-    // project's `hecmw_ctrl.dat` — the same two entry points the GUI
-    // offers via "Open Model" and "Open Project" respectively, so
-    // `bevyistr path/to/hecmw_ctrl.dat` opens the mesh *and* its
-    // boundary conditions/loads/materials in one shot, matching what
-    // running this from a shell should mean for a FrontISTR project
-    // directory. Unlike the GUI's "Open Project" button (which requests
-    // the mesh asynchronously via `MeshLoadRequest` and has to defer
-    // loading the `.cnt` until that finishes — see `PendingCntLoad`'s doc
-    // comment), this runs before `App::new()` even exists, so there's no
-    // async mesh load to race: both files are read synchronously, in order.
-    let mut initial_setup = fem_core::AnalysisSetup::default();
-    let mut setup_has_content = false;
-
-    let model = arg_path.and_then(|path| {
-        let (mesh_path, cnt_path) = match hecmw::load_hecmw_ctrl(&path) {
-            // Only treat this as a project file if it actually parsed a
-            // `!MESH` directive — a plain `.msh` file happens to share
-            // HECMW's `!KEYWORD` block syntax (`!NODE`, `!ELEMENT`, ...)
-            // but none of those match `hecmw_ctrl.dat`'s specific
-            // `!MESH`/`!CONTROL` directives, so this falls through to the
-            // "just a mesh path" branch correctly rather than resolving to
-            // `(None, None)` and silently failing to load anything.
-            Ok(content) if content.mesh_path.is_some() => hecmw::resolve_paths(&path, &content),
-            _ => (Some(path), None),
-        };
-
-        let (model, materials, sections) = load_initial_model(mesh_path?)?;
-
-        for m in materials {
-            initial_setup.materials.push(m);
-            setup_has_content = true;
-        }
-        for s in sections {
-            initial_setup.sections.push(s);
-            setup_has_content = true;
-        }
-
-        if let Some(cnt_path) = cnt_path {
-            match hecmw::load_cnt_file(&cnt_path, &model.meshes[0], 0) {
-                Ok(data) => {
-                    data.merge_into(&mut initial_setup);
-                    setup_has_content = true;
-                }
-                Err(e) => eprintln!("Failed to parse {}: {e}", cnt_path.display()),
-            }
-        }
-
-        Some(model)
-    });
-
     let mut app = App::new();
-
-    if let Some(model) = model {
-        app.insert_resource(model);
-
-        if setup_has_content {
-            app.insert_resource(initial_setup);
-        }
+    if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
+        app.insert_resource(StartupInput(path));
     }
 
     app.insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.025)))
@@ -129,42 +70,6 @@ fn main() {
             ),
         )
         .run();
-}
-
-/// Loads the initial mesh from the command-line argument (if given).
-/// Uses the extended loader that also extracts embedded !MATERIAL/!SECTION
-/// blocks from the .msh file, so `hinge.msh` sets up steel + solid section
-/// automatically.
-fn load_initial_model(
-    path: PathBuf,
-) -> Option<(FemModel, Vec<fem_core::FemMaterial>, Vec<fem_core::Section>)> {
-    match hecmw::load_mesh_file_with_setup(&path) {
-        Ok((mesh, materials, sections)) => {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("mesh")
-                .to_string();
-            Some((FemModel::single_mesh(name, mesh), materials, sections))
-        }
-        Err(e) => {
-            // HECMW parse failed — try Gmsh MSH v4.1 fallback
-            match gmsh::load_msh_file(&path) {
-                Ok(mesh) => {
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("mesh")
-                        .to_string();
-                    Some((FemModel::single_mesh(name, mesh), Vec::new(), Vec::new()))
-                }
-                Err(_) => {
-                    eprintln!("Failed to load {}: {e}", path.display());
-                    None
-                }
-            }
-        }
-    }
 }
 
 fn setup(mut commands: Commands, model: Option<Res<FemModel>>) {

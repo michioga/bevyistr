@@ -1,8 +1,9 @@
-use fem_core::SetupImportIssue;
-use std::path::Path;
+use fem_core::{FemMesh, SetupImportIssue};
+use std::{collections::HashSet, path::Path};
 
-pub(crate) fn audit(source: &str, path: &Path) -> Vec<SetupImportIssue> {
+pub(crate) fn audit(source: &str, path: &Path, mesh: &FemMesh) -> Vec<SetupImportIssue> {
     let mut issues = Vec::new();
+    let mut contacts = HashSet::new();
     let mut lines = source.lines().map(str::trim).enumerate().peekable();
     while let Some((index, header)) = lines.next() {
         if !header.starts_with('!') || header.starts_with("!!") {
@@ -24,6 +25,10 @@ pub(crate) fn audit(source: &str, path: &Path) -> Vec<SetupImportIssue> {
                     None
                 }
             }
+            "!CONTACT PAIR" => {
+                check_contact_pair(header, &data_rows(&mut lines), mesh, &mut contacts)
+            }
+            "!CONTACTPAIR" => Some("Expected !CONTACT PAIR with a space"),
             "!SYSTEM" | "!AMPLITUDE" | "!EMBEDPAIR" | "!EMBED PAIR" | "!ZERO" | "!INCLUDE" => {
                 Some("This mesh setting is not preserved")
             }
@@ -98,6 +103,66 @@ pub(crate) fn audit(source: &str, path: &Path) -> Vec<SetupImportIssue> {
     issues
 }
 
+fn check_contact_pair(
+    header: &str,
+    rows: &[&str],
+    mesh: &FemMesh,
+    names: &mut HashSet<String>,
+) -> Option<&'static str> {
+    let mut fields = HashSet::new();
+    if header
+        .split(',')
+        .skip(1)
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .any(|field| {
+            field.split_once('=').is_none_or(|(key, _)| {
+                let key = key.trim().to_ascii_uppercase();
+                !matches!(key.as_str(), "NAME" | "TYPE") || !fields.insert(key)
+            })
+        })
+    {
+        return Some("Unsupported or repeated contact pair parameters");
+    }
+    let name = super::keyword_parameter(header, "NAME").unwrap_or_default();
+    let kind = super::keyword_parameter(header, "TYPE").map(|value| value.to_ascii_uppercase());
+    if name.is_empty() || !names.insert(name.to_ascii_uppercase()) {
+        return Some("A contact pair must have a unique non-empty name");
+    }
+    if !matches!(kind.as_deref(), None | Some("NODE-SURF" | "SURF-SURF")) {
+        return Some("Unsupported contact pair TYPE");
+    }
+    let [row] = rows else {
+        return Some("Only one slave/master row per contact pair can be preserved");
+    };
+    let row = row.split('#').next().unwrap_or("");
+    let fields: Vec<_> = row
+        .trim()
+        .trim_end_matches(',')
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let [slave, master] = fields.as_slice() else {
+        return Some("Expected slave and master group names on the contact pair data row");
+    };
+    let surface_exists = |name: &str| {
+        mesh.surface_sets
+            .iter()
+            .any(|group| group.name.eq_ignore_ascii_case(name) && !group.surfaces.is_empty())
+    };
+    let slave_exists = if kind.as_deref() == Some("SURF-SURF") {
+        surface_exists(slave)
+    } else {
+        mesh.node_sets
+            .iter()
+            .any(|group| group.name.eq_ignore_ascii_case(slave) && !group.nodes.is_empty())
+    };
+    if !slave_exists || !surface_exists(master) {
+        return Some("The contact pair references a missing or empty slave/master group");
+    }
+    None
+}
+
 fn data_rows<'a>(
     lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, &'a str)>>,
 ) -> Vec<&'a str> {
@@ -138,22 +203,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn blocks_multiple_rows_and_unresolved_contact_group() {
+        let mesh = FemMesh::demo_hex8();
+        for (rows, reason) in [
+            ("slave,master\nslave2,master2", "one slave/master row"),
+            ("slave,master", "missing or empty"),
+        ] {
+            let input = format!("!CONTACT PAIR,NAME=CP\n{rows}\n!END\n");
+            let issues = audit(&input, Path::new("project.msh"), &mesh);
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].line, 1);
+            assert!(issues[0].message.contains(reason));
+        }
+    }
+
+    #[test]
     fn material_validation_and_import_skip_the_same_comments() {
         let source = "!MATERIAL, NAME=STEEL, ITEM=2\n!ITEM=1,SUBITEM=2\n!! Elastic constants\n210000,0.3\n!ITEM=2\n# Density\n7.85e-9\n";
-        assert!(audit(source, Path::new("project.msh")).is_empty());
+        assert!(audit(source, Path::new("project.msh"), &FemMesh::demo_hex8()).is_empty());
         let (materials, _) = crate::parse_msh_setup(source, 0);
         assert_eq!(materials[0].young_modulus, Some(210000.0));
         assert_eq!(materials[0].poisson_ratio, Some(0.3));
         assert_eq!(materials[0].density, Some(7.85e-9));
 
         let wrong_item_width = source.replace("!ITEM=1,SUBITEM=2", "!ITEM=1");
-        assert_eq!(audit(&wrong_item_width, Path::new("project.msh")).len(), 1);
+        assert_eq!(
+            audit(
+                &wrong_item_width,
+                Path::new("project.msh"),
+                &FemMesh::demo_hex8()
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn blocks_temperature_tables_without_blocking_constant_materials() {
         let source = "!MATERIAL, NAME=STEEL, ITEM=2\n!ITEM=1,SUBITEM=2\n210000,0.3,0\n190000,0.29,100\n!ITEM=2\n7.85e-9\n!SECTION,TYPE=SOLID,EGRP=ALL,MATERIAL=STEEL\n1.0\n";
-        let issues = audit(source, Path::new("project.msh"));
+        let issues = audit(source, Path::new("project.msh"), &FemMesh::demo_hex8());
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].line, 2);
         assert!(issues[0].message.contains("temperature"));
