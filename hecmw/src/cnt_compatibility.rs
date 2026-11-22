@@ -176,8 +176,8 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 .join(", ")
         ));
     }
-    let value = |key: &str| h.params.get(key).map(|v| v.to_ascii_uppercase());
-    let is = |key: &str, expected: &str| value(key).as_deref() == Some(expected);
+    let value = |key: &str| parameter_value(h, key);
+    let is = |key: &str, expected: &str| parameter_is(h, key, expected);
     let reason = match name {
         "SOLUTION" => {
             if !matches!(
@@ -200,101 +200,8 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 None
             }
         }
-        "SOLVER" => {
-            let solver = data.solver.clone().unwrap_or_else(SolverSettings::default);
-            if !matches!(
-                value("METHOD").as_deref(),
-                Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
-            ) {
-                Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
-            } else if !solver.solver_method.is_iterative() && body.is_empty() {
-                if h.params.contains_key("PRECOND")
-                    || ["ITERLOG", "TIMELOG"].into_iter().any(|key| {
-                        !matches!(value(key).as_deref(), None | Some("YES" | "NO"))
-                    })
-                {
-                    Some("Direct solver export supports ITERLOG and TIMELOG with YES or NO")
-                } else {
-                    None
-                }
-            } else if !matches!(value("PRECOND").as_deref(), Some("1" | "2" | "3"))
-                || !is("ITERLOG", "YES") || !is("TIMELOG", "YES")
-            {
-                Some(
-                    "Only explicit PRECOND=1, 2 or 3 with ITERLOG=YES and TIMELOG=YES is preserved",
-                )
-            } else if solver.max_iterations == 0
-                || solver.max_iterations > i32::MAX as u32
-                || solver.preconditioner_iterations == 0
-                || solver.preconditioner_iterations > i32::MAX as u32
-                || !solver.convergence_tol.is_finite()
-                || solver.convergence_tol <= 0.0
-            {
-                Some("Linear iterations/tolerance must be valid positive values")
-            } else if body.len() != 2
-                || !body[0].split(',').map(|field| field.trim().parse::<u32>().ok())
-                    .eq([Some(solver.max_iterations), Some(solver.preconditioner_iterations)])
-                || !numbers(body[1], &[solver.convergence_tol, 1.0, 0.0])
-            {
-                Some(
-                    "Only NITER, iterPREmax and RESID with SIGMA_DIAG=1 and OMEGA=0 are currently preserved; missing/extra options remain blocked",
-                )
-            } else {
-                None
-            }
-        }
-        "STEP" => {
-            let solver = data.solver.clone().unwrap_or_default();
-            let valid_integer = |key: &str| {
-                h.params.get(key).is_none_or(|s| {
-                    s.parse::<u32>()
-                        .ok()
-                        .is_some_and(|v| v > 0 && v <= i32::MAX as u32)
-                })
-            };
-            let valid_tol = h.params.get("CONVERG").is_none_or(|s| {
-                s.parse::<f32>()
-                    .ok()
-                    .is_some_and(|v| v.is_finite() && v > 0.0)
-            });
-            let mut expected = Vec::new();
-            if !data.boundary_conditions.is_empty() {
-                expected.push("BOUNDARY,1".to_string());
-            }
-            if !data.nodal_loads.is_empty() || !data.distributed_loads.is_empty() {
-                expected.push("LOAD,1".to_string());
-            }
-            let groups: HashSet<_> = data
-                .contact_settings
-                .iter()
-                .map(|contact| contact.group_id)
-                .collect();
-            expected.extend(groups.into_iter().map(|group| format!("CONTACT,{group}")));
-            let mut actual: Vec<_> = body
-                .iter()
-                .map(|row| {
-                    row.split(',')
-                        .map(|s| s.trim().to_ascii_uppercase())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                })
-                .collect();
-            expected.sort();
-            actual.sort();
-            if solver.analysis_type != AnalysisType::NlStatic
-                || (h.params.contains_key("TYPE") && !is("TYPE", "STATIC"))
-                || (h.params.contains_key("INC_TYPE") && !is("INC_TYPE", "FIXED"))
-                || expected != actual
-            {
-                Some(
-                    "Only one fixed-increment nonlinear static STEP activating all boundary, load and contact groups is supported",
-                )
-            } else if !valid_integer("SUBSTEPS") || !valid_integer("MAXITER") || !valid_tol {
-                Some("STEP substeps/iterations/tolerance must be valid positive values")
-            } else {
-                None
-            }
-        }
+        "SOLVER" => check_solver(h, body, data),
+        "STEP" => check_step(h, body, data),
         "STATIC" if body.len() != 1 || !numbers(body[0], &[1.0, 1.0]) => {
             Some("Static increment/time settings are not preserved (writer uses 1, 1)")
         }
@@ -312,9 +219,9 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "VERSION" if body.len() != 1 || !numbers(body[0], &[3.0]) => {
             Some("Only VERSION 3 is emitted")
         }
-        "BOUNDARY" | "CLOAD" | "DLOAD" if value("GRPID").is_some_and(|group| group != "1") => {
-            Some("Only GRPID=1 (including the FrontISTR default) is preserved for boundary/load groups")
-        }
+        "BOUNDARY" | "CLOAD" | "DLOAD" if value("GRPID").is_some_and(|group| group != "1") => Some(
+            "Only GRPID=1 (including the FrontISTR default) is preserved for boundary/load groups",
+        ),
         "BOUNDARY" | "CLOAD"
             if body.is_empty()
                 || body.iter().any(|row| {
@@ -390,51 +297,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         {
             Some("Distributed load row is incomplete or its target cannot be resolved")
         }
-        "CONTACT" => {
-            let interaction = value("INTERACTION");
-            let tied = interaction.as_deref() == Some("TIED");
-            let valid_group = h
-                .params
-                .get("GRPID")
-                .is_none_or(|group| group.parse::<i32>().is_ok_and(|group| group > 0));
-            let nonlinear = data
-                .solver
-                .as_ref()
-                .is_some_and(|s| s.analysis_type == AnalysisType::NlStatic);
-            if !nonlinear
-                || !valid_group
-                || !matches!(
-                    interaction.as_deref(),
-                    None | Some("SSLID" | "FSLID" | "TIED")
-                )
-            {
-                Some(
-                    "Contact requires nonlinear static analysis, a positive GRPID and SSLID, FSLID or TIED",
-                )
-            } else if body.is_empty()
-                || body.iter().any(|row| {
-                    let fields: Vec<_> = row.split(',').map(str::trim).collect();
-                    fields[0].is_empty()
-                        || if tied {
-                            fields.len() != 1
-                        } else {
-                            fields.len() > 3
-                                || fields.get(1).is_some_and(|v| {
-                                    !v.parse::<f32>().is_ok_and(|v| v.is_finite() && v >= 0.0)
-                                })
-                                || fields.get(2).is_some_and(|v| {
-                                    !v.parse::<f32>().is_ok_and(|v| v.is_finite() && v > 0.0)
-                                })
-                        }
-                })
-            {
-                Some(
-                    "Unsupported contact data; use a pair name and optional friction coefficient and positive friction penalty for sliding",
-                )
-            } else {
-                None
-            }
-        }
+        "CONTACT" => check_contact(h, body, data),
         "CONTACT_ALGO"
             if !is("TYPE", "ALAGRANGE") || !body.is_empty() || data.contact_settings.is_empty() =>
         {
@@ -470,12 +333,173 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 super::write_settings::parse(h).err()
             }
         }
-        "MATERIAL" | "END" if !body.is_empty() => {
-            Some("Unexpected data would be omitted")
-        }
+        "MATERIAL" | "END" if !body.is_empty() => Some("Unexpected data would be omitted"),
         _ => None,
     };
     reason.map(str::to_string)
+}
+
+fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
+    let defaults = SolverSettings::default();
+    let solver = data.solver.as_ref().unwrap_or(&defaults);
+    if !matches!(
+        parameter_value(h, "METHOD").as_deref(),
+        Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
+    ) {
+        Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
+    } else if !solver.solver_method.is_iterative() && body.is_empty() {
+        if h.params.contains_key("PRECOND")
+            || ["ITERLOG", "TIMELOG"].into_iter().any(|key| {
+                !matches!(
+                    parameter_value(h, key).as_deref(),
+                    None | Some("YES" | "NO")
+                )
+            })
+        {
+            Some("Direct solver export supports ITERLOG and TIMELOG with YES or NO")
+        } else {
+            None
+        }
+    } else if !matches!(
+        parameter_value(h, "PRECOND").as_deref(),
+        Some("1" | "2" | "3")
+    ) || !parameter_is(h, "ITERLOG", "YES")
+        || !parameter_is(h, "TIMELOG", "YES")
+    {
+        Some("Only explicit PRECOND=1, 2 or 3 with ITERLOG=YES and TIMELOG=YES is preserved")
+    } else if solver.max_iterations == 0
+        || solver.max_iterations > i32::MAX as u32
+        || solver.preconditioner_iterations == 0
+        || solver.preconditioner_iterations > i32::MAX as u32
+        || !solver.convergence_tol.is_finite()
+        || solver.convergence_tol <= 0.0
+    {
+        Some("Linear iterations/tolerance must be valid positive values")
+    } else if body.len() != 2
+        || !body[0]
+            .split(',')
+            .map(|field| field.trim().parse::<u32>().ok())
+            .eq([
+                Some(solver.max_iterations),
+                Some(solver.preconditioner_iterations),
+            ])
+        || !numbers(body[1], &[solver.convergence_tol, 1.0, 0.0])
+    {
+        Some(
+            "Only NITER, iterPREmax and RESID with SIGMA_DIAG=1 and OMEGA=0 are currently preserved; missing/extra options remain blocked",
+        )
+    } else {
+        None
+    }
+}
+
+fn check_step(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
+    let analysis = data.solver.as_ref().map(|solver| solver.analysis_type);
+    let valid_integer = |key: &str| {
+        h.params.get(key).is_none_or(|s| {
+            s.parse::<u32>()
+                .ok()
+                .is_some_and(|v| v > 0 && v <= i32::MAX as u32)
+        })
+    };
+    let valid_tol = h.params.get("CONVERG").is_none_or(|s| {
+        s.parse::<f32>()
+            .ok()
+            .is_some_and(|v| v.is_finite() && v > 0.0)
+    });
+    let mut expected = Vec::new();
+    if !data.boundary_conditions.is_empty() {
+        expected.push("BOUNDARY,1".to_string());
+    }
+    if !data.nodal_loads.is_empty() || !data.distributed_loads.is_empty() {
+        expected.push("LOAD,1".to_string());
+    }
+    let groups: HashSet<_> = data
+        .contact_settings
+        .iter()
+        .map(|contact| contact.group_id)
+        .collect();
+    expected.extend(groups.into_iter().map(|group| format!("CONTACT,{group}")));
+    let mut actual: Vec<_> = body
+        .iter()
+        .map(|row| {
+            row.split(',')
+                .map(|s| s.trim().to_ascii_uppercase())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect();
+    expected.sort();
+    actual.sort();
+    if analysis != Some(AnalysisType::NlStatic)
+        || (h.params.contains_key("TYPE") && !parameter_is(h, "TYPE", "STATIC"))
+        || (h.params.contains_key("INC_TYPE") && !parameter_is(h, "INC_TYPE", "FIXED"))
+        || expected != actual
+    {
+        Some(
+            "Only one fixed-increment nonlinear static STEP activating all boundary, load and contact groups is supported",
+        )
+    } else if !valid_integer("SUBSTEPS") || !valid_integer("MAXITER") || !valid_tol {
+        Some("STEP substeps/iterations/tolerance must be valid positive values")
+    } else {
+        None
+    }
+}
+
+fn check_contact(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
+    let interaction = parameter_value(h, "INTERACTION");
+    let tied = interaction.as_deref() == Some("TIED");
+    let valid_group = h
+        .params
+        .get("GRPID")
+        .is_none_or(|group| group.parse::<i32>().is_ok_and(|group| group > 0));
+    let nonlinear = data
+        .solver
+        .as_ref()
+        .is_some_and(|s| s.analysis_type == AnalysisType::NlStatic);
+    if !nonlinear
+        || !valid_group
+        || !matches!(
+            interaction.as_deref(),
+            None | Some("SSLID" | "FSLID" | "TIED")
+        )
+    {
+        Some(
+            "Contact requires nonlinear static analysis, a positive GRPID and SSLID, FSLID or TIED",
+        )
+    } else if body.is_empty()
+        || body.iter().any(|row| {
+            let fields: Vec<_> = row.split(',').map(str::trim).collect();
+            fields[0].is_empty()
+                || if tied {
+                    fields.len() != 1
+                } else {
+                    fields.len() > 3
+                        || fields.get(1).is_some_and(|v| {
+                            !v.parse::<f32>().is_ok_and(|v| v.is_finite() && v >= 0.0)
+                        })
+                        || fields.get(2).is_some_and(|v| {
+                            !v.parse::<f32>().is_ok_and(|v| v.is_finite() && v > 0.0)
+                        })
+                }
+        })
+    {
+        Some(
+            "Unsupported contact data; use a pair name and optional friction coefficient and positive friction penalty for sliding",
+        )
+    } else {
+        None
+    }
+}
+
+fn parameter_value(h: &KeywordHeader, key: &str) -> Option<String> {
+    h.params.get(key).map(|value| value.to_ascii_uppercase())
+}
+
+fn parameter_is(h: &KeywordHeader, key: &str, expected: &str) -> bool {
+    h.params
+        .get(key)
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
 fn numbers(row: &str, expected: &[f32]) -> bool {
@@ -673,12 +697,21 @@ mod tests {
             data.merge_into(&mut setup);
             assert_eq!(setup.solver.preconditioner, 3);
             assert_eq!(setup.output.label(fem_core::OutputTarget::Vis), label);
-            assert!(setup.output.vis.set(fem_core::OutputTarget::Vis, "NSTRESS", Some(true)));
+            assert!(
+                setup
+                    .output
+                    .vis
+                    .set(fem_core::OutputTarget::Vis, "NSTRESS", Some(true))
+            );
             let written = crate::cnt_writer::build_cnt(&setup, &[]);
             assert!(written.contains("PRECOND=3"));
             assert!(written.contains(&visual));
             let reloaded = read(&written);
-            assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+            assert!(
+                reloaded.import_issues.is_empty(),
+                "{:?}",
+                reloaded.import_issues
+            );
             assert_eq!(reloaded.output, setup.output);
             assert_eq!(reloaded.solver.as_ref(), Some(&setup.solver));
         }
@@ -695,7 +728,12 @@ mod tests {
             "!output_type=VTK\n!RESTART, READ",
             "!output_type=VTK\n!UNKNOWN_VISUAL=1",
         ] {
-            assert!(!read(&format!("{prefix}{options}\n!END\n")).import_issues.is_empty(), "{options}");
+            assert!(
+                !read(&format!("{prefix}{options}\n!END\n"))
+                    .import_issues
+                    .is_empty(),
+                "{options}"
+            );
         }
         assert!(!read("!surface_num=1\n!END\n").import_issues.is_empty());
     }

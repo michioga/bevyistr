@@ -1,32 +1,29 @@
-//! File-dialog and FrontISTR project loading/export systems.
-//!
-//! Keeping these systems outside `layout` prevents the sidebar tree builder
-//! from also becoming the owner of mesh parsing, project transactions, and
-//! export validation.
+//! FrontISTR file controls, export status, and camera updates after loading.
 
-use crate::{ButtonInteraction, InteractionButton};
-use bevy::{
-    feathers::controls::{
-        FeathersNumberInput, HardLimit, NumberInputPrecision, NumberInputRange, NumberInputStep,
-        NumberInputValue,
-    },
-    prelude::*,
-    ui_widgets::ValueChange,
+mod import;
+mod step_mesh;
+
+pub use import::StartupInput;
+pub(crate) use import::{
+    OpenSetupButton, apply_pending_cnt_system, mesh_load_system, open_project_button_system,
+    open_setup_button_system, queue_startup_input,
 };
-use camera::OrbitCamera;
-use fem_core::{ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
-use gmsh::StepMeshOptions;
-use std::path::{Path, PathBuf};
-use visualization::VisualizationSettings;
+#[cfg(test)]
+pub(crate) use import::{apply_mesh, merge_mesh_contact_pairs};
+#[cfg(test)]
+pub(crate) use step_mesh::SaveStepMeshControls;
+pub(crate) use step_mesh::{StepMeshSettings, save_step_mesh_button_system};
 
 use crate::{
-    assembly::AssemblyEditorState,
-    solver_runner::FrontistrRunState,
-    step_import::{StepImport, StepSource, StepWidget, spawn_step_import_ui},
+    ButtonInteraction, InteractionButton, solver_runner::FrontistrRunState, step_import::StepWidget,
 };
-
-const DEFAULT_STEP_CURVE_RESOLUTION: i32 = StepMeshOptions::DEFAULT_ELEMENTS_PER_TURN as i32;
-const MAX_STEP_CURVE_RESOLUTION: i32 = 100;
+use bevy::prelude::*;
+use camera::OrbitCamera;
+use fem_core::{FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus};
+use import::OpenProjectButton;
+use std::path::{Path, PathBuf};
+use step_mesh::{is_step, spawn_step_mesh_ui};
+use visualization::VisualizationSettings;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -41,108 +38,6 @@ pub(crate) struct OpenMeshButton;
 #[derive(Component)]
 pub(crate) struct AddMeshButton;
 
-/// Initial input requested by the application's command line.
-#[derive(Resource)]
-pub struct StartupInput(pub PathBuf);
-
-pub(crate) fn queue_startup_input(
-    input: Option<Res<StartupInput>>,
-    mut request: ResMut<MeshLoadRequest>,
-    mut load_status: ResMut<MeshLoadStatus>,
-    mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
-    version: Res<FemModelVersion>,
-    mut run_state: ResMut<FrontistrRunState>,
-) {
-    let Some(input) = input else { return };
-    let path = input.0.clone();
-    if path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("dat"))
-    {
-        queue_project_input(
-            path,
-            &mut request,
-            &mut load_status,
-            &mut pending_cnt,
-            version.value,
-            &mut run_state,
-        );
-    } else {
-        request.request(path);
-    }
-}
-
-fn queue_project_input(
-    ctrl_path: PathBuf,
-    request: &mut MeshLoadRequest,
-    load_status: &mut MeshLoadStatus,
-    pending_cnt: &mut fem_core::PendingCntLoad,
-    version: u64,
-    run_state: &mut FrontistrRunState,
-) {
-    let mut content = match hecmw::load_hecmw_ctrl(&ctrl_path) {
-        Ok(content) => content,
-        Err(error) => {
-            load_status.failed(
-                ctrl_path,
-                format!("Could not read project control: {error}"),
-            );
-            return;
-        }
-    };
-    let (Some(mesh_path), Some(cnt_path)) = hecmw::resolve_paths(&ctrl_path, &content) else {
-        load_status.failed(
-            ctrl_path,
-            "Project mesh or analysis control file was not found",
-        );
-        return;
-    };
-    let partition = if content.has_partition_input {
-        let path = ctrl_path.with_file_name("hecmw_part_ctrl.dat");
-        match hecmw::partition_control::load(&path) {
-            Ok(partition) => {
-                run_state.use_imported_ranks(partition.domains.get());
-                Some(partition)
-            }
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound
-                    && content.distributed_mesh_path.is_none() =>
-            {
-                None
-            }
-            Err(error) => {
-                content.import_issues.push(fem_core::SetupImportIssue {
-                    source: path.display().to_string(),
-                    line: 1,
-                    keyword: "!PARTITION".into(),
-                    message: error.to_string(),
-                });
-                None
-            }
-        }
-    } else {
-        None
-    };
-    run_state.clear_export_target();
-    load_status.loading(mesh_path.clone());
-    request.request(mesh_path);
-    pending_cnt.request(cnt_path, 0, version);
-    pending_cnt.project_control = Some(fem_core::FrontistrControlImport {
-        control: content.settings,
-        partition,
-        issues: content.import_issues,
-    });
-}
-
-/// Opens `hecmw_ctrl.dat`, reads mesh/cnt stems, and loads both files in
-/// one click — the "Open Project" shortcut.
-#[derive(Component)]
-pub(crate) struct OpenProjectButton;
-
-#[derive(Component)]
-pub(crate) struct OpenSetupButton;
-
 #[derive(Component)]
 pub(crate) struct ExportButton;
 
@@ -151,67 +46,6 @@ pub(crate) struct ExportStatusText;
 
 #[derive(Component)]
 pub(crate) struct MeshStatsText;
-
-#[derive(Resource, Default)]
-pub(crate) struct StepMeshSettings {
-    pub(crate) options: StepMeshOptions,
-}
-
-#[derive(Component)]
-struct StepMeshSize;
-
-#[derive(Component)]
-struct StepCurveResolution;
-
-#[derive(Component)]
-pub(crate) struct SaveStepMeshButton;
-
-#[derive(Component)]
-pub(crate) struct SaveStepMeshControls;
-
-#[derive(Component)]
-pub(crate) struct SaveStepMeshStatus;
-
-fn is_step(path: &Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("step") || extension.eq_ignore_ascii_case("stp")
-    })
-}
-
-fn update_step_mesh_size(
-    change: On<ValueChange<f32>>,
-    inputs: Query<&NumberInputValue, With<StepMeshSize>>,
-    mut settings: ResMut<StepMeshSettings>,
-    mut commands: Commands,
-) {
-    let Ok(displayed) = inputs.get(change.source) else {
-        return;
-    };
-    if change.value.is_finite() && change.value >= 0.0 {
-        settings.options.max_size_mm = (change.value > 0.0).then_some(change.value);
-        let value = NumberInputValue::F32(change.value);
-        if *displayed != value {
-            commands.entity(change.source).insert(value);
-        }
-    }
-}
-
-fn update_step_curve_resolution(
-    change: On<ValueChange<i32>>,
-    inputs: Query<&NumberInputValue, With<StepCurveResolution>>,
-    mut settings: ResMut<StepMeshSettings>,
-    mut commands: Commands,
-) {
-    let Ok(displayed) = inputs.get(change.source) else {
-        return;
-    };
-    let resolution = change.value.clamp(0, MAX_STEP_CURVE_RESOLUTION);
-    settings.options.elements_per_turn = resolution as u32;
-    let value = NumberInputValue::I32(resolution);
-    if *displayed != value {
-        commands.entity(change.source).insert(value);
-    }
-}
 
 pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
     parent
@@ -271,96 +105,7 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
             ));
         });
 
-    parent
-        .spawn(Node {
-            align_items: AlignItems::Center,
-            column_gap: px(6),
-            ..default()
-        })
-        .with_children(|row| {
-            row.spawn((
-                Text::new("STEP max size (mm)\n0 = automatic limit"),
-                TextFont { font_size: FontSize::Px(10.0), ..default() },
-                TextColor(TEXT_MUTED),
-            ));
-            let row_entity = row.target_entity();
-            row.commands()
-                .queue_spawn_scene(bsn! {
-                    @FeathersNumberInput
-                    NumberInputValue::F32(0.0)
-                    HardLimit(NumberInputRange::F32(0.0..=f32::MAX))
-                    NumberInputPrecision(4)
-                    NumberInputStep(0.1)
-                    Node { width: px(86) }
-                })
-                .insert((ChildOf(row_entity), StepMeshSize, Name::new("STEP maximum element size in mm")))
-                .observe(update_step_mesh_size);
-        });
-
-    parent
-        .spawn(Node {
-            align_items: AlignItems::Center,
-            column_gap: px(6),
-            ..default()
-        })
-        .with_children(|row| {
-            row.spawn((
-                Text::new("STEP curve resolution\nElements per full turn\n0 = off / 20 = default"),
-                TextFont { font_size: FontSize::Px(10.0), ..default() },
-                TextColor(TEXT_MUTED),
-            ));
-            let row_entity = row.target_entity();
-            row.commands()
-                .queue_spawn_scene(bsn! {
-                    @FeathersNumberInput
-                    NumberInputValue::I32(DEFAULT_STEP_CURVE_RESOLUTION)
-                    HardLimit(NumberInputRange::I32(0..=MAX_STEP_CURVE_RESOLUTION))
-                    NumberInputStep(1.0)
-                    Node { width: px(86) }
-                })
-                .insert((ChildOf(row_entity), StepCurveResolution, Name::new("STEP elements per turn")))
-                .observe(update_step_curve_resolution);
-        });
-
-    spawn_step_import_ui(parent);
-
-    parent
-        .spawn((
-            SaveStepMeshControls,
-            Node {
-                display: Display::None,
-                flex_direction: FlexDirection::Column,
-                row_gap: px(3),
-                ..default()
-            },
-        ))
-        .with_children(|controls| {
-            controls
-                .spawn((
-                    InteractionButton,
-                    SaveStepMeshButton,
-                    Node {
-                        padding: UiRect::axes(px(8), px(4)),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(px(5)),
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    },
-                    BackgroundColor(BUTTON_NORMAL),
-                    BorderColor::all(PANEL_BORDER),
-                ))
-                .with_child((
-                    Text::new("Save FrontISTR Mesh (.msh)..."),
-                    TextFont { font_size: FontSize::Px(10.5), ..default() },
-                    TextColor(TEXT_MAIN),
-                ));
-            controls.spawn((
-                SaveStepMeshStatus,
-                Text::default(),
-                TextFont { font_size: FontSize::Px(10.0), ..default() },
-                TextColor(TEXT_MUTED),
-            ));
-        });
+    spawn_step_mesh_ui(parent);
 
     parent.spawn((
         Text::new("No mesh loaded"),
@@ -436,26 +181,36 @@ impl CameraFitRequest {
     }
 }
 
+fn pick_mesh_file(title: &str) -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title(title)
+        .add_filter(
+            "All supported meshes and CAD",
+            &["msh", "geo", "inp", "step", "stp"],
+        )
+        .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
+        .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
+        .add_filter("Gmsh geometry (.geo)", &["geo"])
+        .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
+        .pick_file()
+}
+
 pub(crate) fn open_mesh_button_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
     mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
+        (
+            Ref<ButtonInteraction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
         With<OpenMeshButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_title("Open Model")
-                .add_filter("All supported meshes and CAD", &["msh", "geo", "inp", "step", "stp"])
-                .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
-                .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
-                .add_filter("Gmsh geometry (.geo)", &["geo"])
-                .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
-                .pick_file()
-            {
+            if let Some(path) = pick_mesh_file("Open Model") {
                 if !is_step(&path) {
                     run_state.clear_export_target();
                     status.loading(path.clone());
@@ -480,21 +235,17 @@ pub(crate) fn add_mesh_button_system(
     mut request: ResMut<MeshLoadRequest>,
     mut status: ResMut<MeshLoadStatus>,
     mut buttons: Query<
-        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
+        (
+            Ref<ButtonInteraction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
         With<AddMeshButton>,
     >,
 ) {
     for (interaction, mut background, mut border) in &mut buttons {
         if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_title("Add Part")
-                .add_filter("All supported meshes and CAD", &["msh", "geo", "inp", "step", "stp"])
-                .add_filter("STEP solid (.step, .stp)", &["step", "stp"])
-                .add_filter("HECMW / FrontISTR (.msh)", &["msh"])
-                .add_filter("Gmsh geometry (.geo)", &["geo"])
-                .add_filter("Abaqus / CalculiX (.inp)", &["inp"])
-                .pick_file()
-            {
+            if let Some(path) = pick_mesh_file("Add Part") {
                 if !is_step(&path) {
                     status.loading(path.clone());
                 }
@@ -511,343 +262,6 @@ pub(crate) fn add_mesh_button_system(
         *background = BackgroundColor(color);
         *border = BorderColor::all(PANEL_BORDER);
     }
-}
-
-pub(crate) fn save_step_mesh_button_system(
-    model: Option<Res<FemModel>>,
-    step: Res<StepImport>,
-    editor: Res<AssemblyEditorState>,
-    mut controls: Query<&mut Node, With<SaveStepMeshControls>>,
-    mut buttons: Query<(Ref<ButtonInteraction>, &mut BackgroundColor), With<SaveStepMeshButton>>,
-    mut status: Query<&mut Text, With<SaveStepMeshStatus>>,
-) {
-    let Some((part, mesh)) = model.as_deref().and_then(|model| {
-        if step.is_active() {
-            return None;
-        }
-        let part = model.parts.get(editor.selected_part?)?;
-        let mesh = model.meshes.get(part.mesh_index)?;
-        is_step(Path::new(&part.name)).then_some((part, mesh))
-    }) else {
-        for mut control in &mut controls {
-            if control.display != Display::None {
-                control.display = Display::None;
-            }
-        }
-        for mut text in &mut status {
-            if !text.is_empty() {
-                text.clear();
-            }
-        }
-        return;
-    };
-    for mut control in &mut controls {
-        if control.display != Display::Flex {
-            control.display = Display::Flex;
-        }
-    }
-    for (interaction, mut background) in &mut buttons {
-        background.set_if_neq(BackgroundColor(match *interaction {
-            ButtonInteraction::Pressed => BUTTON_PRESSED,
-            ButtonInteraction::Hovered => BUTTON_HOVERED,
-            ButtonInteraction::None => BUTTON_NORMAL,
-        }));
-        if *interaction != ButtonInteraction::Pressed || !interaction.is_changed() {
-            continue;
-        }
-        let name = Path::new(&part.name).with_extension("msh");
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Save FrontISTR mesh geometry and groups")
-            .add_filter("FrontISTR mesh (.msh)", &["msh"])
-            .set_file_name(name.to_string_lossy())
-            .save_file()
-        else {
-            continue;
-        };
-        let message = if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("msh"))
-        {
-            match hecmw::write_msh_geometry_file(&path, mesh) {
-                Ok((nodes, elements)) => {
-                    let file = path.file_name().unwrap_or_default().to_string_lossy();
-                    format!("Saved {file} ({nodes} nodes, {elements} elements)")
-                }
-                Err(error) => format!("Could not save mesh: {error}"),
-            }
-        } else {
-            "Enter a filename ending in .msh.".into()
-        };
-        for mut text in &mut status {
-            **text = message.clone();
-        }
-    }
-}
-
-/// Loads mesh files and runs STEP meshing off the UI thread.
-pub(crate) fn mesh_load_system(
-    mut model: ResMut<FemModel>,
-    mut request: ResMut<MeshLoadRequest>,
-    mut status: ResMut<MeshLoadStatus>,
-    mut version: ResMut<FemModelVersion>,
-    mut camera_fit: ResMut<CameraFitRequest>,
-    mut setup: ResMut<fem_core::AnalysisSetup>,
-    step_settings: Option<Res<StepMeshSettings>>,
-    mut run_state: Option<ResMut<FrontistrRunState>>,
-    mut step: ResMut<StepImport>,
-    pending_cnt: Option<ResMut<fem_core::PendingCntLoad>>,
-) {
-    let options = step_settings
-        .as_deref()
-        .map(|settings| settings.options)
-        .unwrap_or_default();
-
-    let Some((path, import)) = request.take() else {
-        if step.has_action()
-            && let Some((source, mesh)) = step.apply_action(options)
-        {
-            let size = mesh.bounds().map(|(min, max)| max - min);
-            if !source.add_part && let Some(run) = run_state.as_deref_mut() {
-                run.clear_export_target();
-            }
-            apply_mesh(
-                mesh,
-                &source.path,
-                source.add_part,
-                &mut model,
-                &mut status,
-                &mut version,
-                &mut camera_fit,
-                &mut setup,
-            );
-            if let Some(size) = size {
-                status.message = format!(
-                    "STEP meshed | {:.6} x {:.6} x {:.6} mm (X x Y x Z)",
-                    size.x, size.y, size.z
-                );
-            }
-        }
-        if step.is_meshing() {
-            step.poll();
-        }
-        return;
-    };
-
-    // A newer load owns the viewport. A previously queued STEP result cannot
-    // become the preview or change the new model once its task is dropped.
-    step.clear();
-    if is_step(&path) {
-        if let Some(mut pending_cnt) = pending_cnt {
-            // A control file from a superseded project must not attach to the accepted STEP.
-            *pending_cnt = default();
-        }
-        step.start(
-            StepSource { path, add_part: import },
-            options,
-        );
-        return;
-    }
-
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-
-    match ext.as_str() {
-        "geo" => match gmsh::run_gmsh(&path, None) {
-            Ok(mesh) => apply_mesh(
-                mesh,
-                &path,
-                import,
-                &mut model,
-                &mut status,
-                &mut version,
-                &mut camera_fit,
-                &mut setup,
-            ),
-            Err(e) => status.failed(path, e.to_string()),
-        },
-        "inp" => match hecmw::load_inp_file(&path) {
-            Ok(mesh) => apply_mesh(
-                mesh,
-                &path,
-                import,
-                &mut model,
-                &mut status,
-                &mut version,
-                &mut camera_fit,
-                &mut setup,
-            ),
-            Err(e) => status.failed(path, e.to_string()),
-        },
-        _ => match hecmw::load_mesh_project(&path) {
-            Ok(hecmw::HecmwMeshProject {
-                mesh, materials, sections, contacts: contact_pairs, mut equations, import_issues,
-            }) => {
-                let mesh_index = if import { model.meshes.len() } else { 0 };
-                apply_mesh(
-                    mesh,
-                    &path,
-                    import,
-                    &mut model,
-                    &mut status,
-                    &mut version,
-                    &mut camera_fit,
-                    &mut setup,
-                );
-                let loaded_contacts =
-                    merge_mesh_contact_pairs(&mut model, mesh_index, contact_pairs);
-                if loaded_contacts > 0 {
-                    bevy::log::info!(
-                        "Loaded {loaded_contacts} contact pair(s) from {:?}",
-                        path.file_name()
-                    );
-                }
-
-                let mut changed = false;
-                for material in materials {
-                    if setup.material_by_name(&material.name).is_none() {
-                        setup.materials.push(material);
-                        changed = true;
-                    }
-                }
-                for section in sections {
-                    setup.sections.push(section);
-                    changed = true;
-                }
-                for equation in &mut equations {
-                    for term in &mut equation.terms {
-                        term.mesh_index = mesh_index;
-                    }
-                }
-                if !equations.is_empty() {
-                    setup.mpc_equations.extend(equations);
-                    changed = true;
-                }
-                if !import_issues.is_empty() {
-                    setup.import_issues.extend(import_issues);
-                    changed = true;
-                }
-                if changed {
-                    setup.set_changed();
-                }
-            }
-            Err(_) => match gmsh::load_msh_file(&path) {
-                Ok(mesh) => apply_mesh(
-                    mesh,
-                    &path,
-                    import,
-                    &mut model,
-                    &mut status,
-                    &mut version,
-                    &mut camera_fit,
-                    &mut setup,
-                ),
-                Err(e) => status.failed(path, e.to_string()),
-            },
-        },
-    }
-}
-
-pub(crate) fn merge_mesh_contact_pairs(
-    model: &mut FemModel,
-    mesh_index: usize,
-    definitions: Vec<hecmw::HecmwContactPairDefinition>,
-) -> usize {
-    let Some(mesh) = model.meshes.get(mesh_index) else {
-        return 0;
-    };
-    let mut resolved = Vec::new();
-
-    for definition in definitions {
-        let master = mesh.surface_sets.iter().position(|set| {
-            set.name
-                .eq_ignore_ascii_case(&definition.master_surface_name)
-        });
-        let Some(master) = master else {
-            bevy::log::warn!(
-                "Contact pair '{}' refers to missing master surface '{}'",
-                definition.name,
-                definition.master_surface_name
-            );
-            continue;
-        };
-
-        let master = fem_core::SurfaceSetRef::new(mesh_index, master);
-        let contact =
-            match definition.pair_type {
-                hecmw::HecmwContactPairType::NodeSurface => {
-                    let Some(slave) = mesh.node_sets.iter().position(|set| {
-                        set.name.eq_ignore_ascii_case(&definition.slave_group_name)
-                    }) else {
-                        bevy::log::warn!(
-                            "Contact pair '{}' refers to missing slave node group '{}'",
-                            definition.name,
-                            definition.slave_group_name
-                        );
-                        continue;
-                    };
-                    fem_core::ContactPair::new_node_surface(
-                        definition.name,
-                        master,
-                        fem_core::NodeSetRef::new(mesh_index, slave),
-                        ContactType::SmallSliding,
-                    )
-                }
-                hecmw::HecmwContactPairType::SurfaceSurface => {
-                    let Some(slave) = mesh.surface_sets.iter().position(|set| {
-                        set.name.eq_ignore_ascii_case(&definition.slave_group_name)
-                    }) else {
-                        bevy::log::warn!(
-                            "Contact pair '{}' refers to missing slave surface '{}'",
-                            definition.name,
-                            definition.slave_group_name
-                        );
-                        continue;
-                    };
-                    fem_core::ContactPair::new(
-                        definition.name,
-                        master,
-                        fem_core::SurfaceSetRef::new(mesh_index, slave),
-                        ContactType::SmallSliding,
-                    )
-                }
-            };
-        resolved.push(contact);
-    }
-
-    let count = resolved.len();
-    model.contacts.extend(resolved);
-    count
-}
-
-pub(crate) fn apply_mesh(
-    mesh: fem_core::FemMesh,
-    path: &std::path::PathBuf,
-    import: bool,
-    model: &mut FemModel,
-    status: &mut MeshLoadStatus,
-    version: &mut FemModelVersion,
-    camera_fit: &mut CameraFitRequest,
-    setup: &mut fem_core::AnalysisSetup,
-) {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("mesh")
-        .to_string();
-    if import {
-        model.add_mesh(name, mesh);
-    } else {
-        setup.clear();
-        // Output controls (including imported GROUP references) are project-local.
-        setup.output = fem_core::OutputSettings::default();
-        *model = FemModel::single_mesh(name, mesh);
-    }
-    status.loaded(path.clone());
-    version.bump();
-    camera_fit.request();
 }
 
 /// Recenters and re-scales the orbit camera after a mesh file is loaded.
@@ -870,7 +284,11 @@ pub(crate) fn camera_refit_on_reload(
         return;
     }
 
-    let display_model=result_geometry.as_deref().filter(|g|g.visible).and_then(|g|g.model.as_ref()).or(model.as_deref());
+    let display_model = result_geometry
+        .as_deref()
+        .filter(|g| g.visible)
+        .and_then(|g| g.model.as_ref())
+        .or(model.as_deref());
     let Some((min, max)) = display_model.and_then(FemModel::bounds) else {
         return;
     };
@@ -898,128 +316,17 @@ pub(crate) fn fit_orbit_camera(
     *transform = Transform::from_translation(camera_position).looking_at(focus, Vec3::Y);
 }
 
-/// Opens `hecmw_ctrl.dat` and queues its mesh and control files together.
-pub(crate) fn open_project_button_system(
-    mut request: ResMut<MeshLoadRequest>,
-    mut load_status: ResMut<MeshLoadStatus>,
-    mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
-    version: Res<FemModelVersion>,
-    mut run_state: ResMut<FrontistrRunState>,
-    mut buttons: Query<
-        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
-        With<OpenProjectButton>,
-    >,
-) {
-    for (interaction, mut bg, mut border) in &mut buttons {
-        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
-            let Some(ctrl_path) = rfd::FileDialog::new()
-                .set_title("Open FrontISTR project (hecmw_ctrl.dat)")
-                .add_filter("FrontISTR project", &["dat"])
-                .add_filter("All files", &["*"])
-                .pick_file()
-            else {
-                continue;
-            };
-
-            queue_project_input(
-                ctrl_path,
-                &mut request,
-                &mut load_status,
-                &mut pending_cnt,
-                version.value,
-                &mut run_state,
-            );
-        }
-
-        let color = match *interaction {
-            ButtonInteraction::Pressed => Color::srgb(0.12, 0.44, 0.22),
-            ButtonInteraction::Hovered => Color::srgb(0.14, 0.52, 0.26),
-            ButtonInteraction::None => Color::srgb(0.10, 0.30, 0.18),
-        };
-        *bg = BackgroundColor(color);
-        *border = BorderColor::all(Color::srgb(0.15, 0.46, 0.26));
-    }
-}
-
-/// Applies the `.cnt` queued with an Open Project request after mesh load.
-pub(crate) fn apply_pending_cnt_system(
-    mut model: Option<ResMut<FemModel>>,
-    version: Res<FemModelVersion>,
-    mut pending_cnt: ResMut<fem_core::PendingCntLoad>,
-    mut setup: ResMut<fem_core::AnalysisSetup>,
-) {
-    if pending_cnt.path.is_none() {
-        return;
-    }
-
-    let Some((path, mesh_index)) = pending_cnt.take_if_ready(version.value) else {
-        return;
-    };
-    let Some(model) = model.as_deref_mut() else {
-        return;
-    };
-    let Some(mesh) = model.meshes.get(mesh_index) else {
-        return;
-    };
-
-    if let Some(import) = pending_cnt.project_control.take() {
-        setup.frontistr_control = import.control;
-        setup.frontistr_partition = import.partition;
-        setup.import_issues.extend(import.issues);
-    }
-    match hecmw::load_cnt_file(&path, mesh, mesh_index) {
-        Ok(mut data) => {
-            data.check_contact_references(&model.contacts, &path, true);
-            for issue in &data.import_issues {
-                bevy::log::warn!("Setup import: {issue}; Export/Run blocked (viewing is available)");
-            }
-            let counts = (
-                data.boundary_conditions.len(),
-                data.boundary_conditions
-                    .iter()
-                    .map(|condition| condition.nodes.len())
-                    .sum::<usize>(),
-                data.nodal_loads.len(),
-                data.distributed_loads.len(),
-                data.materials.len(),
-                data.sections.len(),
-                data.contact_settings.len(),
-            );
-            let applied_contacts = data.apply_contact_settings(&mut model.contacts);
-            data.merge_into(&mut setup);
-            setup.set_changed();
-            bevy::log::info!(
-                "Loaded analysis setup from {:?}: {} BCs / {} constrained nodes, {} nodal loads, {} distributed loads, {} materials, {} sections, {applied_contacts}/{} contacts",
-                path.file_name(),
-                counts.0,
-                counts.1,
-                counts.2,
-                counts.3,
-                counts.4,
-                counts.5,
-                counts.6,
-            );
-        }
-        Err(error) => {
-            let issue = fem_core::SetupImportIssue {
-                source: path.display().to_string(),
-                line: 1,
-                keyword: "CNT".into(),
-                message: format!("Cannot load the project's analysis control file: {error}"),
-            };
-            bevy::log::warn!("Setup import: {issue}; Export/Run blocked");
-            setup.import_issues.push(issue);
-        }
-    }
-}
-
 pub(crate) fn export_button_system(
     model: Option<Res<FemModel>>,
     status: Res<MeshLoadStatus>,
     setup: Res<fem_core::AnalysisSetup>,
     mut run_state: ResMut<FrontistrRunState>,
     mut buttons: Query<
-        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
+        (
+            Ref<ButtonInteraction>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
         With<ExportButton>,
     >,
     mut status_query: Query<&mut Text, With<ExportStatusText>>,
@@ -1039,9 +346,9 @@ pub(crate) fn export_button_system(
 
             let stem = crate::run_output::project_stem(status.last_path.as_deref());
             let Some(dir) = crate::run_output::choose_output_directory(
-                &stem, run_state.last_output_directory(),
-            )
-            else {
+                &stem,
+                run_state.last_output_directory(),
+            ) else {
                 continue;
             };
 
@@ -1089,63 +396,6 @@ pub(crate) fn export_button_system(
 fn set_export_status(query: &mut Query<&mut Text, With<ExportStatusText>>, msg: &str) {
     if let Ok(mut text) = query.single_mut() {
         **text = msg.to_string();
-    }
-}
-
-/// Loads a standalone FrontISTR `.cnt` into the current model.
-pub(crate) fn open_setup_button_system(
-    mut pending_path: Local<Option<std::path::PathBuf>>,
-    mut buttons: Query<
-        (Ref<ButtonInteraction>, &mut BackgroundColor, &mut BorderColor),
-        With<OpenSetupButton>,
-    >,
-    mut model: Option<ResMut<FemModel>>,
-    mut setup: ResMut<fem_core::AnalysisSetup>,
-) {
-    for (interaction, mut background, mut border) in &mut buttons {
-        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_title("Open analysis control file")
-                .add_filter("FrontISTR control (.cnt)", &["cnt"])
-                .pick_file()
-            {
-                *pending_path = Some(path);
-            }
-        }
-
-        let color = match *interaction {
-            ButtonInteraction::Pressed => BUTTON_PRESSED,
-            ButtonInteraction::Hovered => BUTTON_HOVERED,
-            ButtonInteraction::None => BUTTON_NORMAL,
-        };
-        *background = BackgroundColor(color);
-        *border = BorderColor::all(PANEL_BORDER);
-    }
-
-    if let Some(path) = pending_path.take() {
-        let Some(model) = model.as_deref_mut() else {
-            return;
-        };
-        let Some(mesh) = model.meshes.first() else {
-            return;
-        };
-
-        match hecmw::load_cnt_file(&path, mesh, 0) {
-            Ok(mut data) => {
-                data.check_contact_references(&model.contacts, &path, false);
-                for issue in &data.import_issues {
-                    bevy::log::warn!("Setup import: {issue}; Export/Run blocked (viewing is available)");
-                }
-                let applied_contacts = data.apply_contact_settings(&mut model.contacts);
-                data.merge_into(&mut setup);
-                setup.set_changed();
-                bevy::log::info!(
-                    "Loaded analysis setup from {:?}; updated {applied_contacts} contact pair(s)",
-                    path.file_name()
-                );
-            }
-            Err(err) => bevy::log::warn!("Failed to load .cnt file: {err}"),
-        }
     }
 }
 
@@ -1235,100 +485,4 @@ fn compact_path(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| path.display().to_string())
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn startup_project_keeps_global_control_and_requires_parallel_input_settings() {
-        let directory = tempfile::tempdir().unwrap();
-        let ctrl = directory.path().join("parallel.dat");
-        std::fs::write(directory.path().join("mesh.msh"), "").unwrap();
-        std::fs::write(directory.path().join("solver.cnt"), "").unwrap();
-        std::fs::write(
-            &ctrl,
-            "!MESH,NAME=part_in,TYPE=HECMW-ENTIRE\nmesh.msh\n\
-             !MESH,NAME=fstrMSH,TYPE=HECMW-DIST\nmesh_dist\n\
-             !CONTROL,NAME=fstrCNT\nsolver.cnt\n\
-             !RESULT,NAME=fstrRES,IO=OUT,TYPE=BINARY\nsolver.res\n",
-        )
-        .unwrap();
-        let mut app = App::new();
-        app.insert_resource(StartupInput(ctrl))
-            .init_resource::<MeshLoadRequest>()
-            .init_resource::<MeshLoadStatus>()
-            .init_resource::<fem_core::PendingCntLoad>()
-            .init_resource::<FemModelVersion>()
-            .init_resource::<FrontistrRunState>()
-            .add_systems(Startup, queue_startup_input);
-        app.update();
-        let request = app.world().resource::<MeshLoadRequest>();
-        assert_eq!(request.path, Some(directory.path().join("mesh.msh")));
-        let pending = app.world().resource::<fem_core::PendingCntLoad>();
-        let import = pending.project_control.as_ref().unwrap();
-        assert_eq!(import.control.binary_result, Some(true));
-        assert_eq!(import.issues.len(), 1);
-        assert!(import.issues[0].source.ends_with("hecmw_part_ctrl.dat"));
-    }
-
-    #[test]
-    fn step_controls_update_job_options_and_displayed_values() {
-        let mut app = App::new();
-        app.init_resource::<StepMeshSettings>();
-        let world = app.world_mut();
-        let max_size = world
-            .spawn((StepMeshSize, NumberInputValue::F32(0.0)))
-            .observe(update_step_mesh_size)
-            .id();
-        let resolution = world
-            .spawn((
-                StepCurveResolution,
-                NumberInputValue::I32(DEFAULT_STEP_CURVE_RESOLUTION),
-            ))
-            .observe(update_step_curve_resolution)
-            .id();
-
-        world.trigger(ValueChange {
-            source: max_size,
-            value: 4.0_f32,
-            is_final: true,
-        });
-        world.trigger(ValueChange {
-            source: resolution,
-            value: 40_i32,
-            is_final: true,
-        });
-        world.flush();
-        assert_eq!(world.get(max_size), Some(&NumberInputValue::F32(4.0)));
-        assert_eq!(world.get(resolution), Some(&NumberInputValue::I32(40)));
-        assert_eq!(
-            world.resource::<StepMeshSettings>().options,
-            StepMeshOptions {
-                max_size_mm: Some(4.0),
-                elements_per_turn: 40,
-            }
-        );
-
-        world.trigger(ValueChange {
-            source: max_size,
-            value: 0.0_f32,
-            is_final: true,
-        });
-        world.trigger(ValueChange {
-            source: resolution,
-            value: 0_i32,
-            is_final: true,
-        });
-        world.flush();
-        assert_eq!(
-            world.resource::<StepMeshSettings>().options,
-            StepMeshOptions {
-                max_size_mm: None,
-                elements_per_turn: 0,
-            }
-        );
-    }
 }
