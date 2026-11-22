@@ -13,7 +13,10 @@ use bevy::prelude::*;
 use fem_core::{
     AnalysisSetup, ContactType, FemModel, FemModelVersion, MeshLoadRequest, MeshLoadStatus,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 /// Opens `hecmw_ctrl.dat`, reads mesh/cnt stems, and loads both files in
 /// one click — the "Open Project" shortcut.
@@ -68,7 +71,10 @@ fn queue_project_input(
         Err(error) => {
             load_status.failed(
                 ctrl_path,
-                format!("Could not read project control: {error}"),
+                format!(
+                    "Could not read project control: {}",
+                    file_io_message(&error)
+                ),
             );
             return;
         }
@@ -98,7 +104,7 @@ fn queue_project_input(
                     source: path.display().to_string(),
                     line: 1,
                     keyword: "!PARTITION".into(),
-                    message: error.to_string(),
+                    message: file_io_message(&error),
                 });
                 None
             }
@@ -217,12 +223,15 @@ pub(crate) fn apply_pending_cnt_system(
                 counts.6,
             );
         }
-        Err(error) => {
+        Err(hecmw::CntError::Io(error)) => {
             let issue = fem_core::SetupImportIssue {
                 source: path.display().to_string(),
                 line: 1,
                 keyword: "CNT".into(),
-                message: format!("Cannot load the project's analysis control file: {error}"),
+                message: format!(
+                    "Cannot load the project's analysis control file: {}",
+                    file_io_message(&error),
+                ),
             };
             bevy::log::warn!("Setup import: {issue}; Export/Run blocked");
             setup.import_issues.push(issue);
@@ -300,6 +309,21 @@ fn merge_analysis_control(
     let applied_contacts = data.apply_contact_settings(&mut model.contacts);
     data.merge_into(setup);
     applied_contacts
+}
+
+// Windows I/O messages follow the OS language, which the UI font may
+// not cover. Keep the error readable and retain the system error number.
+fn file_io_message(error: &io::Error) -> String {
+    let Some(code) = error.raw_os_error() else {
+        return error.to_string();
+    };
+    let message = match error.kind() {
+        io::ErrorKind::NotFound => "File not found",
+        io::ErrorKind::PermissionDenied => "Permission denied",
+        io::ErrorKind::IsADirectory => "Expected a file, found a directory",
+        _ => "File I/O error",
+    };
+    format!("{message} (OS error {code})")
 }
 
 /// Loads mesh files and runs STEP meshing off the UI thread.
@@ -389,7 +413,8 @@ pub(crate) fn mesh_load_system(
                 &mut camera_fit,
                 &mut setup,
             ),
-            Err(e) => status.failed(path, e.to_string()),
+            Err(gmsh::GmshError::Io(error)) => status.failed(path, file_io_message(&error)),
+            Err(error) => status.failed(path, error.to_string()),
         },
         "inp" => match hecmw::load_inp_file(&path) {
             Ok(mesh) => apply_mesh(
@@ -402,7 +427,8 @@ pub(crate) fn mesh_load_system(
                 &mut camera_fit,
                 &mut setup,
             ),
-            Err(e) => status.failed(path, e.to_string()),
+            Err(hecmw::InpError::Io(error)) => status.failed(path, file_io_message(&error)),
+            Err(error) => status.failed(path, error.to_string()),
         },
         _ => match hecmw::load_mesh_project(&path) {
             Ok(hecmw::HecmwMeshProject {
@@ -472,7 +498,8 @@ pub(crate) fn mesh_load_system(
                     &mut camera_fit,
                     &mut setup,
                 ),
-                Err(e) => status.failed(path, e.to_string()),
+                Err(gmsh::GmshError::Io(error)) => status.failed(path, file_io_message(&error)),
+                Err(error) => status.failed(path, error.to_string()),
             },
         },
     }
@@ -581,6 +608,38 @@ pub(crate) fn apply_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_startup_input_has_readable_file_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("release");
+        let code = std::fs::File::open(&path)
+            .unwrap_err()
+            .raw_os_error()
+            .unwrap();
+        let mut app = App::new();
+        app.insert_resource(StartupInput(path.clone()))
+            .insert_resource(FemModel::demo_hex8())
+            .init_resource::<MeshLoadRequest>()
+            .init_resource::<MeshLoadStatus>()
+            .init_resource::<fem_core::PendingCntLoad>()
+            .init_resource::<FemModelVersion>()
+            .init_resource::<FrontistrRunState>()
+            .init_resource::<AnalysisSetup>()
+            .init_resource::<CameraFitRequest>()
+            .init_resource::<StepImport>()
+            .add_systems(Startup, queue_startup_input)
+            .add_systems(Update, mesh_load_system);
+
+        app.update();
+        let status = app.world().resource::<MeshLoadStatus>();
+        assert_eq!(status.last_path.as_deref(), Some(path.as_path()));
+        assert_eq!(
+            super::super::load_status_line(status),
+            format!("File: release  Error: File not found (OS error {code})"),
+        );
+        assert_eq!(app.world().resource::<FemModelVersion>().value, 0);
+    }
 
     #[test]
     fn startup_project_keeps_global_control_and_requires_parallel_input_settings() {
