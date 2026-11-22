@@ -397,11 +397,13 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         assembly::AssemblyEditorState,
         project_io::{SaveStepMeshControls, StepMeshSettings, save_step_mesh_button_system},
         step_import::{StepImportAction, step_action_buttons},
-        step_preview_view::draw_step_preview,
+        step_preview_view::{
+            StepContactHighlight, draw_step_preview, update_step_contact_highlight,
+        },
     };
     use bevy::camera::visibility::RenderLayers;
     use camera::OrbitCamera;
-    use fem_core::MainViewportCamera;
+    use fem_core::{ContactPair, ContactType, MainViewportCamera, SurfaceSetRef};
 
     let input = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -453,6 +455,7 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
                 step_action_buttons,
                 mesh_load_system,
                 draw_step_preview,
+                update_step_contact_highlight,
                 save_step_mesh_button_system,
             )
                 .chain(),
@@ -568,14 +571,61 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         .max_size_mm = Some(4.0);
     click(&mut app, accept);
     assert_eq!(app.world().resource::<FemModelVersion>().value, 0);
+    click(&mut app, retry);
+    wait_until(&mut app, 30, |world| {
+        world.resource::<StepImport>().preview().is_some()
+    });
 
+    let mark_contact_face = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<StepImport>()
+            .toggle_contact_face(Vec3::new(-1.0, 5.0, 3.0), Vec3::X);
+        app.update();
+    };
+    mark_contact_face(&mut app);
+    assert!(
+        app.world()
+            .resource::<StepImport>()
+            .contact_highlight_revision()
+            .is_some()
+    );
+    mark_contact_face(&mut app);
+    assert!(
+        app.world()
+            .resource::<StepImport>()
+            .contact_highlight_revision()
+            .is_none()
+    );
+    mark_contact_face(&mut app);
+    let world = app.world_mut();
+    let mut highlights = world.query_filtered::<&Mesh3d, With<StepContactHighlight>>();
+    let highlight = highlights.single(world).unwrap();
+    let mesh = world.resource::<Assets<Mesh>>().get(&highlight.0).unwrap();
+    assert_eq!(
+        mesh.primitive_topology(),
+        bevy::mesh::PrimitiveTopology::TriangleList
+    );
+    click(&mut app, accept);
+    assert_eq!(app.world().resource::<FemModelVersion>().value, 0);
+
+    let step_path = input.path().join("box.step");
+    let source_bytes = std::fs::read(&step_path).unwrap();
+    std::fs::write(&step_path, "changed after initial preview").unwrap();
     click(&mut app, retry);
     assert!(app.world().resource::<StepImport>().is_meshing());
     wait_until(&mut app, 30, |world| {
         world.resource::<StepImport>().preview().is_some()
     });
+    std::fs::write(&step_path, source_bytes).unwrap();
+    assert!(
+        app.world()
+            .resource::<StepImport>()
+            .contact_highlight_revision()
+            .is_some()
+    );
     click(&mut app, accept);
     assert!(app.world().resource::<StepImport>().preview().is_none());
+    assert_eq!(highlights.iter(app.world()).count(), 0);
     assert_eq!(app.world().resource::<FemModelVersion>().value, 1);
     assert!(app.world().resource::<AnalysisSetup>().materials.is_empty());
     assert_eq!(
@@ -709,13 +759,71 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         assert!(cnt.nodal_loads.iter().all(|load| load.value == NODAL_FORCE));
     }
 
+    let mate_path = input.path().join("mate.step");
+    std::fs::copy(&step_path, &mate_path).unwrap();
     app.world_mut()
         .resource_mut::<MeshLoadRequest>()
-        .request_import(input.path().join("box.step"));
+        .request_import(mate_path);
     wait_until(&mut app, 30, |world| {
         world.resource::<StepImport>().preview().is_some()
     });
     assert_eq!(app.world().resource::<FemModel>().parts.len(), 1);
     click(&mut app, accept);
     assert_eq!(app.world().resource::<FemModel>().parts.len(), 2);
+
+    let mut model = app.world_mut().resource_mut::<FemModel>();
+    let surface_at = |mesh_index, x: f32| {
+        let mesh: &FemMesh = &model.meshes[mesh_index];
+        let group_name = &mesh
+            .node_sets
+            .iter()
+            .find(|group| {
+                !group.nodes.is_empty()
+                    && group
+                        .nodes
+                        .iter()
+                        .all(|node| (mesh.node_position(*node).unwrap().x - x).abs() < 1.0e-5)
+            })
+            .unwrap()
+            .name;
+        let surface_set_index = mesh
+            .surface_sets
+            .iter()
+            .position(|group| group.name == *group_name)
+            .unwrap();
+        SurfaceSetRef {
+            mesh_index,
+            surface_set_index,
+        }
+    };
+    let slave = surface_at(0, 0.0);
+    let master = surface_at(1, 20.0);
+    let slave_group = &model.meshes[0].surface_sets[slave.surface_set_index];
+    let master_group = &model.meshes[1].surface_sets[master.surface_set_index];
+    assert!(slave_group.surfaces.len() > master_group.surfaces.len() * 2);
+    let slave_name = format!("BOX_STEP_{}", slave_group.name);
+    let master_name = format!("MATE_STEP_{}", master_group.name);
+    model.contacts.push(ContactPair::new(
+        "CP_STEP",
+        master,
+        slave,
+        ContactType::SmallSliding,
+    ));
+    let assembly_path = input.path().join("contact.msh");
+    hecmw::write_msh_assembly(&assembly_path, &model).unwrap();
+    let (mesh, _, _, pairs, _) =
+        hecmw::load_mesh_file_with_setup_and_contacts(&assembly_path).unwrap();
+    assert!(
+        mesh.surface_sets
+            .iter()
+            .any(|group| group.name == slave_name)
+    );
+    assert!(
+        mesh.surface_sets
+            .iter()
+            .any(|group| group.name == master_name)
+    );
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].slave_group_name, slave_name);
+    assert_eq!(pairs[0].master_surface_name, master_name);
 }

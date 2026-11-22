@@ -364,7 +364,14 @@ impl Plugin for UiPlugin {
         app.add_systems(
             Update,
             (
-                step_import::update_step_import_ui.after(mesh_load_system),
+                step_import::update_step_import_ui
+                    .after(mesh_load_system)
+                    .after(step_preview_view::pick_step_contact_face),
+                step_preview_view::pick_step_contact_face
+                    .in_set(InteractionSystems::Picking)
+                    .after(step_preview_view::draw_step_preview),
+                step_preview_view::update_step_contact_highlight
+                    .after(step_preview_view::pick_step_contact_face),
                 step_preview_view::draw_step_preview
                     .after(mesh_load_system)
                     .after(sidebar_page_button_system)

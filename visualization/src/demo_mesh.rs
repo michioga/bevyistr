@@ -666,7 +666,7 @@ fn spawn_aggregate_surface_visual(
     hue_shift: f32,
     assignments: Option<&std::collections::BTreeMap<fem_core::ElementId, MaterialIdentity>>,
 ) {
-    if let Some(mesh) = build_material_surface_mesh(fem_mesh, assignments) {
+    if let Some(mesh) = build_material_surface_mesh(fem_mesh, assignments, |_| true) {
         let normal_mat = materials.add(StandardMaterial {
             base_color: if assignments.is_some() {
                 Color::WHITE
@@ -2553,18 +2553,27 @@ fn spawn_node_visual(
 /// Builds one merged triangle mesh for a part's exterior surface. Assembly
 /// tools reuse this geometry for whole-part hover and selected overlays.
 pub fn build_part_surface_mesh(fem_mesh: &FemMesh) -> Option<Mesh> {
-    build_material_surface_mesh(fem_mesh, None)
+    build_boundary_surface_subset(fem_mesh, |_| true)
+}
+
+/// Builds exterior triangles for the faces accepted by the supplied filter.
+pub fn build_boundary_surface_subset(
+    fem_mesh: &FemMesh,
+    include: impl FnMut(&FemFace) -> bool,
+) -> Option<Mesh> {
+    build_material_surface_mesh(fem_mesh, None, include)
 }
 
 fn build_material_surface_mesh(
     fem_mesh: &FemMesh,
     assignments: Option<&std::collections::BTreeMap<fem_core::ElementId, MaterialIdentity>>,
+    mut include: impl FnMut(&FemFace) -> bool,
 ) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut colors = Vec::new();
 
-    for face in fem_mesh.cached_boundary_faces() {
+    for face in fem_mesh.cached_boundary_faces().iter().filter(|face| include(face)) {
         let Some(points) = fem_mesh.node_positions(&face.nodes) else {
             continue;
         };

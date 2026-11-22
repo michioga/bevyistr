@@ -24,6 +24,22 @@ impl Default for StepMeshOptions {
     }
 }
 
+/// Finer mesh sizing on selected CAD faces of the same STEP file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepContactRefinement {
+    pub surface_tags: Vec<u32>,
+    pub target_size_mm: f32,
+}
+
+/// Gets the CAD surface tag from a generated STEP group name.
+pub fn step_face_tag(group: &str) -> Option<u32> {
+    group
+        .strip_prefix("STEP_FACE_")?
+        .parse::<u32>()
+        .ok()
+        .filter(|tag| *tag > 0)
+}
+
 /// Meshes one solid from a STEP file with first-order tetrahedra.
 /// Refines the mesh around curved CAD features and grades it into the interior.
 /// Coordinates and the optional upper bound on the target mesh size are in millimetres.
@@ -42,8 +58,28 @@ pub fn mesh_step(input: &Path, max_size_mm: Option<f32>) -> Result<FemMesh, Gmsh
 pub fn mesh_step_with_progress(
     input: &Path,
     options: StepMeshOptions,
+    progress: impl FnMut(StepMeshProgress),
+) -> Result<FemMesh, GmshError> {
+    mesh_step_with_contact_refinement(input, options, None, progress)
+}
+
+/// Meshes one STEP solid, optionally refining its designated contact faces.
+pub fn mesh_step_with_contact_refinement(
+    input: &Path,
+    options: StepMeshOptions,
+    refinement: Option<&StepContactRefinement>,
     mut progress: impl FnMut(StepMeshProgress),
 ) -> Result<FemMesh, GmshError> {
+    if let Some(refinement) = refinement
+        && (!refinement.target_size_mm.is_finite()
+            || refinement.target_size_mm <= 0.0
+            || refinement.surface_tags.is_empty()
+            || refinement.surface_tags.contains(&0))
+    {
+        return Err(GmshError::StepMeshing(
+            "Contact refinement needs CAD faces and a finite positive target size".into(),
+        ));
+    }
     if options
         .max_size_mm
         .is_some_and(|size| !size.is_finite() || size <= 0.0)
@@ -84,6 +120,31 @@ Mesh.MeshSizeExtendFromBoundary = 1;
     ));
     if let Some(size) = options.max_size_mm {
         script.push_str(&format!("Mesh.MeshSizeMax = {size};\n"));
+    }
+    if let Some(refinement) = refinement {
+        let tags = refinement
+            .surface_tags
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let size = refinement.target_size_mm;
+        script.push_str(&format!(
+            r#"contactFaces() = {{{tags}}};
+missingFaces() = contactFaces();
+missingFaces() -= faces();
+If (#missingFaces() != 0)
+  Error("A selected contact face is not on this STEP solid");
+  Exit;
+EndIf
+Field[1] = Constant;
+Field[1].SurfacesList = {{contactFaces()}};
+Field[1].IncludeBoundary = 1;
+Field[1].VIn = {size};
+Field[1].VOut = 1e22;
+Background Field = 1;
+"#,
+        ));
     }
     fs::write(directory.path().join("mesh.geo"), script).map_err(GmshError::Io)?;
     let mesh_path = directory.path().join("mesh.msh");
@@ -134,6 +195,81 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         directory.join("fixture.step")
+    }
+
+    #[test]
+    #[ignore = "requires Gmsh on PATH"]
+    fn step_contact_refinement_preserves_face_groups_and_coarse_far_surface() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = write_step_fixture(directory.path(), "Box(1) = {0, 0, 0, 80, 40, 16};");
+        let options = StepMeshOptions {
+            max_size_mm: Some(8.0),
+            elements_per_turn: 0,
+        };
+        let baseline = mesh_step_with_progress(&input, options, |_| {}).unwrap();
+        let face_group_at = |x: f32| {
+            baseline
+                .node_sets
+                .iter()
+                .find(|group| {
+                    !group.nodes.is_empty()
+                        && group.nodes.iter().all(|node| {
+                            (baseline.node_position(*node).unwrap().x - x).abs() < 1.0e-5
+                        })
+                })
+                .unwrap()
+                .name
+                .as_str()
+        };
+        let contact = face_group_at(0.0);
+        let distant = face_group_at(80.0);
+        let tag = step_face_tag(contact).unwrap();
+        let generate = |tag| {
+            mesh_step_with_contact_refinement(
+                &input,
+                options,
+                Some(&StepContactRefinement {
+                    surface_tags: vec![tag],
+                    target_size_mm: 2.0,
+                }),
+                |_| {},
+            )
+        };
+        let refined = generate(tag).unwrap();
+        let triangle_count = |mesh: &FemMesh, name| {
+            mesh.surface_sets
+                .iter()
+                .find(|group| group.name == name)
+                .unwrap()
+                .surfaces
+                .len()
+        };
+        let local_before = triangle_count(&baseline, contact);
+        let local_after = triangle_count(&refined, contact);
+        let far_before = triangle_count(&baseline, distant);
+        let far_after = triangle_count(&refined, distant);
+        eprintln!(
+            "Surface triangles: contact {local_before} -> {local_after}, far {far_before} -> {far_after}"
+        );
+        assert!(local_after > 3 * local_before);
+        assert!(far_after > 0 && far_after < 2 * far_before);
+        let refined_nodes = refined
+            .node_sets
+            .iter()
+            .find(|group| group.name == contact)
+            .unwrap();
+        assert!(!refined_nodes.nodes.is_empty());
+        assert!(
+            refined_nodes
+                .nodes
+                .iter()
+                .all(|node| { refined.node_position(*node).unwrap().x.abs() < 1.0e-5 })
+        );
+        let invalid = generate(999_999).unwrap_err().to_string();
+        assert!(
+            invalid.contains("A selected contact face is not on this STEP solid"),
+            "{invalid}"
+        );
     }
 
     #[test]

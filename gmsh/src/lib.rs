@@ -19,7 +19,10 @@ use fem_core::{
 
 mod step;
 mod step_process;
-pub use step::{StepMeshOptions, mesh_step, mesh_step_with_progress};
+pub use step::{
+    StepContactRefinement, StepMeshOptions, mesh_step, mesh_step_with_contact_refinement,
+    mesh_step_with_progress, step_face_tag,
+};
 pub use step_process::StepMeshProgress;
 
 type EntityKey = (u8, u64);

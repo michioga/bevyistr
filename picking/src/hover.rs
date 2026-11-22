@@ -21,7 +21,11 @@ pub fn hover_system(
     viewport_tool: Res<ViewportTool>,
     result_geometry: Option<Res<fem_core::ResultGeometry>>,
 ) {
-    if *viewport_tool != ViewportTool::Selection || result_geometry.as_ref().is_some_and(|g|g.visible && g.model.is_some()) {
+    if *viewport_tool != ViewportTool::Selection
+        || result_geometry
+            .as_ref()
+            .is_some_and(|g| g.visible && g.model.is_some())
+    {
         clear_hovered(&mut commands, &hovered_query);
         hover_result.clear();
         return;
@@ -333,6 +337,11 @@ fn pick_edge(
 /// before the exact per-triangle [`ray_triangle_intersection`] test below —
 /// this is the difference between a linear scan over every boundary face
 /// and a roughly O(log n + k) query on large meshes.
+/// Selects the nearest exterior face of a single mesh without modifying the model.
+pub fn pick_mesh_boundary_face(mesh: &FemMesh, origin: Vec3, direction: Vec3) -> Option<FaceId> {
+    pick_boundary_face(mesh, origin, direction, false).map(|(_, face, _, _, _)| face)
+}
+
 fn pick_boundary_face(
     mesh: &FemMesh,
     origin: Vec3,

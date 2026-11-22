@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use interaction::InteractionSystems;
 
 use hover::hover_system;
-pub use hover::pick_part;
+pub use hover::{pick_mesh_boundary_face, pick_part};
 
 pub struct PickingPlugin;
 

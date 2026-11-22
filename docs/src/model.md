@@ -26,6 +26,15 @@ HEC-MWの`.msh`は、節点・要素の接続、節点／要素／面グルー�
 
 生成に失敗した場合はModel欄に理由が表示されます。複数ソリッドはSTEPファイルを部品ごとに分け、**Add Part** で追加できます。 [GmshのSTEP読込](https://gmsh.info/doc/texinfo/#t20)
 
+### 接触予定面を細かく分割する
+
+1. **Use Mesh** を押す前に、プレビューで接触予定のCAD面を左クリックします。面全体がオレンジ色に変わります。同じ面をもう一度クリックすると解除できます。
+2. **Contact size (mm)** に接触面の目標要素サイズを入力し、**Regenerate Preview** を押します。Gmshが指定した面を細かく分割し、周囲の要素サイズを段階的に変えます。全体のサイズ上限と曲率による細分化も有効です。`0` で接触予定面へのサイズ指定を解除できます。 [Gmshのサイズフィールド](https://www.gmsh.info/doc/texinfo/gmsh.html#Gmsh-mesh-size-fields)
+3. 面の番号とメッシュを確認し、**Use Mesh** で確定します。相手部品にも局所サイズを指定する場合は、その部品を **Add Part** で開き、同じ手順を行います。
+4. 部品を配置した後、**Model → Sets** で該当する `STEP_FACE_<番号>` の面グループ `[S]` を選び、**Contact** で **Capture Master** または **Capture Slave** を使います。NODE-SURF の Slave には同じ番号の節点グループ `[N]` を選びます。両側を取り込んだら **Create Contact Pair** で登録します。 [接触の定義と確認](contact.md)
+
+局所サイズの指定はSTEPプレビュー中に行います。接触ペアは、メッシュを確定して部品を配置した後に登録します。
+
 ## 部品を配置する
 
 1. PART POSITIONで対象部品を選びます。

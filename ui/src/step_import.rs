@@ -1,12 +1,18 @@
 use crate::{ButtonInteraction, InteractionButton};
 use bevy::{
+    feathers::controls::{
+        FeathersNumberInput, HardLimit, NumberInputPrecision, NumberInputRange, NumberInputStep,
+        NumberInputValue,
+    },
     prelude::*,
     tasks::{IoTaskPool, Task, futures::check_ready},
     ui::InteractionDisabled,
+    ui_widgets::ValueChange,
 };
-use fem_core::FemMesh;
-use gmsh::{StepMeshOptions, StepMeshProgress};
+use fem_core::{FaceId, FemMesh};
+use gmsh::{StepContactRefinement, StepMeshOptions, StepMeshProgress, step_face_tag};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Instant,
@@ -34,6 +40,8 @@ struct GeneratedStepMesh {
     mesh: FemMesh,
     render: Option<StepPreviewMeshes>,
     bounds: Option<(Vec3, Vec3)>,
+    contact_face_tags: BTreeMap<FaceId, u32>,
+    snapshot: Arc<tempfile::TempPath>,
 }
 
 struct StepJob {
@@ -41,6 +49,7 @@ struct StepJob {
     progress: Arc<Mutex<StepMeshProgress>>,
     started_at: Instant,
     options: StepMeshOptions,
+    refinement: Option<StepContactRefinement>,
 }
 
 #[derive(Default)]
@@ -51,6 +60,7 @@ enum StepState {
     Preview {
         generated: GeneratedStepMesh,
         options: StepMeshOptions,
+        refinement: Option<StepContactRefinement>,
     },
     Failed(String),
 }
@@ -61,6 +71,10 @@ pub(crate) struct StepImport {
     state: StepState,
     revision: u64,
     action: Option<StepImportAction>,
+    snapshot: Option<Arc<tempfile::TempPath>>,
+    contact_surface_tags: BTreeSet<u32>,
+    contact_size_mm: Option<f32>,
+    contact_revision: u64,
 }
 
 impl StepImport {
@@ -68,6 +82,9 @@ impl StepImport {
         self.source = None;
         self.state = StepState::Idle;
         self.action = None;
+        self.snapshot = None;
+        self.contact_surface_tags.clear();
+        self.contact_revision = self.contact_revision.wrapping_add(1);
     }
 
     pub(crate) fn start(&mut self, source: StepSource, options: StepMeshOptions) {
@@ -82,10 +99,25 @@ impl StepImport {
         let progress = Arc::new(Mutex::new(StepMeshProgress::ReadingStep));
         let latest = Arc::clone(&progress);
         let started_at = Instant::now();
+        let refinement = self.requested_refinement();
+        let requested = refinement.clone();
+        let snapshot = self.snapshot.clone();
         let task = pool.spawn(async move {
-            let mesh = gmsh::mesh_step_with_progress(&path, options, |step| {
-                *latest.lock().unwrap_or_else(|error| error.into_inner()) = step;
-            })?;
+            let snapshot = match snapshot {
+                Some(snapshot) => snapshot,
+                None => {
+                    let file = tempfile::NamedTempFile::new().map_err(gmsh::GmshError::Io)?;
+                    std::fs::copy(path, file.path()).map_err(gmsh::GmshError::Io)?;
+                    Arc::new(file.into_temp_path())
+                }
+            };
+            let mesh = gmsh::mesh_step_with_contact_refinement(
+                snapshot.as_ref().as_ref(),
+                options,
+                requested.as_ref(),
+                |step| *latest.lock().unwrap_or_else(|error| error.into_inner()) = step,
+            )?;
+            let contact_face_tags = contact_face_tags(&mesh);
             let render = StepPreviewMeshes {
                 surface: visualization::build_part_surface_mesh(&mesh),
                 edges: visualization::build_part_edge_mesh(&mesh),
@@ -95,6 +127,8 @@ impl StepImport {
                 mesh,
                 render: Some(render),
                 bounds,
+                contact_face_tags,
+                snapshot,
             })
         });
         self.state = StepState::Meshing(StepJob {
@@ -102,6 +136,7 @@ impl StepImport {
             progress,
             started_at,
             options,
+            refinement,
         });
     }
 
@@ -123,10 +158,14 @@ impl StepImport {
         };
         if let Some(result) = check_ready(&mut job.task) {
             self.state = match result {
-                Ok(generated) => StepState::Preview {
-                    generated,
-                    options: job.options,
-                },
+                Ok(generated) => {
+                    self.snapshot = Some(Arc::clone(&generated.snapshot));
+                    StepState::Preview {
+                        generated,
+                        options: job.options,
+                        refinement: job.refinement.take(),
+                    }
+                }
                 Err(error) => StepState::Failed(error.to_string()),
             };
         }
@@ -146,6 +185,49 @@ impl StepImport {
         }
     }
 
+    fn requested_refinement(&self) -> Option<StepContactRefinement> {
+        let target_size_mm = self.contact_size_mm.unwrap_or(DEFAULT_CONTACT_SIZE_MM);
+        (!self.contact_surface_tags.is_empty() && target_size_mm > 0.0).then(|| {
+            StepContactRefinement {
+                surface_tags: self.contact_surface_tags.iter().copied().collect(),
+                target_size_mm,
+            }
+        })
+    }
+
+    pub(crate) fn toggle_contact_face(&mut self, origin: Vec3, direction: Vec3) {
+        let StepState::Preview { generated, .. } = &self.state else {
+            return;
+        };
+        let Some(tag) = picking::pick_mesh_boundary_face(&generated.mesh, origin, direction)
+            .and_then(|face| generated.contact_face_tags.get(&face).copied())
+        else {
+            return;
+        };
+        if !self.contact_surface_tags.remove(&tag) {
+            self.contact_surface_tags.insert(tag);
+        }
+        self.contact_revision = self.contact_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn contact_highlight_revision(&self) -> Option<(u64, u64)> {
+        self.preview()
+            .filter(|_| !self.contact_surface_tags.is_empty())
+            .map(|(revision, _)| (revision, self.contact_revision))
+    }
+
+    pub(crate) fn build_contact_highlight(&self) -> Option<Mesh> {
+        let StepState::Preview { generated, .. } = &self.state else {
+            return None;
+        };
+        visualization::build_boundary_surface_subset(&generated.mesh, |face| {
+            generated
+                .contact_face_tags
+                .get(&face.id)
+                .is_some_and(|tag| self.contact_surface_tags.contains(tag))
+        })
+    }
+
     pub(crate) fn queue_action(&mut self, action: StepImportAction) {
         self.action = Some(action);
     }
@@ -162,7 +244,10 @@ impl StepImport {
             StepImportAction::Accept => {
                 let source = self.source.take()?;
                 match std::mem::take(&mut self.state) {
-                    StepState::Preview { generated, .. } => Some((source, generated.mesh)),
+                    StepState::Preview { generated, .. } => {
+                        self.clear();
+                        Some((source, generated.mesh))
+                    }
                     _ => unreachable!("only a ready preview can be accepted"),
                 }
             }
@@ -182,11 +267,49 @@ impl StepImport {
     fn action_available(&self, action: StepImportAction, options: StepMeshOptions) -> bool {
         match action {
             StepImportAction::Accept => {
-                matches!(&self.state, StepState::Preview { options: generated, .. } if *generated == options)
+                matches!(&self.state, StepState::Preview { options: generated, refinement, .. }
+                    if *generated == options && *refinement == self.requested_refinement())
             }
             StepImportAction::Regenerate | StepImportAction::Discard => {
                 matches!(self.state, StepState::Preview { .. } | StepState::Failed(_))
             }
+        }
+    }
+}
+
+fn contact_face_tags(mesh: &FemMesh) -> BTreeMap<FaceId, u32> {
+    let by_element_face = mesh
+        .surface_sets
+        .iter()
+        .filter_map(|group| step_face_tag(&group.name).map(|tag| (tag, group)))
+        .flat_map(|(tag, group)| group.surfaces.iter().map(move |face| (*face, tag)))
+        .collect::<BTreeMap<_, _>>();
+    mesh.cached_boundary_faces()
+        .iter()
+        .filter_map(|face| {
+            let reference = face.element_face_ref()?;
+            Some((face.id, *by_element_face.get(&reference)?))
+        })
+        .collect()
+}
+
+#[derive(Component)]
+struct StepContactSize;
+
+fn update_step_contact_size(
+    change: On<ValueChange<f32>>,
+    inputs: Query<&NumberInputValue, With<StepContactSize>>,
+    mut step: ResMut<StepImport>,
+    mut commands: Commands,
+) {
+    let Ok(displayed) = inputs.get(change.source) else {
+        return;
+    };
+    if change.value.is_finite() && change.value >= 0.0 {
+        step.contact_size_mm = Some(change.value);
+        let value = NumberInputValue::F32(change.value);
+        if *displayed != value {
+            commands.entity(change.source).insert(value);
         }
     }
 }
@@ -197,11 +320,14 @@ pub(crate) enum StepWidget {
     Track,
     Fill,
     Actions,
+    ContactControls,
     CommittedStats,
 }
 
 #[derive(Component)]
 pub(crate) struct StepStatus;
+
+const DEFAULT_CONTACT_SIZE_MM: f32 = 1.0;
 
 const ACCENT: Color = Color::srgb(0.33, 0.72, 0.83);
 const NORMAL: Color = Color::srgb(0.12, 0.17, 0.21);
@@ -225,35 +351,42 @@ pub(crate) fn spawn_step_import_ui(parent: &mut ChildSpawnerCommands) {
             BorderColor::all(Color::srgb(0.28, 0.44, 0.50)),
         ))
         .with_children(|panel| {
-            panel.spawn((
-                StepStatus,
-                Text::default(),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.87, 0.94, 0.95)),
-            ));
+            spawn_step_status_and_progress(panel);
             panel
                 .spawn((
-                    StepWidget::Track,
+                    StepWidget::ContactControls,
                     Node {
-                        height: px(7),
-                        border_radius: BorderRadius::all(px(2)),
-                        overflow: Overflow::clip(),
+                        align_items: AlignItems::Center,
+                        column_gap: px(6),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.19, 0.25, 0.29)),
                 ))
-                .with_child((
-                    StepWidget::Fill,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        height: percent(100),
-                        ..default()
-                    },
-                    BackgroundColor(ACCENT),
-                ));
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new("Contact size (mm)\n0 = off"),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.87, 0.94, 0.95)),
+                    ));
+                    let parent = row.target_entity();
+                    row.commands()
+                        .queue_spawn_scene(bsn! {
+                            @FeathersNumberInput
+                            NumberInputValue::F32(DEFAULT_CONTACT_SIZE_MM)
+                            HardLimit(NumberInputRange::F32(0.0..=f32::MAX))
+                            NumberInputPrecision(4)
+                            NumberInputStep(0.1)
+                            Node { width: px(86) }
+                        })
+                        .insert((
+                            ChildOf(parent),
+                            StepContactSize,
+                            Name::new("STEP contact mesh size in mm"),
+                        ))
+                        .observe(update_step_contact_size);
+                });
             panel
                 .spawn((
                     StepWidget::Actions,
@@ -289,6 +422,38 @@ pub(crate) fn spawn_step_import_ui(parent: &mut ChildSpawnerCommands) {
                     }
                 });
         });
+}
+
+fn spawn_step_status_and_progress(panel: &mut ChildSpawnerCommands) {
+    panel.spawn((
+        StepStatus,
+        Text::default(),
+        TextFont {
+            font_size: FontSize::Px(11.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.87, 0.94, 0.95)),
+    ));
+    panel
+        .spawn((
+            StepWidget::Track,
+            Node {
+                height: px(7),
+                border_radius: BorderRadius::all(px(2)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.19, 0.25, 0.29)),
+        ))
+        .with_child((
+            StepWidget::Fill,
+            Node {
+                position_type: PositionType::Absolute,
+                height: percent(100),
+                ..default()
+            },
+            BackgroundColor(ACCENT),
+        ));
 }
 
 pub(crate) fn step_action_buttons(
@@ -358,12 +523,9 @@ pub(crate) fn update_step_import_ui(
                     bar,
                 )
             }
-            StepState::Preview {
-                generated,
-                options: preview_options,
-            } => {
+            StepState::Preview { generated, .. } => {
                 let mesh = &generated.mesh;
-                let hint = if *preview_options == options {
+                let hint = if step.action_available(StepImportAction::Accept, options) {
                     "Use Mesh to confirm."
                 } else {
                     "Settings changed. Regenerate to apply."
@@ -375,9 +537,23 @@ pub(crate) fn update_step_import_ui(
                         size.x, size.y, size.z
                     )
                 });
+                let contact_faces = match step.contact_surface_tags.len() {
+                    0 => "Click faces to set contact refinement.".into(),
+                    count => {
+                        let tags = step
+                            .contact_surface_tags
+                            .iter()
+                            .take(6)
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let more = if count > 6 { ", ..." } else { "" };
+                        format!("{count} marked STEP faces: {tags}{more}")
+                    }
+                };
                 (
                     format!(
-                        "STEP mesh preview | {intent}\n{filename} | {} nodes / {} tetrahedra{dimensions}\n{hint}",
+                        "STEP mesh preview | {intent}\n{filename} | {} nodes / {} tetrahedra{dimensions}\n{contact_faces}\n{hint}",
                         mesh.nodes.len(),
                         mesh.elements.len()
                     ),
@@ -398,6 +574,11 @@ pub(crate) fn update_step_import_ui(
             StepWidget::Panel => active,
             StepWidget::Track => busy,
             StepWidget::Actions => active && !busy,
+            StepWidget::ContactControls => {
+                preview
+                    || matches!(step.state, StepState::Failed(_))
+                        && !step.contact_surface_tags.is_empty()
+            }
             StepWidget::CommittedStats => !preview,
             StepWidget::Fill => {
                 if busy {
@@ -482,14 +663,18 @@ mod tests {
                 progress: Arc::clone(&progress),
                 started_at: Instant::now(),
                 options: StepMeshOptions::default(),
+                refinement: None,
             }),
             ..default()
         })
         .init_resource::<StepMeshSettings>()
         .add_systems(Startup, |mut commands: Commands| {
             commands
-                .spawn(Node::default())
-                .with_children(spawn_step_import_ui);
+                .spawn((StepWidget::Panel, Node::default()))
+                .with_children(|panel| {
+                    spawn_step_status_and_progress(panel);
+                    panel.spawn((StepWidget::Actions, Node::default()));
+                });
         })
         .add_systems(Update, update_step_import_ui);
 

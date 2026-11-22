@@ -36,7 +36,8 @@ pub use demo_mesh::{
     ContactDraftPreview, ContactDraftSlave, ContactDraftSurface, ContactReviewSettings,
     ContourSettings, DefinedContactPreview, DefinedMpcPreview, FemMeshVisual, FemPartVisual,
     FlatMaterial, MpcPairDraftPreview, RigidSpiderReviewSettings, TransparentMaterial,
-    VisualizationMode, VisualizationSettings, build_part_edge_mesh, build_part_surface_mesh,
+    VisualizationMode, VisualizationSettings, build_boundary_surface_subset, build_part_edge_mesh,
+    build_part_surface_mesh,
 };
 
 pub struct VisualizationPlugin;
