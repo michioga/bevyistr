@@ -822,6 +822,15 @@ fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
 }
 
 fn sidebar_page_button(parent: &mut ChildSpawnerCommands, page: SidebarPage, label: &'static str) {
+    use crate::ui_font::ButtonIcon;
+    let icon = match page {
+        SidebarPage::Model => ButtonIcon::Cube,
+        SidebarPage::Contact => ButtonIcon::Link,
+        SidebarPage::Loads => ButtonIcon::Anchor,
+        SidebarPage::Materials => ButtonIcon::Flask,
+        SidebarPage::Solve => ButtonIcon::Gears,
+        SidebarPage::Results => ButtonIcon::Chart,
+    };
     parent
         .spawn((
             InteractionButton,
@@ -839,14 +848,9 @@ fn sidebar_page_button(parent: &mut ChildSpawnerCommands, page: SidebarPage, lab
             SidebarPageButton { page },
             Name::new(format!("SidebarPage_{label}")),
         ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(10.5),
-                ..default()
-            },
-            TextColor(TEXT_MAIN),
-        ));
+        .with_children(|button| {
+            crate::ui_font::button_label(button, icon, label, 10.5, TEXT_MAIN);
+        });
 }
 
 fn sidebar_page_group(

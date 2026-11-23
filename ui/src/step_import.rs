@@ -392,33 +392,42 @@ pub(crate) fn spawn_step_import_ui(parent: &mut ChildSpawnerCommands) {
                     StepWidget::Actions,
                     Node {
                         column_gap: px(4),
+                        row_gap: px(4),
+                        flex_wrap: FlexWrap::Wrap,
                         ..default()
                     },
                 ))
                 .with_children(|row| {
-                    for (action, label) in [
-                        (StepImportAction::Accept, "Use Mesh"),
-                        (StepImportAction::Regenerate, "Regenerate Preview"),
-                        (StepImportAction::Discard, "Discard"),
+                    use crate::ui_font::ButtonIcon;
+                    for (action, icon, label) in [
+                        (StepImportAction::Accept, ButtonIcon::Check, "Use Mesh"),
+                        (
+                            StepImportAction::Regenerate,
+                            ButtonIcon::Refresh,
+                            "Regenerate Preview",
+                        ),
+                        (StepImportAction::Discard, ButtonIcon::Cancel, "Discard"),
                     ] {
                         row.spawn((
                             action,
                             InteractionButton,
                             Node {
                                 padding: UiRect::axes(px(5), px(4)),
+                                align_items: AlignItems::Center,
                                 border_radius: BorderRadius::all(px(3)),
                                 ..default()
                             },
                             BackgroundColor(NORMAL),
                         ))
-                        .with_child((
-                            Text::new(label),
-                            TextFont {
-                                font_size: FontSize::Px(10.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgb(0.90, 0.94, 0.96)),
-                        ));
+                        .with_children(|button| {
+                            crate::ui_font::button_label(
+                                button,
+                                icon,
+                                label,
+                                10.0,
+                                Color::srgb(0.90, 0.94, 0.96),
+                            );
+                        });
                     }
                 });
         });

@@ -232,15 +232,16 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
                     ApplyLoadButton,
                     Name::new("ApplyLoadButton"),
                 ))
-                .with_child((
-                    Text::new("Apply Load to Selection"),
-                    TextFont {
-                        font_size: FontSize::Px(10.5),
-                        ..default()
-                    },
-                    TextColor(TEXT_MAIN),
-                    ApplyLoadLabel,
-                ));
+                .with_children(|button| {
+                    let (_, label) = crate::ui_font::button_label(
+                        button,
+                        crate::ui_font::ButtonIcon::Check,
+                        "Apply Load to Selection",
+                        10.5,
+                        TEXT_MAIN,
+                    );
+                    button.commands().entity(label).insert(ApplyLoadLabel);
+                });
 
             panel
                 .spawn((
@@ -333,15 +334,16 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
                             ApplyDloadButton,
                             Name::new("ApplyDloadButton"),
                         ))
-                        .with_child((
-                            Text::new("Apply Distributed Load"),
-                            TextFont {
-                                font_size: FontSize::Px(10.0),
-                                ..default()
-                            },
-                            TextColor(TEXT_MAIN),
-                            ApplyDloadLabel,
-                        ));
+                        .with_children(|button| {
+                            let (_, label) = crate::ui_font::button_label(
+                                button,
+                                crate::ui_font::ButtonIcon::Check,
+                                "Apply Distributed Load",
+                                10.0,
+                                TEXT_MAIN,
+                            );
+                            button.commands().entity(label).insert(ApplyDloadLabel);
+                        });
                     hint_text(
                         distributed,
                         "Pressure: select faces  Gravity: select elements  Apply commits",
@@ -365,14 +367,15 @@ pub(crate) fn spawn_boundary_load_editor(parent: &mut ChildSpawnerCommands) {
                     ClearAllBcLoadsButton,
                     Name::new("ClearAllBcLoadsButton"),
                 ))
-                .with_child((
-                    Text::new("Clear All BCs & Loads"),
-                    TextFont {
-                        font_size: FontSize::Px(9.5),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.95, 0.80, 0.80)),
-                ));
+                .with_children(|button| {
+                    crate::ui_font::button_label(
+                        button,
+                        crate::ui_font::ButtonIcon::Trash,
+                        "Clear All BCs & Loads",
+                        9.5,
+                        Color::srgb(0.95, 0.80, 0.80),
+                    );
+                });
             hint_text(
                 panel,
                 "Viewport controls set a draft; exact fields and Apply are authoritative",

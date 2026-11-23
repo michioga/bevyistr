@@ -4,6 +4,7 @@ use crate::{ButtonInteraction, InteractionButton};
 use crate::{
     results_ui::{PlaybackState, result_frame_count},
     slider::{SliderId, SliderState, SliderTrack},
+    ui_font::{ButtonIcon, button_label},
 };
 use bevy::{
     prelude::*,
@@ -22,7 +23,10 @@ pub(crate) enum Action {
 }
 
 #[derive(Component)]
-pub(crate) struct PlayLabel;
+pub(crate) enum PlaybackCaption {
+    Icon,
+    Label,
+}
 
 pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     parent
@@ -33,12 +37,12 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             ..default()
         })
         .with_children(|row| {
-            for (action, label) in [
-                (Action::First, "|<"),
-                (Action::Previous, "<"),
-                (Action::PlayPause, "Play"),
-                (Action::Next, ">"),
-                (Action::Last, ">|"),
+            for (action, icon, label) in [
+                (Action::First, ButtonIcon::First, "First"),
+                (Action::Previous, ButtonIcon::Previous, "Prev"),
+                (Action::PlayPause, ButtonIcon::Run, "Play"),
+                (Action::Next, ButtonIcon::Next, "Next"),
+                (Action::Last, ButtonIcon::Last, "Last"),
             ] {
                 row.spawn((
                     InteractionButton,
@@ -46,16 +50,8 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                     action,
                     bevy::input_focus::tab_navigation::TabIndex(0),
                     Node {
-                        width: if action == Action::PlayPause {
-                            auto()
-                        } else {
-                            px(36)
-                        },
-                        flex_grow: if action == Action::PlayPause {
-                            1.0
-                        } else {
-                            0.0
-                        },
+                        flex_basis: px(0),
+                        flex_grow: 1.0,
                         height: px(28),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
@@ -68,25 +64,16 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 ))
                 .observe(activate)
                 .with_children(|button| {
-                    let mut label_entity = button.spawn((
-                        Text::new(label),
-                        Pickable::IGNORE,
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
+                    let (icon, label) = button_label(button, icon, label, 10.5, Color::WHITE);
                     if action == Action::PlayPause {
-                        label_entity.insert(PlayLabel);
+                        button.commands().entity(icon).insert(PlaybackCaption::Icon);
+                        button.commands().entity(label).insert(PlaybackCaption::Label);
                     }
                 });
             }
         });
     parent.spawn((
-        Text::new(
-            "|< First   < Previous   > Next   >| Last\nPrevious / Next / Left / Right: pause and move one frame",
-        ),
+        Text::new("Left / Right: pause and move one frame"),
         Pickable::IGNORE,
         TextFont {
             font_size: FontSize::Px(10.0),
@@ -161,7 +148,7 @@ pub(crate) fn sync(
     results: Option<Res<FemResultSet>>,
     sliders: Query<&SliderState, With<SliderTrack>>,
     mut buttons: Query<(Entity, &Action, &ButtonInteraction, &mut BackgroundColor)>,
-    mut labels: Query<&mut Text, With<PlayLabel>>,
+    mut captions: Query<(&PlaybackCaption, &mut Text)>,
 ) {
     let count = results.as_deref().map_or(0, result_frame_count);
     let frame = sliders
@@ -187,8 +174,19 @@ pub(crate) fn sync(
             Color::srgb(0.10, 0.12, 0.14)
         }));
     }
-    for mut label in &mut labels {
-        label.set_if_neq(Text::new(if playback.playing { "Pause" } else { "Play" }));
+    let (icon, label) = if playback.playing {
+        (ButtonIcon::Pause, "Pause")
+    } else {
+        (ButtonIcon::Run, "Play")
+    };
+    for (caption, mut text) in &mut captions {
+        let value = match caption {
+            PlaybackCaption::Icon => icon.glyph(),
+            PlaybackCaption::Label => label,
+        };
+        if text.as_str() != value {
+            value.clone_into(&mut text.0);
+        }
     }
 }
 
@@ -314,14 +312,33 @@ mod tests {
         assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 5.);
     }
 
+    fn assert_play_caption(app: &mut App, icon: ButtonIcon, label: &str) {
+        let world = app.world_mut();
+        let mut captions = world.query::<(&PlaybackCaption, &Text, &Pickable)>();
+        assert_eq!(captions.iter(world).count(), 2);
+        for (caption, text, picking) in captions.iter(world) {
+            assert_eq!(*picking, Pickable::IGNORE);
+            assert_eq!(
+                text.as_str(),
+                match caption {
+                    PlaybackCaption::Icon => icon.glyph(),
+                    PlaybackCaption::Label => label,
+                }
+            );
+        }
+    }
+
     #[test]
     fn manual_step_stops_playback_and_empty_or_single_frame_cannot_play() {
         let (mut app, slider) = setup(6);
+        assert_play_caption(&mut app, ButtonIcon::Run, "Play");
         click(&mut app, Action::PlayPause);
         assert!(app.world().resource::<PlaybackState>().playing);
+        assert_play_caption(&mut app, ButtonIcon::Pause, "Pause");
         app.world_mut().resource_mut::<PlaybackState>().elapsed = 0.4;
         click(&mut app, Action::Next);
         assert!(!app.world().resource::<PlaybackState>().playing);
+        assert_play_caption(&mut app, ButtonIcon::Run, "Play");
         assert_eq!(app.world().resource::<PlaybackState>().elapsed, 0.);
         assert_eq!(app.world().get::<SliderState>(slider).unwrap().value, 1.);
         for count in [0, 1] {

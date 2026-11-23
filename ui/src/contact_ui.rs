@@ -1,5 +1,6 @@
 //! Contact definition, automatic candidate detection, and review UI.
 
+use crate::ui_font::{ButtonIcon, button_label};
 use bevy::ui_widgets::ScrollArea;
 use crate::{ButtonInteraction, InteractionButton};
 use crate::layout::{SidebarPage};
@@ -302,6 +303,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
             contact_action_button(
                 parameters,
                 "Edit friction exactly",
+                ButtonIcon::Edit,
                 ContactParameterButton(ContactParameter::Friction),
                 "EditContactFrictionButton",
             );
@@ -357,6 +359,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
                     contact_action_button(
                         penalty,
                         "Edit penalty exactly",
+                        ButtonIcon::Edit,
                         ContactParameterButton(ContactParameter::PenaltyFactor),
                         "EditContactPenaltyButton",
                     );
@@ -373,12 +376,14 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
             contact_action_button(
                 row,
                 "1  Capture Slave",
+                ButtonIcon::Crosshair,
                 CaptureContactSideButton(ContactCaptureSide::Slave),
                 "CaptureContactSlaveButton",
             );
             contact_action_button(
                 row,
                 "2  Capture Master",
+                ButtonIcon::Crosshair,
                 CaptureContactSideButton(ContactCaptureSide::Master),
                 "CaptureContactMasterButton",
             );
@@ -395,6 +400,7 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
     contact_action_button(
         parent,
         "3  Create Contact Pair",
+        ButtonIcon::Link,
         FinalizeContactButton,
         "FinalizeContactButton",
     );
@@ -419,6 +425,7 @@ pub(crate) fn spawn_contact_detection_ui(parent: &mut ChildSpawnerCommands) {
     contact_action_button(
         parent,
         "Edit search gap exactly",
+        ButtonIcon::Edit,
         ContactParameterButton(ContactParameter::SearchGap),
         "EditContactSearchGapButton",
     );
@@ -436,12 +443,14 @@ pub(crate) fn spawn_contact_detection_ui(parent: &mut ChildSpawnerCommands) {
     contact_action_button(
         parent,
         "Edit normal tolerance exactly",
+        ButtonIcon::Edit,
         ContactParameterButton(ContactParameter::SearchAngle),
         "EditContactSearchAngleButton",
     );
     contact_action_button(
         parent,
         "Detect Contact Candidates",
+        ButtonIcon::Search,
         DetectContactsButton,
         "DetectContactsButton",
     );
@@ -509,12 +518,14 @@ pub(crate) fn spawn_contact_review_ui(parent: &mut ChildSpawnerCommands) {
                     contact_action_button(
                         row,
                         "Previous",
+                        ButtonIcon::Previous,
                         ContactCandidateActionButton(ContactCandidateAction::Previous),
                         "PreviousContactCandidateButton",
                     );
                     contact_action_button(
                         row,
                         "Next",
+                        ButtonIcon::Next,
                         ContactCandidateActionButton(ContactCandidateAction::Next),
                         "NextContactCandidateButton",
                     );
@@ -540,6 +551,7 @@ pub(crate) fn spawn_contact_review_ui(parent: &mut ChildSpawnerCommands) {
                     contact_action_button(
                         row,
                         "Reject",
+                        ButtonIcon::Cancel,
                         ContactCandidateActionButton(ContactCandidateAction::Reject),
                         "RejectContactCandidateButton",
                     );
@@ -559,15 +571,16 @@ pub(crate) fn spawn_contact_review_ui(parent: &mut ChildSpawnerCommands) {
                         AcceptContactButton,
                         Name::new("AcceptContactButton"),
                     ))
-                    .with_child((
-                        Text::new("Accept as Small sliding"),
-                        TextFont {
-                            font_size: FontSize::Px(11.5),
-                            ..default()
-                        },
-                        TextColor(TEXT_MAIN),
-                        AcceptContactLabel,
-                    ));
+                    .with_children(|button| {
+                        let (_, label) = button_label(
+                            button,
+                            ButtonIcon::Check,
+                            "Accept as Small sliding",
+                            11.5,
+                            TEXT_MAIN,
+                        );
+                        button.commands().entity(label).insert(AcceptContactLabel);
+                    });
                 });
         });
     contact_hint(
@@ -590,6 +603,7 @@ fn contact_subheading(parent: &mut ChildSpawnerCommands, text: &'static str) {
 fn contact_action_button(
     parent: &mut ChildSpawnerCommands,
     label: &'static str,
+    icon: ButtonIcon,
     marker: impl Bundle,
     name: &'static str,
 ) {
@@ -610,14 +624,9 @@ fn contact_action_button(
             marker,
             Name::new(name),
         ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(11.5),
-                ..default()
-            },
-            TextColor(TEXT_MAIN),
-        ));
+        .with_children(|button| {
+            button_label(button, icon, label, 11.5, TEXT_MAIN);
+        });
 }
 
 fn contact_hint(parent: &mut ChildSpawnerCommands, text: &'static str) {

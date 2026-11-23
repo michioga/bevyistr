@@ -63,14 +63,15 @@ pub(crate) fn spawn_results_handoff(panel: &mut ChildSpawnerCommands) {
             BackgroundColor(Color::srgb(0.10, 0.12, 0.14)),
             BorderColor::all(Color::srgb(0.2, 0.5, 0.4)),
         ))
-        .with_child((
-            Text::new("Open analysis results again"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::WHITE),
-        ));
+        .with_children(|button| {
+            crate::ui_font::button_label(
+                button,
+                crate::ui_font::ButtonIcon::Open,
+                "Open analysis results again",
+                11.0,
+                Color::WHITE,
+            );
+        });
     panel.spawn((
         Text::new("Results open automatically after a successful analysis; this reopens them."),
         TextFont {

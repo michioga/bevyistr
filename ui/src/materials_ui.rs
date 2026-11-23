@@ -350,15 +350,16 @@ pub(crate) fn spawn_materials_ui(parent: &mut ChildSpawnerCommands) {
                             AddSectionButton,
                             Name::new("AddSectionButton"),
                         ))
-                        .with_child((
-                            Text::new("Choose a material"),
-                            TextFont {
-                                font_size: FontSize::Px(10.5),
-                                ..default()
-                            },
-                            TextColor(TEXT_MAIN),
-                            AddSectionLabel,
-                        ));
+                        .with_children(|button| {
+                            let (_, label) = crate::ui_font::button_label(
+                                button,
+                                crate::ui_font::ButtonIcon::Flask,
+                                "Choose a material",
+                                10.5,
+                                TEXT_MAIN,
+                            );
+                            button.commands().entity(label).insert(AddSectionLabel);
+                        });
                     material_heading(
                         section,
                         "Only confirmation changes the assignment. Ctrl+Z undoes it.",

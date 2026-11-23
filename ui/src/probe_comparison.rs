@@ -179,6 +179,12 @@ fn text(value: &str) -> impl Bundle {
 }
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
+    use crate::ui_font::ButtonIcon;
+    let icon = match action {
+        Action::Add => ButtonIcon::Add,
+        Action::Remove(_) => ButtonIcon::Cancel,
+        Action::Clear => ButtonIcon::Trash,
+    };
     parent
         .spawn((
             InteractionButton,
@@ -197,7 +203,9 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
             BorderColor::all(Color::srgb(0.35, 0.55, 0.62)),
         ))
         .observe(activate)
-        .with_child(text(title));
+        .with_children(|button| {
+            crate::ui_font::button_label(button, icon, title, 10.0, Color::WHITE);
+        });
 }
 
 fn activate(

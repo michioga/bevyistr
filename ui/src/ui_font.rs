@@ -35,10 +35,28 @@ pub(crate) enum ButtonIcon {
     Run,
     Stop,
     Save,
+    Cube,
+    Link,
+    Anchor,
+    Flask,
+    Gears,
+    Chart,
+    First,
+    Previous,
+    Next,
+    Last,
+    Pause,
+    Check,
+    Cancel,
+    Refresh,
+    Trash,
+    Edit,
+    Crosshair,
+    Search,
 }
 
 impl ButtonIcon {
-    fn glyph(self) -> &'static str {
+    pub(crate) fn glyph(&self) -> &'static str {
         // Font Awesome glyphs in the bundled Nerd Fonts build.
         match self {
             Self::Open => "\u{f07c}",
@@ -46,6 +64,24 @@ impl ButtonIcon {
             Self::Run => "\u{f04b}",
             Self::Stop => "\u{f04d}",
             Self::Save => "\u{f0c7}",
+            Self::Cube => "\u{f1b2}",
+            Self::Link => "\u{f0c1}",
+            Self::Anchor => "\u{f13d}",
+            Self::Flask => "\u{f0c3}",
+            Self::Gears => "\u{f085}",
+            Self::Chart => "\u{f080}",
+            Self::First => "\u{f048}",
+            Self::Previous => "\u{f053}",
+            Self::Next => "\u{f054}",
+            Self::Last => "\u{f051}",
+            Self::Pause => "\u{f04c}",
+            Self::Check => "\u{f00c}",
+            Self::Cancel => "\u{f00d}",
+            Self::Refresh => "\u{f021}",
+            Self::Trash => "\u{f1f8}",
+            Self::Edit => "\u{f044}",
+            Self::Crosshair => "\u{f05b}",
+            Self::Search => "\u{f002}",
         }
     }
 }
@@ -53,35 +89,40 @@ impl ButtonIcon {
 pub(crate) fn button_label(
     button: &mut ChildSpawnerCommands,
     icon: ButtonIcon,
-    label: &'static str,
+    label: &str,
     font_size: f32,
     color: Color,
-) {
-    button.spawn((
-        Text::new(icon.glyph()),
-        TextFont {
-            font_size: FontSize::Px(font_size),
-            ..default()
-        },
-        TextLayout::justify(Justify::Center),
-        TextColor(color),
-        Pickable::IGNORE,
-        Node {
-            width: px(14),
-            flex_shrink: 0.0,
-            margin: UiRect::right(px(4)),
-            ..default()
-        },
-    ));
-    button.spawn((
-        Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(font_size),
-            ..default()
-        },
-        TextColor(color),
-        Pickable::IGNORE,
-    ));
+) -> (Entity, Entity) {
+    let icon = button
+        .spawn((
+            Text::new(icon.glyph()),
+            TextFont {
+                font_size: FontSize::Px(font_size),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(color),
+            Pickable::IGNORE,
+            Node {
+                width: px(14),
+                flex_shrink: 0.0,
+                margin: UiRect::right(px(4)),
+                ..default()
+            },
+        ))
+        .id();
+    let label = button
+        .spawn((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(font_size),
+                ..default()
+            },
+            TextColor(color),
+            Pickable::IGNORE,
+        ))
+        .id();
+    (icon, label)
 }
 
 #[cfg(test)]

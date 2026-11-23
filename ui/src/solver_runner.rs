@@ -621,14 +621,15 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                     SelectFrontistrExecutableButton,
                     Name::new("SelectFrontistrExecutableButton"),
                 ))
-                .with_child((
-                    Text::new("Change fistr1 executable..."),
-                    TextFont {
-                        font_size: FontSize::Px(10.5),
-                        ..default()
-                    },
-                    TextColor(TEXT_MAIN),
-                ));
+                .with_children(|button| {
+                    crate::ui_font::button_label(
+                        button,
+                        crate::ui_font::ButtonIcon::Open,
+                        "Change fistr1 executable...",
+                        10.5,
+                        TEXT_MAIN,
+                    );
+                });
 
             panel.spawn((
                 Text::new(

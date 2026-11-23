@@ -60,8 +60,18 @@ pub(super) fn spawn(parent: &mut ChildSpawnerCommands) {
                         ..default()
                     })
                     .with_children(|row| {
-                        button(row, MpiToolButton { tool, reset: false }, label);
-                        button(row, MpiToolButton { tool, reset: true }, "Auto");
+                        button(
+                            row,
+                            MpiToolButton { tool, reset: false },
+                            crate::ui_font::ButtonIcon::Open,
+                            label,
+                        );
+                        button(
+                            row,
+                            MpiToolButton { tool, reset: true },
+                            crate::ui_font::ButtonIcon::Refresh,
+                            "Auto",
+                        );
                     });
                 section.spawn((
                     Text::default(),
@@ -85,7 +95,12 @@ pub(super) fn spawn(parent: &mut ChildSpawnerCommands) {
         });
 }
 
-pub(super) fn button(parent: &mut ChildSpawnerCommands, action: impl Component, label: &str) {
+fn button(
+    parent: &mut ChildSpawnerCommands,
+    action: impl Component,
+    icon: crate::ui_font::ButtonIcon,
+    label: &str,
+) {
     parent
         .spawn((
             InteractionButton,
@@ -103,14 +118,9 @@ pub(super) fn button(parent: &mut ChildSpawnerCommands, action: impl Component, 
             BorderColor::all(PANEL_BORDER),
             action,
         ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(10.0),
-                ..default()
-            },
-            TextColor(TEXT_MAIN),
-        ));
+        .with_children(|button| {
+            crate::ui_font::button_label(button, icon, label, 10.0, TEXT_MAIN);
+        });
 }
 
 pub(crate) fn update_mpi_tools(

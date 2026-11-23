@@ -157,15 +157,15 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             BorderColor::all(Color::srgb(0.35, 0.55, 0.62)),
         ))
         .observe(|_: On<Activate>, mut pin: ResMut<ProbePin>| pin.clear())
-        .with_child((
-            Text::new("Clear pinned probe"),
-            Pickable::IGNORE,
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::WHITE),
-        ));
+        .with_children(|button| {
+            crate::ui_font::button_label(
+                button,
+                crate::ui_font::ButtonIcon::Cancel,
+                "Clear pinned probe",
+                11.0,
+                Color::WHITE,
+            );
+        });
     crate::probe_comparison::spawn(parent);
     crate::probe_history::spawn(parent);
     crate::probe_history_csv::spawn(parent);
