@@ -258,15 +258,15 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             BorderColor::all(Color::srgb(0.35, 0.55, 0.62)),
         ))
         .observe(activate)
-        .with_child((
-            Text::new("Export pinned history CSV..."),
-            Pickable::IGNORE,
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::WHITE),
-        ));
+        .with_children(|button| {
+            crate::ui_font::button_label(
+                button,
+                crate::ui_font::ButtonIcon::Save,
+                "Export pinned history CSV...",
+                11.0,
+                Color::WHITE,
+            );
+        });
     parent.spawn((
         ExportStatus,
         Text::new("Pin a result to export its history."),

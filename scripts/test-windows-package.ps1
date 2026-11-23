@@ -24,7 +24,7 @@ try {
 } finally { $archive.Dispose() }
 Expand-Archive -LiteralPath $zipPath -DestinationPath $extract
 $bundle = Join-Path $extract $zipRoot
-foreach ($file in @('bevyistr.exe','materials.toml','LICENSE','README.txt','THIRD-PARTY-LICENSES.txt','BUILD-INFO.json','DLL-DEPENDENCIES.txt','licenses/FiraMono-LICENSE.txt','licenses/rust/COPYRIGHT-library.html')) {
+foreach ($file in @('bevyistr.exe','materials.toml','LICENSE','README.txt','THIRD-PARTY-LICENSES.txt','BUILD-INFO.json','DLL-DEPENDENCIES.txt','licenses/FiraMono-LICENSE.txt','licenses/UDEVGothic-LICENSE.txt','licenses/rust/COPYRIGHT-library.html')) {
     if (!(Test-Path -LiteralPath (Join-Path $bundle $file) -PathType Leaf)) { throw "Missing packaged file: $file" }
 }
 $info = Get-Content -LiteralPath (Join-Path $bundle 'BUILD-INFO.json') -Raw | ConvertFrom-Json

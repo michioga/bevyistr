@@ -62,6 +62,7 @@ try {
     if (!$readme.StartsWith("bevyistr $version ")) { throw 'Update distribution/README-windows.txt version' }
     [IO.File]::WriteAllText((Join-Path $bundle 'README.txt'), $readme, [Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath 'distribution/licenses' -Destination $bundle -Recurse
+    Copy-Item -LiteralPath 'ui/assets/fonts/UDEVGothic-LICENSE.txt' -Destination (Join-Path $bundle 'licenses')
 
     # Preserve crate copyright notices, including licenses of bundled native code.
     # Raw cargo-about JSON stays OUTSIDE the ZIP: it contains machine-local paths.

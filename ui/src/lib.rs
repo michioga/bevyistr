@@ -55,6 +55,7 @@ mod solver_process;
 mod solver_runner;
 mod step_import;
 mod step_preview_view;
+mod ui_font;
 
 use bevy::prelude::*;
 use button_interaction::{ButtonInteraction, InteractionButton};
@@ -172,6 +173,7 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         button_interaction::register(app);
+        app.add_systems(PreStartup, ui_font::load_fonts);
         app.add_systems(
             Update,
             (

@@ -194,10 +194,7 @@ pub(crate) fn spawn_ui(mut commands: Commands) {
                 .with_children(|bar| {
                     bar.spawn((
                         Text::new(concat!("bevyistr v", env!("CARGO_PKG_VERSION"))),
-                        TextFont {
-                            font_size: FontSize::Px(13.0),
-                            ..default()
-                        },
+                        crate::ui_font::heading_font(13.0),
                         TextColor(Color::srgb(0.78, 0.88, 0.96)),
                     ));
                 });
@@ -392,15 +389,15 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
                                     Name::new("OpenResultButton"),
                                 ))
                                 .observe(crate::result_open::request_result_open)
-                                .with_child((
-                                    Text::new("Open Results..."),
-                                    Pickable::IGNORE,
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(TEXT_MAIN),
-                                ));
+                                .with_children(|button| {
+                                    crate::ui_font::button_label(
+                                        button,
+                                        crate::ui_font::ButtonIcon::Open,
+                                        "Open Results...",
+                                        12.0,
+                                        TEXT_MAIN,
+                                    );
+                                });
                             });
                         sec.spawn((
                             Text::new("VTU / PVTU: open directly, including geometry.\nRES: choose its mesh when prompted.\nYour editable model is preserved."),
@@ -908,10 +905,7 @@ fn section(
         .with_children(|sec| {
             sec.spawn((
                 Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(9.5),
-                    ..default()
-                },
+                crate::ui_font::heading_font(9.5),
                 TextColor(Color::srgba(0.44, 0.60, 0.72, 0.90)),
             ));
             children_fn(sec);

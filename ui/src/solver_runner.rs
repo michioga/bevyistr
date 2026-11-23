@@ -826,14 +826,15 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                         RunFrontistrButton,
                         Name::new("RunFrontistrButton"),
                     ))
-                    .with_child((
-                        Text::new("Run FrontISTR"),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.75, 0.97, 0.80)),
-                    ));
+                    .with_children(|button| {
+                        crate::ui_font::button_label(
+                            button,
+                            crate::ui_font::ButtonIcon::Run,
+                            "Run FrontISTR",
+                            11.0,
+                            Color::srgb(0.75, 0.97, 0.80),
+                        );
+                    });
 
                     row.spawn((
                         InteractionButton,
@@ -851,14 +852,15 @@ pub(crate) fn spawn_solver_execution_ui(parent: &mut ChildSpawnerCommands) {
                         StopFrontistrButton,
                         Name::new("StopFrontistrButton"),
                     ))
-                    .with_child((
-                        Text::new("Stop"),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.98, 0.76, 0.76)),
-                    ));
+                    .with_children(|button| {
+                        crate::ui_font::button_label(
+                            button,
+                            crate::ui_font::ButtonIcon::Stop,
+                            "Stop",
+                            11.0,
+                            Color::srgb(0.98, 0.76, 0.76),
+                        );
+                    });
                 });
 
             panel.spawn((

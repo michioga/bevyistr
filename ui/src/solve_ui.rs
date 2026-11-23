@@ -97,14 +97,15 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
                 OpenSetupButton,
                 Name::new("OpenSetupButton"),
             ))
-            .with_child((
-                Text::new("Open Setup"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(TEXT_MAIN),
-            ));
+            .with_children(|button| {
+                crate::ui_font::button_label(
+                    button,
+                    crate::ui_font::ButtonIcon::Open,
+                    "Open Setup",
+                    11.0,
+                    TEXT_MAIN,
+                );
+            });
 
             row.spawn((
                 InteractionButton,
@@ -122,14 +123,15 @@ pub(crate) fn spawn_solve_ui(parent: &mut ChildSpawnerCommands) {
                 ExportButton,
                 Name::new("ExportButton"),
             ))
-            .with_child((
-                Text::new("Export"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.75, 0.97, 0.80)),
-            ));
+            .with_children(|button| {
+                crate::ui_font::button_label(
+                    button,
+                    crate::ui_font::ButtonIcon::Save,
+                    "Export",
+                    11.0,
+                    Color::srgb(0.75, 0.97, 0.80),
+                );
+            });
         });
 
     parent.spawn((

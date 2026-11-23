@@ -177,14 +177,15 @@ pub(super) fn spawn_step_mesh_ui(parent: &mut ChildSpawnerCommands) {
                     BackgroundColor(BUTTON_NORMAL),
                     BorderColor::all(PANEL_BORDER),
                 ))
-                .with_child((
-                    Text::new("Save FrontISTR Mesh (.msh)..."),
-                    TextFont {
-                        font_size: FontSize::Px(10.5),
-                        ..default()
-                    },
-                    TextColor(TEXT_MAIN),
-                ));
+                .with_children(|button| {
+                    crate::ui_font::button_label(
+                        button,
+                        crate::ui_font::ButtonIcon::Save,
+                        "Save FrontISTR Mesh (.msh)...",
+                        10.5,
+                        TEXT_MAIN,
+                    );
+                });
             controls.spawn((
                 SaveStepMeshStatus,
                 Text::default(),

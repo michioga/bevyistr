@@ -71,14 +71,15 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 OpenMeshButton,
                 Name::new("OpenMeshButton"),
             ))
-            .with_child((
-                Text::new("Open Model..."),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(TEXT_MAIN),
-            ));
+            .with_children(|button| {
+                crate::ui_font::button_label(
+                    button,
+                    crate::ui_font::ButtonIcon::Open,
+                    "Open Model...",
+                    12.0,
+                    TEXT_MAIN,
+                );
+            });
 
             row.spawn((
                 InteractionButton,
@@ -95,14 +96,15 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 AddMeshButton,
                 Name::new("AddMeshButton"),
             ))
-            .with_child((
-                Text::new("Add Part..."),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(TEXT_MAIN),
-            ));
+            .with_children(|button| {
+                crate::ui_font::button_label(
+                    button,
+                    crate::ui_font::ButtonIcon::Add,
+                    "Add Part...",
+                    12.0,
+                    TEXT_MAIN,
+                );
+            });
         });
 
     spawn_step_mesh_ui(parent);
@@ -143,14 +145,15 @@ pub(crate) fn spawn_model_file_ui(parent: &mut ChildSpawnerCommands) {
                 OpenProjectButton,
                 Name::new("OpenProjectButton"),
             ))
-            .with_child((
-                Text::new("Open Project (hecmw_ctrl.dat)"),
-                TextFont {
-                    font_size: FontSize::Px(10.5),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.75, 0.97, 0.80)),
-            ));
+            .with_children(|button| {
+                crate::ui_font::button_label(
+                    button,
+                    crate::ui_font::ButtonIcon::Open,
+                    "Open Project (hecmw_ctrl.dat)",
+                    10.5,
+                    Color::srgb(0.75, 0.97, 0.80),
+                );
+            });
         });
     parent.spawn((
         Text::new(concat!(

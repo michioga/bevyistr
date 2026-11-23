@@ -11,6 +11,7 @@
 - licenses/FiraMono-LICENSE.txtはBevy埋め込みフォントのSIL Open Font License全文です。
   出典: [Bevy v0.19.1 FiraMono-LICENSE](https://raw.githubusercontent.com/bevyengine/bevy/v0.19.1/assets/fonts/FiraMono-LICENSE)。
   このコピーのSHA-256: `587dd9548304fd421cd254f7550bd101c1250ffc95417f2f7f92d55b44ecbe53`。
+- UDEV Gothic v2.2.0の `UDEVGothic35NF-Regular.ttf` と `UDEVGothic35NF-Bold.ttf` はbevyistr-uiに埋め込みます。Windows ZIPには `licenses/UDEVGothic-LICENSE.txt` を収録します。 [UDEV Gothic v2.2.0のライセンス](https://github.com/yuru7/udev-gothic/blob/v2.2.0/LICENSE)
 
 収集対象は実行時に使う機能より広い場合があります。依存の追加や埋め込み素材の変更時には、
 自動収集結果だけでなく追加の通知が必要かも確認してください。
