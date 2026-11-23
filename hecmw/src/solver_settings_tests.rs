@@ -133,11 +133,67 @@ fn hinge_solver_options_and_implicit_group_one_survive_export() {
         reloaded.import_issues
     );
     assert_eq!(reloaded.solver.unwrap(), setup.solver);
-    for invalid in [
-        text.replace("TIMELOG=YES", "TIMELOG=YES,DUMPTYPE=MM,DUMPEXIT=YES"),
-        text.replace("!CLOAD", "!CLOAD,GRPID=2"),
+    let other_group = text.replace("!CLOAD", "!CLOAD,GRPID=2");
+    assert!(!parsed(&other_group).import_issues.is_empty());
+}
+
+#[test]
+fn matrix_dump_settings_round_trip_for_iterative_and_direct_solvers() {
+    for (header, rows) in [
+        (
+            "METHOD=CG, PRECOND=1, ITERLOG=YES, TIMELOG=YES",
+            "100,1\n1e-6,1,0\n",
+        ),
+        ("METHOD=MUMPS", ""),
     ] {
-        assert!(!parsed(&invalid).import_issues.is_empty());
+        for (input_format, format) in [
+            ("NONE", MatrixDumpFormat::None),
+            ("mm", MatrixDumpFormat::MatrixMarket),
+            ("2", MatrixDumpFormat::Csr),
+            ("BSR", MatrixDumpFormat::Bsr),
+        ] {
+            for stop in [false, true] {
+                let exit = if stop { "yes" } else { "NO" };
+                let cnt = format!(
+                    "!SOLVER, {header}, DUMPTYPE={input_format}, DUMPEXIT={exit}\n{rows}!END"
+                );
+                let imported = parsed(&cnt);
+                assert!(
+                    imported.import_issues.is_empty(),
+                    "{:?}",
+                    imported.import_issues
+                );
+                let mut setup = AnalysisSetup::default();
+                imported.merge_into(&mut setup);
+                assert_eq!(setup.solver.matrix_dump_format, format);
+                assert_eq!(setup.solver.exit_after_matrix_dump, stop);
+                let exported = crate::cnt_writer::build_cnt(&setup, &[]);
+                let reloaded = parsed(&exported);
+                assert!(
+                    reloaded.import_issues.is_empty(),
+                    "{:?}",
+                    reloaded.import_issues
+                );
+                assert_eq!(reloaded.solver.unwrap(), setup.solver);
+            }
+        }
+    }
+}
+
+#[test]
+fn unsupported_matrix_dump_parameters_still_block_export() {
+    for options in [
+        "DUMPTYPE=COO",
+        "DUMPTYPE=4",
+        "DUMPTYPE",
+        "DUMPEXIT=TRUE",
+        "DUMPEXIT=",
+        "DUMPTYPE=NONE, DUMPTYPE=MM",
+        "DUMPEXIT=YES, DUMPEXIT=NO",
+        "DUMPTYPE=MM, SCALING=YES",
+    ] {
+        let data = parsed(&format!("!SOLVER, METHOD=MUMPS, {options}\n!END"));
+        assert!(!data.import_issues.is_empty(), "{options}");
     }
 }
 

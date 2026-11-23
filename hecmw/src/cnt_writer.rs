@@ -208,25 +208,32 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
 
     // ── SOLVER ──
+    write!(o, "!SOLVER, METHOD={}", s.solver_method.frontistr_method()).unwrap();
     if s.solver_method.is_iterative() {
-        writeln!(
+        write!(
             o,
-            "!SOLVER, METHOD={}, PRECOND={}, ITERLOG=YES, TIMELOG=YES",
-            s.solver_method.frontistr_method(),
+            ", PRECOND={}, ITERLOG=YES, TIMELOG=YES",
             s.preconditioner
         )
         .unwrap();
-        writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
-        writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
     } else {
-        write!(o, "!SOLVER, METHOD={}", s.solver_method.frontistr_method()).unwrap();
         if s.direct_iteration_log {
             write!(o, ", ITERLOG=YES").unwrap();
         }
         if s.direct_time_log {
             write!(o, ", TIMELOG=YES").unwrap();
         }
-        writeln!(o).unwrap();
+    }
+    if s.matrix_dump_format != fem_core::MatrixDumpFormat::None {
+        write!(o, ", DUMPTYPE={}", s.matrix_dump_format.frontistr_value()).unwrap();
+    }
+    if s.exit_after_matrix_dump {
+        write!(o, ", DUMPEXIT=YES").unwrap();
+    }
+    writeln!(o).unwrap();
+    if s.solver_method.is_iterative() {
+        writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
+        writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
     }
 
     writeln!(o).unwrap();

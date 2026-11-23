@@ -88,6 +88,7 @@ pub(crate) struct FrontistrRunState {
     stop_requested: bool,
     results_source: Option<crate::run_results::RunResultSource>,
     auto_load_results: bool,
+    dump_only: bool,
     control_settings: fem_core::FrontistrControlSettings,
     prepared_partition_prefix: Option<String>,
 }
@@ -131,6 +132,7 @@ impl Default for FrontistrRunState {
             stop_requested: false,
             results_source: None,
             auto_load_results: true,
+            dump_only: false,
             control_settings: Default::default(),
             prepared_partition_prefix: None,
         }
@@ -313,7 +315,7 @@ impl FrontistrRunState {
         Ok(true)
     }
 
-    fn start(&mut self, model_version: u64, res_enabled: bool) -> Result<(), String> {
+    fn start(&mut self, model_version: u64, setup: &AnalysisSetup) -> Result<(), String> {
         let target = self
             .project
             .as_ref()
@@ -321,16 +323,27 @@ impl FrontistrRunState {
         if self.is_running() {
             return Err("FrontISTR is already running.".to_string());
         }
-        let mut results_source = if res_enabled && self.control_settings.binary_result != Some(true) {
-            Some(crate::run_results::RunResultSource::capture_with_subdirectories(
-                &target.directory, &target.stem,
-                if self.launch_mode == SolverLaunchMode::Mpi { self.mpi_ranks } else { 1 },
-                model_version,
-                self.control_settings.subdirectory_limit(),
-            )?)
-        } else {
-            None
-        };
+        let dump_only = setup.solver.exit_after_matrix_dump
+            && setup.solver.matrix_dump_format != fem_core::MatrixDumpFormat::None;
+        let auto_load_results = setup.output.write_res.enabled && !dump_only;
+        let mut results_source =
+            if auto_load_results && self.control_settings.binary_result != Some(true) {
+                Some(
+                    crate::run_results::RunResultSource::capture_with_subdirectories(
+                        &target.directory,
+                        &target.stem,
+                        if self.launch_mode == SolverLaunchMode::Mpi {
+                            self.mpi_ranks
+                        } else {
+                            1
+                        },
+                        model_version,
+                        self.control_settings.subdirectory_limit(),
+                    )?,
+                )
+            } else {
+                None
+            };
         let process = spawn_solver_process(SolverProcessConfig {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
@@ -357,7 +370,8 @@ impl FrontistrRunState {
         self.process = Some(process);
         self.stop_requested = false;
         self.results_source = results_source;
-        self.auto_load_results = res_enabled;
+        self.auto_load_results = auto_load_results;
+        self.dump_only = dump_only;
         Ok(())
     }
 
@@ -402,9 +416,12 @@ impl FrontistrRunState {
                 SolverProcessEvent::Finished(code) => {
                     if code == Some(0) {
                         self.phase = SolverRunPhase::Succeeded;
-                        self.message =
+                        self.message = if self.dump_only {
+                            "FrontISTR exited with code 0. Check the run folder for matrix dumps."
+                        } else {
                             "FrontISTR exited with code 0. Review solver output and results."
-                                .to_string();
+                        }
+                        .to_string();
                     } else {
                         self.phase = SolverRunPhase::Failed;
                         self.message = match code {
@@ -424,7 +441,9 @@ impl FrontistrRunState {
 
         if terminal {
             if self.phase == SolverRunPhase::Succeeded {
-                if !self.auto_load_results {
+                if self.dump_only {
+                    self.results_source = None;
+                } else if !self.auto_load_results {
                     self.message.push_str(" RES output was OFF: automatic result loading skipped. Use Open Results for any VTK output.");
                     self.results_source = None;
                 } else if self.control_settings.binary_result == Some(true) {
@@ -1055,7 +1074,7 @@ pub(crate) fn run_frontistr_button_system(
                     continue;
                 }
             }
-            if let Err(error) = state.start(version.as_deref().map_or(0, |v| v.value), setup.output.write_res.enabled) {
+            if let Err(error) = state.start(version.as_deref().map_or(0, |v| v.value), &setup) {
                 state.report_error(SolverRunPhase::Failed, error);
             }
         }

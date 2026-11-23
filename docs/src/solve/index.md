@@ -16,6 +16,12 @@ MUMPSとMKLは別のMETHODとして読み込み・出力します。メニュー
 
 Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数・許容差・最大反復数・シフト量を編集できます。[固有値解析の設定](eigen.md)を参照してください。
 
+### 係数行列と右辺を保存する（0.5.0開発版）
+
+- **Matrix dump** で Matrix Market（`MM`）、`CSR`、`BSR`、または **Off**（`NONE`）を選びます。設定は `.cnt` の `!SOLVER, DUMPTYPE=...` に反映されます。
+- **Dump action** が **Continue solve** の場合はダンプ後も計算を続けます。**Exit after dump**（`DUMPEXIT=YES`）ではダンプ後に終了するため、bevyistrは解析結果の自動読込を行わず、実行フォルダの確認を案内します。Matrix dump が Off のときは、ダンプによる終了は発生しません。
+- 出力先は実行フォルダです。行列と右辺のファイル名には、FrontISTRがソルバー呼び出し番号とMPIランク番号を付けます。 [FrontISTRのソルバー・前処理](https://source-docs.frontistr.com/functions_reference/06_solver.html)
+
 ## 実行する
 
 ### 読み込んだ設定に未対応項目がある場合
@@ -28,7 +34,7 @@ Solveの最下部には元ファイル名・行番号・
 | 項目 | 再出力できる代表例 | Export／Runが止まる代表例 |
 | --- | --- | --- |
 | 拘束・荷重の`GRPID` | `GRPID=1`。ヒンジ例題のような省略形は既定値1として扱います。 | `GRPID=2`など、グループ1以外の指定 |
-| `!SOLVER` | 対応METHOD、`PRECOND=1`／`2`／`3`、`ITERLOG=YES, TIMELOG=YES`。`NITER`、`RESID`、正の整数の`iterPREmax`を保持します。その他の数値欄は`SIGMA_DIAG=1`、`OMEGA=0`が必要です。 | その他の前処理、`DUMPTYPE`や`DUMPEXIT`、未知のMETHOD |
+| `!SOLVER` | 対応METHOD、`PRECOND=1`／`2`／`3`、`ITERLOG=YES, TIMELOG=YES`。`NITER`、`RESID`、正の整数の`iterPREmax`を保持します。その他の数値欄は`SIGMA_DIAG=1`、`OMEGA=0`が必要です。0.5.0開発版では`DUMPTYPE`／`DUMPEXIT`も保持します。 | その他の前処理、未知のMETHOD |
 | 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析の入力、複数ステップ・自動増分・個別の時間設定・部分グループの有効化 |
 | 材料 | 対応する書式の等方弾性・密度 | 異方弾性、温度依存テーブル、弾塑性、超弾性 |
 | 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |

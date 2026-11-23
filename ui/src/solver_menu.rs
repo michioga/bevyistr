@@ -16,12 +16,14 @@ use bevy::{
         popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
     },
 };
-use fem_core::{AnalysisSetup, AnalysisType, LinearSolverMethod, SolverSettings};
+use fem_core::{AnalysisSetup, AnalysisType, LinearSolverMethod, MatrixDumpFormat, SolverSettings};
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Analysis,
     Method,
+    MatrixDump,
+    DumpExit,
 }
 #[derive(Component)]
 struct Label(Kind);
@@ -37,6 +39,8 @@ struct Popup {
 enum Choice {
     Analysis(AnalysisType),
     Method(LinearSolverMethod),
+    MatrixDump(MatrixDumpFormat),
+    DumpExit(bool),
 }
 
 impl Kind {
@@ -44,12 +48,16 @@ impl Kind {
         match self {
             Self::Analysis => "Analysis type",
             Self::Method => "Linear solver",
+            Self::MatrixDump => "Matrix dump",
+            Self::DumpExit => "Dump action",
         }
     }
     fn current(self, settings: &SolverSettings) -> Choice {
         match self {
             Self::Analysis => Choice::Analysis(settings.analysis_type),
             Self::Method => Choice::Method(settings.solver_method),
+            Self::MatrixDump => Choice::MatrixDump(settings.matrix_dump_format),
+            Self::DumpExit => Choice::DumpExit(settings.exit_after_matrix_dump),
         }
     }
     fn choices(self) -> Vec<Choice> {
@@ -71,6 +79,15 @@ impl Kind {
             ]
             .map(Choice::Method)
             .to_vec(),
+            Self::MatrixDump => [
+                MatrixDumpFormat::None,
+                MatrixDumpFormat::MatrixMarket,
+                MatrixDumpFormat::Csr,
+                MatrixDumpFormat::Bsr,
+            ]
+            .map(Choice::MatrixDump)
+            .to_vec(),
+            Self::DumpExit => vec![Choice::DumpExit(false), Choice::DumpExit(true)],
         }
     }
 }
@@ -79,6 +96,11 @@ impl Choice {
         match self {
             Self::Analysis(a) => a.label(),
             Self::Method(m) => m.label(),
+            Self::MatrixDump(MatrixDumpFormat::None) => "Off",
+            Self::MatrixDump(MatrixDumpFormat::MatrixMarket) => "Matrix Market (MM)",
+            Self::MatrixDump(format) => format.frontistr_value(),
+            Self::DumpExit(false) => "Continue solve",
+            Self::DumpExit(true) => "Exit after dump",
         }
     }
     fn keyword(self) -> String {
@@ -86,12 +108,17 @@ impl Choice {
             Self::Analysis(AnalysisType::NlStatic) => "!SOLUTION, TYPE=STATIC, NONLINEAR".into(),
             Self::Analysis(a) => format!("!SOLUTION, TYPE={}", a.frontistr_type()),
             Self::Method(m) => format!("!SOLVER, METHOD={}", m.frontistr_method()),
+            Self::MatrixDump(format) => format!("!SOLVER, DUMPTYPE={}", format.frontistr_value()),
+            Self::DumpExit(false) => "!SOLVER, DUMPEXIT=NO".into(),
+            Self::DumpExit(true) => "!SOLVER, DUMPEXIT=YES".into(),
         }
     }
     fn selected(self, settings: &SolverSettings) -> bool {
         match self {
             Self::Analysis(a) => settings.analysis_type == a,
             Self::Method(m) => settings.solver_method == m,
+            Self::MatrixDump(format) => settings.matrix_dump_format == format,
+            Self::DumpExit(exit) => settings.exit_after_matrix_dump == exit,
         }
     }
 }
@@ -108,7 +135,12 @@ fn text(value: impl Into<String>) -> impl Bundle {
 }
 
 pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
-    for kind in [Kind::Analysis, Kind::Method] {
+    for kind in [
+        Kind::Analysis,
+        Kind::Method,
+        Kind::MatrixDump,
+        Kind::DumpExit,
+    ] {
         parent
             .spawn((
                 kind,
@@ -298,6 +330,8 @@ fn choose(
     match *choice {
         Choice::Analysis(value) => setup.solver.analysis_type = value,
         Choice::Method(value) => setup.solver.solver_method = value,
+        Choice::MatrixDump(format) => setup.solver.matrix_dump_format = format,
+        Choice::DumpExit(exit) => setup.solver.exit_after_matrix_dump = exit,
     }
 }
 

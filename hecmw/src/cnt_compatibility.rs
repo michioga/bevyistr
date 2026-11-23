@@ -3,7 +3,9 @@
 //! be reported. Expand this allow-list only with round-trip regression tests.
 
 use super::{CntData, KeywordHeader, parse_keyword_header, strip_comment};
-use fem_core::{AnalysisType, PsrVisualControl, SetupImportIssue, SolverSettings};
+use fem_core::{
+    AnalysisType, MatrixDumpFormat, PsrVisualControl, SetupImportIssue, SolverSettings,
+};
 use std::collections::HashSet;
 
 pub(super) fn audit(
@@ -63,13 +65,15 @@ pub(super) fn audit(
             i += 1;
         }
         let name = header.name.as_str();
-        let reason = if matches!(name, "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP")
-            && raw
-                .split(',')
-                .skip(1)
-                .filter(|p| !p.trim().is_empty())
-                .count()
-                != header.params.len()
+        let reason = if matches!(
+            name,
+            "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP" | "SOLVER"
+        ) && raw
+            .split(',')
+            .skip(1)
+            .filter(|p| !p.trim().is_empty())
+            .count()
+            != header.params.len()
         {
             Some("Repeated or empty parameters cannot be preserved unambiguously".to_string())
         } else if matches!(
@@ -139,7 +143,9 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
     }
     let allowed: &[&str] = match name {
         "SOLUTION" => &["TYPE", "NONLINEAR"],
-        "SOLVER" => &["METHOD", "PRECOND", "ITERLOG", "TIMELOG"],
+        "SOLVER" => &[
+            "METHOD", "PRECOND", "ITERLOG", "TIMELOG", "DUMPTYPE", "DUMPEXIT",
+        ],
         "BOUNDARY" | "CLOAD" => &["GRPID", "ROT_CENTER"],
         "DLOAD" => &["GRPID"],
         "CONTACT" => &["GRPID", "INTERACTION"],
@@ -347,6 +353,17 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
         Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
     ) {
         Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
+    } else if h
+        .params
+        .get("DUMPTYPE")
+        .is_some_and(|value| MatrixDumpFormat::from_frontistr(value).is_none())
+    {
+        Some("DUMPTYPE must be NONE, MM, CSR or BSR")
+    } else if !matches!(
+        parameter_value(h, "DUMPEXIT").as_deref(),
+        None | Some("YES" | "NO")
+    ) {
+        Some("DUMPEXIT must be YES or NO")
     } else if !solver.solver_method.is_iterative() && body.is_empty() {
         if h.params.contains_key("PRECOND")
             || ["ITERLOG", "TIMELOG"].into_iter().any(|key| {

@@ -43,8 +43,8 @@ mod write_settings;
 mod visual;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
-    DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, NodalLoad, NodeId,
-    RotationCenter, Section, SectionKind, SolverSettings,
+    DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, MatrixDumpFormat,
+    NodalLoad, NodeId, RotationCenter, Section, SectionKind, SolverSettings,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -476,6 +476,15 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         _ => LinearSolverMethod::Cg,
                     };
                 }
+                solver.matrix_dump_format = header
+                    .params
+                    .get("DUMPTYPE")
+                    .and_then(|value| MatrixDumpFormat::from_frontistr(value))
+                    .unwrap_or(MatrixDumpFormat::None);
+                solver.exit_after_matrix_dump = header
+                    .params
+                    .get("DUMPEXIT")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("YES"));
                 if !solver.solver_method.is_iterative() {
                     let log_enabled = |name| {
                         header.params.get(name).is_some_and(|value| value.eq_ignore_ascii_case("YES"))

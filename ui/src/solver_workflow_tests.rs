@@ -349,21 +349,25 @@ fn stop_running_fixture(app: &mut App, run_button: Entity, stop_button: Entity, 
     std::fs::remove_file(gate).unwrap();
 }
 
-#[test]
-fn subprocess_workflow_preserves_results_on_stop_and_loads_the_retry() {
-    let directory = tempfile::tempdir().unwrap();
-    let executable = directory.path().join(if cfg!(windows) {
+fn fixture_run(directory: &Path) -> FrontistrRunState {
+    let executable = directory.join(if cfg!(windows) {
         "bar-solver.exe"
     } else {
         "bar-solver"
     });
     std::fs::copy(crate::solver_process::subprocess_fixture(), &executable).unwrap();
-    let run = FrontistrRunState {
+    FrontistrRunState {
         executable,
+        launch_mode: SolverLaunchMode::Direct,
         runtime_environment: RuntimeEnvironment::Inherited,
         ..default()
-    };
-    check_latest_results(run, true);
+    }
+}
+
+#[test]
+fn subprocess_workflow_preserves_results_on_stop_and_loads_the_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    check_latest_results(fixture_run(directory.path()), true);
 }
 
 fn installed_run(launch_mode: SolverLaunchMode) -> FrontistrRunState {
@@ -382,6 +386,71 @@ fn installed_run(launch_mode: SolverLaunchMode) -> FrontistrRunState {
 #[ignore = "Requires installed FrontISTR"]
 fn installed_frontistr_workflow_direct() {
     check_latest_results(installed_run(SolverLaunchMode::Direct), false);
+}
+
+fn check_matrix_dump_workflow(run: FrontistrRunState, native: bool) {
+    let input = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    write_reference_project(input.path());
+    let (mut app, button, _) = load_project(input.path(), output.path(), run);
+    let seconds = if native { 90 } else { 10 };
+    {
+        let mut setup = app.world_mut().resource_mut::<AnalysisSetup>();
+        setup.solver.matrix_dump_format = fem_core::MatrixDumpFormat::MatrixMarket;
+        setup.solver.exit_after_matrix_dump = true;
+    }
+
+    click(&mut app, button);
+    wait_until(&mut app, seconds, |world| {
+        !world.resource::<FrontistrRunState>().is_running()
+    });
+    let run = app.world().resource::<FrontistrRunState>();
+    assert_eq!(
+        run.phase,
+        SolverRunPhase::Succeeded,
+        "{}\n{}",
+        run.status_label(),
+        run.log_label()
+    );
+    assert!(
+        run.message
+            .contains("Check the run folder for matrix dumps")
+    );
+    assert!(run.completed_results().is_none());
+    assert!(app.world().resource::<FemResultSet>().active.is_none());
+    assert_eq!(*app.world().resource::<SidebarPage>(), SidebarPage::Solve);
+    if native {
+        let matrix = std::fs::read_to_string(output.path().join("dump_matrix_1_0.mm")).unwrap();
+        assert!(matrix.starts_with("%%MatrixMarket"));
+        assert!(output.path().join("dump_matrix_1_0.rhs").is_file());
+    } else {
+        // The test solver deliberately writes results to exercise suppression.
+        // Remove them before retrying so the test does not depend on timestamps.
+        for step in 0..=1 {
+            std::fs::remove_file(output.path().join(format!("bar.res.0.{step}"))).unwrap();
+        }
+    }
+
+    app.world_mut()
+        .resource_mut::<AnalysisSetup>()
+        .solver
+        .exit_after_matrix_dump = false;
+    solve_and_check(&mut app, button, NODAL_FORCE, seconds);
+    if native {
+        assert!(output.path().join("dump_matrix_1_0.sol").is_file());
+    }
+}
+
+#[test]
+fn matrix_dump_only_skips_result_loading_and_continue_restores_it() {
+    let directory = tempfile::tempdir().unwrap();
+    check_matrix_dump_workflow(fixture_run(directory.path()), false);
+}
+
+#[test]
+#[ignore = "Requires installed FrontISTR"]
+fn installed_frontistr_matrix_dump_then_normal_result_load() {
+    check_matrix_dump_workflow(installed_run(SolverLaunchMode::Direct), true);
 }
 
 #[test]

@@ -446,6 +446,10 @@ pub struct SolverSettings {
     /// Explicit log options for direct solvers. Authored projects enable both.
     pub direct_iteration_log: bool,
     pub direct_time_log: bool,
+    /// FrontISTR DUMPTYPE for the assembled matrix and right-hand side.
+    pub matrix_dump_format: MatrixDumpFormat,
+    /// FrontISTR DUMPEXIT, effective when matrix dumping is enabled.
+    pub exit_after_matrix_dump: bool,
 }
 
 impl Default for SolverSettings {
@@ -463,6 +467,37 @@ impl Default for SolverSettings {
             solver_method: LinearSolverMethod::Cg,
             direct_iteration_log: true,
             direct_time_log: true,
+            matrix_dump_format: MatrixDumpFormat::None,
+            exit_after_matrix_dump: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixDumpFormat {
+    None,
+    MatrixMarket,
+    Csr,
+    Bsr,
+}
+
+impl MatrixDumpFormat {
+    pub const fn frontistr_value(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::MatrixMarket => "MM",
+            Self::Csr => "CSR",
+            Self::Bsr => "BSR",
+        }
+    }
+
+    pub fn from_frontistr(value: &str) -> Option<Self> {
+        match value.to_ascii_uppercase().as_str() {
+            "NONE" | "0" => Some(Self::None),
+            "MM" | "1" => Some(Self::MatrixMarket),
+            "CSR" | "2" => Some(Self::Csr),
+            "BSR" | "3" => Some(Self::Bsr),
+            _ => None,
         }
     }
 }

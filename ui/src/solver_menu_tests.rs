@@ -103,6 +103,23 @@ fn assert_export(app: &App, choice: Choice) {
 }
 
 #[test]
+fn matrix_dump_menus_control_export_without_changing_the_solver_method() {
+    let mut app = app();
+    open(&mut app, Kind::MatrixDump);
+    click_choice(&mut app, Choice::MatrixDump(MatrixDumpFormat::MatrixMarket));
+    open(&mut app, Kind::DumpExit);
+    click_choice(&mut app, Choice::DumpExit(true));
+
+    let setup = app.world().resource::<AnalysisSetup>();
+    assert_eq!(setup.solver.solver_method, LinearSolverMethod::Cg);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("model.cnt");
+    hecmw::cnt_writer::write_cnt_file(&path, setup).unwrap();
+    let cnt = std::fs::read_to_string(path).unwrap();
+    assert!(cnt.contains(", DUMPTYPE=MM, DUMPEXIT=YES\n"));
+}
+
+#[test]
 fn pointer_selection_preserves_numbers_exports_and_supports_undo_redo() {
     let mut app = app();
     let original = SolverSettings {
