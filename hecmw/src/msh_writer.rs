@@ -217,17 +217,7 @@ fn write_msh_assembly_impl(
     // ── NODE (all parts) ──
     writeln!(combined, "!NODE").unwrap();
     for (mesh, &(noff, _)) in model.meshes.iter().zip(&offsets) {
-        for node in &mesh.nodes {
-            writeln!(
-                combined,
-                " {},{:.8e},{:.8e},{:.8e}",
-                node.id.0 + noff,
-                node.position.x,
-                node.position.y,
-                node.position.z,
-            )
-            .unwrap();
-        }
+        write_mesh_nodes(&mut combined, mesh, noff);
     }
 
     // ── ELEMENT (all parts, grouped by type across all parts) ──
@@ -732,6 +722,21 @@ pub(crate) fn element_type_code(et: &ElementType) -> Option<&'static str> {
     }
 }
 
+fn write_mesh_nodes(out: &mut String, mesh: &FemMesh, offset: u32) {
+    for node in &mesh.nodes {
+        let position = mesh.precise_node_position(node);
+        writeln!(
+            out,
+            " {},{:e},{:e},{:e}",
+            node.id.0 + offset,
+            position.x,
+            position.y,
+            position.z,
+        )
+        .unwrap();
+    }
+}
+
 fn build_msh(
     mesh: &FemMesh,
     mesh_index: usize,
@@ -746,14 +751,7 @@ fn build_msh(
 
     // ── NODE ──
     writeln!(out, "!NODE").unwrap();
-    for node in &mesh.nodes {
-        writeln!(
-            out,
-            " {},{:.8e},{:.8e},{:.8e}",
-            node.id.0, node.position.x, node.position.y, node.position.z,
-        )
-        .unwrap();
-    }
+    write_mesh_nodes(&mut out, mesh, 0);
 
     // ── ELEMENT — one !ELEMENT block per unique element type ──
     let mut type_codes_seen: Vec<&str> = Vec::new();
@@ -935,20 +933,74 @@ mod tests {
 
     #[test]
     fn preserves_mesh_coordinates_through_export() {
+        use bevy::math::DVec3;
+
         let mesh = crate::parse_mesh_str(
-            "!NODE,SYSTEM=C\n1,2,90,0\n!! keep reading nodes\n2,4,,1e-7\n!NODE\n3,-1e-7,1.2345679,0\n",
+            "!NODE,SYSTEM=C\n1,2,90,0\n!! keep reading nodes\n2,4,,1e-7\n!NODE\n3,100000000,1.2345678901234567,0\n4,100000001,0,0\n",
         )
         .unwrap();
         assert!(mesh.nodes[0].position.x.abs() < 1e-12);
         assert_eq!(mesh.nodes[0].position.y, 2.0);
         assert_eq!(mesh.nodes[1].position.y, 0.0);
         assert_eq!(mesh.nodes[1].position.z, 1e-7);
+        assert_eq!(mesh.nodes[2].position.x, mesh.nodes[3].position.x);
         let exported = build_msh(&mesh, 0, &[], None);
         let reloaded = crate::parse_mesh_str(&exported).unwrap();
         for (actual, expected) in reloaded.nodes.iter().zip(&mesh.nodes) {
-            assert_eq!(actual.position, expected.position);
+            assert_eq!(
+                reloaded.precise_node_position(actual),
+                mesh.precise_node_position(expected),
+            );
         }
         assert_eq!(reloaded.nodes.len(), mesh.nodes.len());
+        assert_eq!(
+            reloaded.precise_node_position(&reloaded.nodes[2]),
+            DVec3::new(100000000.0, 1.2345678901234567, 0.0),
+        );
+        assert_eq!(
+            reloaded.precise_node_position(&reloaded.nodes[3]).x,
+            100000001.0,
+        );
+    }
+
+    #[test]
+    fn assembly_export_preserves_precise_coordinates_through_pose_edits() {
+        use bevy::prelude::{Quat, Vec3};
+
+        let mesh = crate::parse_mesh_str(
+            "!NODE\n1,100000000,0,0\n2,100000001,0,0\n3,100000000,1,0\n4,100000000,0,1\n!ELEMENT,TYPE=341\n1,1,2,3,4\n",
+        )
+        .unwrap();
+        let mut model = FemModel::single_mesh("First part", mesh.clone());
+        let second = model.add_mesh("Second part", mesh);
+        assert!(model.translate_part(second, Vec3::X));
+        assert!(model.rotate_part_about_centroid(
+            second,
+            Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+        ));
+        model.meshes[second].nodes[1].position.z = 4.0;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("assembly.msh");
+        write_msh_assembly(&path, &model).unwrap();
+        let reloaded = crate::load_mesh_file(&path).unwrap();
+        let first_node = &reloaded.nodes[1];
+        let second_node = &reloaded.nodes[5];
+        assert_eq!(first_node.id, NodeId(2));
+        assert_eq!(second_node.id, NodeId(7));
+        assert_eq!(reloaded.precise_node_position(first_node).x, 100000001.0);
+        let position = reloaded.precise_node_position(second_node);
+        assert_eq!(position.x, 100000002.0);
+        assert!((position.y - 0.5).abs() < 1e-12);
+        assert_eq!(position.z, 4.0);
+
+        assert!(model.reset_part_pose(second));
+        write_msh_assembly(&path, &model).unwrap();
+        let reloaded = crate::load_mesh_file(&path).unwrap();
+        assert_eq!(
+            reloaded.precise_node_position(&reloaded.nodes[1]),
+            reloaded.precise_node_position(&reloaded.nodes[5]),
+        );
     }
 
     #[test]

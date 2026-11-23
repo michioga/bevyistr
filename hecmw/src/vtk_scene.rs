@@ -257,11 +257,11 @@ pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
                 // Build topology only after ghost filtering and only for the
                 // first frame. Later frames still compare all nodes/elements.
                 let mesh = mesh.into_mesh();
-                model.parts.push(fem_core::Part {
-                    name: format!("VTK piece {} (local IDs)", i + 1),
-                    mesh_index: i,
-                    original_node_positions: mesh.nodes.iter().map(|node| node.position).collect(),
-                });
+                model.parts.push(fem_core::Part::from_mesh(
+                    format!("VTK piece {} (local IDs)", i + 1),
+                    i,
+                    &mesh,
+                ));
                 model.meshes.push(mesh);
                 step.step = number;
                 steps.push(vec![step]);

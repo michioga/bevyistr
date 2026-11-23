@@ -38,13 +38,14 @@ pub use result::{ResultLoadError, load_result_file, parse_result_str};
 pub use series::{detect_series, load_series};
 pub use vtu::{VtuError, load_vtu_file};
 
+use bevy::math::DVec3;
 use std::fmt;
 use std::fs;
 use std::path::Path;
 
 use fem_core::{
-    ElementFaceRef, ElementId, ElementType, FemElement, FemElementSet, FemMesh, FemNode,
-    FemNodeSet, FemSurfaceSet, LocalFaceId, NodeId,
+    ElementFaceRef, ElementId, ElementType, FemElement, FemElementSet, FemMesh, FemNodeSet,
+    FemSurfaceSet, LocalFaceId, NodeId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -737,11 +738,16 @@ pub fn parse_mesh_str(source: &str) -> Result<FemMesh, HecmwParseError> {
         match &section {
             Section::Ignore => {}
             Section::Node { group, cylindrical } => {
-                let node = parse_node(line, line_number, *cylindrical)?;
-                if let Some(index) = group {
-                    mesh.node_sets[*index].nodes.push(node.id);
+                let (id, position) = parse_node(line, line_number, *cylindrical)?;
+                if !mesh.push_precise_node(id, position) {
+                    return Err(HecmwParseError::new(
+                        line_number,
+                        "node coordinate exceeds model precision",
+                    ));
                 }
-                mesh.nodes.push(node);
+                if let Some(index) = group {
+                    mesh.node_sets[*index].nodes.push(id);
+                }
             }
             Section::Element { element_type, group } => {
                 let element = parse_element(line, line_number, element_type.clone())?;
@@ -873,7 +879,7 @@ fn parse_node(
     line: &str,
     line_number: usize,
     cylindrical: bool,
-) -> Result<FemNode, HecmwParseError> {
+) -> Result<(NodeId, DVec3), HecmwParseError> {
     let fields: Vec<_> = line
         .split(',')
         .flat_map(|field| {
@@ -903,11 +909,7 @@ fn parse_node(
     } else {
         (x, y)
     };
-    let [x, y, z] = [x as f32, y as f32, z as f32];
-    if ![x, y, z].into_iter().all(f32::is_finite) {
-        return Err(HecmwParseError::new(line_number, "node coordinate exceeds model precision"));
-    }
-    Ok(FemNode::from_xyz(NodeId(id), x, y, z))
+    Ok((NodeId(id), DVec3::new(x, y, z)))
 }
 
 fn parse_element(

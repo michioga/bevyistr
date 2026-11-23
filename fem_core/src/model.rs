@@ -1,5 +1,6 @@
+use bevy::math::DVec3;
 use bevy::prelude::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
 
 use crate::SelectionLevel;
@@ -25,6 +26,20 @@ pub struct Part {
     /// contact search, and export; this snapshot only provides a reliable
     /// "Reset pose" operation for assembly editing.
     pub original_node_positions: Vec<Vec3>,
+
+    original_precise_node_positions: Arc<HashMap<NodeId, DVec3>>,
+}
+
+impl Part {
+    /// Records the starting pose for an existing mesh.
+    pub fn from_mesh(name: impl Into<String>, mesh_index: usize, mesh: &FemMesh) -> Self {
+        Self {
+            name: name.into(),
+            mesh_index,
+            original_node_positions: mesh.nodes.iter().map(|node| node.position).collect(),
+            original_precise_node_positions: Arc::clone(&mesh.precise_node_positions),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,6 +190,9 @@ impl ContactType {
 pub struct FemMesh {
     pub nodes: Vec<FemNode>,
 
+    // Native mesh coordinates for export and pose edits. The viewport uses Vec3.
+    precise_node_positions: Arc<HashMap<NodeId, DVec3>>,
+
     pub elements: Vec<FemElement>,
 
     pub node_sets: Vec<FemNodeSet>,
@@ -220,10 +238,7 @@ impl FemMesh {
         let mut mesh = Self {
             nodes,
             elements,
-            node_sets: Vec::new(),
-            element_sets: Vec::new(),
-            surface_sets: Vec::new(),
-            topology: TopologyCache::default(),
+            ..Self::default()
         };
 
         mesh.rebuild_topology_cache();
@@ -379,6 +394,53 @@ impl FemMesh {
         ids.iter()
             .map(|id| self.node_position(*id))
             .collect::<Option<Vec<_>>>()
+    }
+
+    /// Adds an imported node without rounding its coordinates for export.
+    /// Returns false if the position cannot also be represented in the viewport.
+    /// Rebuild the topology cache after adding nodes.
+    pub fn push_precise_node(&mut self, id: NodeId, position: DVec3) -> bool {
+        let display = position.as_vec3();
+        if !display.is_finite() {
+            return false;
+        }
+        self.nodes.push(FemNode::new(id, display));
+        Arc::make_mut(&mut self.precise_node_positions).insert(id, position);
+        true
+    }
+
+    /// Returns the position for export for a node belonging to this mesh.
+    pub fn precise_node_position(&self, node: &FemNode) -> DVec3 {
+        Self::effective_node_position(node, &self.precise_node_positions)
+    }
+
+    fn effective_node_position(node: &FemNode, positions: &HashMap<NodeId, DVec3>) -> DVec3 {
+        let display = node.position.as_dvec3();
+        match positions.get(&node.id) {
+            // A direct edit to the public position supersedes the saved coordinate
+            // on each changed axis.
+            Some(&source) => DVec3::select(node.position.cmpeq(source.as_vec3()), source, display),
+            None => display,
+        }
+    }
+
+    fn centroid(&self, position: impl Fn(&FemNode) -> DVec3) -> Option<DVec3> {
+        (!self.nodes.is_empty()).then(|| {
+            self.nodes.iter().map(position).sum::<DVec3>() / self.nodes.len() as f64
+        })
+    }
+
+    fn transform_node_positions(&mut self, transform: impl Fn(DVec3) -> DVec3) {
+        let positions = Arc::make_mut(&mut self.precise_node_positions);
+        let preserve_precision = !positions.is_empty();
+        for node in &mut self.nodes {
+            let position = transform(Self::effective_node_position(node, positions));
+            node.position = position.as_vec3();
+            if preserve_precision {
+                positions.insert(node.id, position);
+            }
+        }
+        self.rebuild_topology_cache();
     }
 
     pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
@@ -946,14 +1008,10 @@ impl FemModel {
     pub fn single_mesh(name: impl Into<String>, mesh: FemMesh) -> Self {
         let mut mesh = mesh;
         mesh.rebuild_topology_cache();
-        let original_node_positions = mesh.nodes.iter().map(|node| node.position).collect();
+        let part = Part::from_mesh(name, 0, &mesh);
 
         Self {
-            parts: vec![Part {
-                name: name.into(),
-                mesh_index: 0,
-                original_node_positions,
-            }],
+            parts: vec![part],
             meshes: vec![mesh],
             contacts: Vec::new(),
         }
@@ -970,16 +1028,10 @@ impl FemModel {
     pub fn add_mesh(&mut self, name: impl Into<String>, mesh: FemMesh) -> usize {
         let mut mesh = mesh;
         mesh.rebuild_topology_cache();
-        let original_node_positions = mesh.nodes.iter().map(|node| node.position).collect();
-
         let mesh_index = self.meshes.len();
 
+        self.parts.push(Part::from_mesh(name, mesh_index, &mesh));
         self.meshes.push(mesh);
-        self.parts.push(Part {
-            name: name.into(),
-            mesh_index,
-            original_node_positions,
-        });
 
         mesh_index
     }
@@ -987,17 +1039,10 @@ impl FemModel {
     /// Returns the current arithmetic centre of a part's nodes.
     pub fn part_centroid(&self, part_index: usize) -> Option<Vec3> {
         let mesh_index = self.parts.get(part_index)?.mesh_index;
-        let mesh = self.meshes.get(mesh_index)?;
-        if mesh.nodes.is_empty() {
-            return None;
-        }
-
-        Some(
-            mesh.nodes
-                .iter()
-                .fold(Vec3::ZERO, |sum, node| sum + node.position)
-                / mesh.nodes.len() as f32,
-        )
+        self.meshes
+            .get(mesh_index)?
+            .centroid(|node| node.position.as_dvec3())
+            .map(DVec3::as_vec3)
     }
 
     /// Returns the current axis-aligned bounds of one assembly part.
@@ -1023,10 +1068,8 @@ impl FemModel {
             return false;
         };
 
-        for node in &mut mesh.nodes {
-            node.position += delta;
-        }
-        mesh.rebuild_topology_cache();
+        let delta = delta.as_dvec3();
+        mesh.transform_node_positions(|position| position + delta);
         true
     }
 
@@ -1036,21 +1079,17 @@ impl FemModel {
             return false;
         }
 
-        let Some(centroid) = self.part_centroid(part_index) else {
-            return false;
-        };
         let Some(mesh_index) = self.parts.get(part_index).map(|part| part.mesh_index) else {
             return false;
         };
         let Some(mesh) = self.meshes.get_mut(mesh_index) else {
             return false;
         };
-        let rotation = rotation.normalize();
-
-        for node in &mut mesh.nodes {
-            node.position = centroid + rotation * (node.position - centroid);
-        }
-        mesh.rebuild_topology_cache();
+        let Some(centroid) = mesh.centroid(|node| mesh.precise_node_position(node)) else {
+            return false;
+        };
+        let rotation = rotation.as_dquat().normalize();
+        mesh.transform_node_positions(|position| centroid + rotation * (position - centroid));
         true
     }
 
@@ -1073,6 +1112,7 @@ impl FemModel {
         {
             node.position = original;
         }
+        mesh.precise_node_positions = Arc::clone(&part.original_precise_node_positions);
         mesh.rebuild_topology_cache();
         true
     }
