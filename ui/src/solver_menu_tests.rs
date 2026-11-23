@@ -120,6 +120,31 @@ fn matrix_dump_menus_control_export_without_changing_the_solver_method() {
 }
 
 #[test]
+fn solver_log_menus_keep_settings_across_method_changes_and_export() {
+    let mut app = app();
+    open(&mut app, Kind::ResidualLog);
+    click_choice(&mut app, Choice::ResidualLog(Some(false)));
+    open(&mut app, Kind::TimingLog);
+    click_choice(&mut app, Choice::TimingLog(Some(SolverTimeLog::Verbose)));
+    open(&mut app, Kind::Method);
+    click_choice(&mut app, Choice::Method(LinearSolverMethod::Mumps));
+    assert_export(&app, Choice::ResidualLog(Some(false)));
+    assert_export(&app, Choice::TimingLog(Some(SolverTimeLog::Verbose)));
+
+    open(&mut app, Kind::TimingLog);
+    click_choice(&mut app, Choice::TimingLog(None));
+    let setup = app.world().resource::<AnalysisSetup>();
+    assert_eq!(setup.solver.iteration_log, Some(false));
+    assert_eq!(setup.solver.time_log, None);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("model.cnt");
+    hecmw::cnt_writer::write_cnt_file(&path, setup).unwrap();
+    let cnt = std::fs::read_to_string(path).unwrap();
+    assert!(cnt.contains("!SOLVER, METHOD=MUMPS, ITERLOG=NO\n"));
+    assert!(!cnt.contains("TIMELOG="));
+}
+
+#[test]
 fn pointer_selection_preserves_numbers_exports_and_supports_undo_redo() {
     let mut app = app();
     let original = SolverSettings {

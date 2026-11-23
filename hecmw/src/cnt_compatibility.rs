@@ -4,7 +4,7 @@
 
 use super::{CntData, KeywordHeader, parse_keyword_header, strip_comment};
 use fem_core::{
-    AnalysisType, MatrixDumpFormat, PsrVisualControl, SetupImportIssue, SolverSettings,
+    AnalysisType, MatrixDumpFormat, PsrVisualControl, SetupImportIssue, SolverSettings, SolverTimeLog,
 };
 use std::collections::HashSet;
 
@@ -364,26 +364,18 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
         None | Some("YES" | "NO")
     ) {
         Some("DUMPEXIT must be YES or NO")
+    } else if !matches!(parameter_value(h, "ITERLOG").as_deref(), None | Some("YES" | "NO")) {
+        Some("ITERLOG must be YES or NO")
+    } else if h.params.get("TIMELOG").is_some_and(|value| SolverTimeLog::from_frontistr(value).is_none()) {
+        Some("TIMELOG must be YES, NO or VERBOSE")
     } else if !solver.solver_method.is_iterative() && body.is_empty() {
-        if h.params.contains_key("PRECOND")
-            || ["ITERLOG", "TIMELOG"].into_iter().any(|key| {
-                !matches!(
-                    parameter_value(h, key).as_deref(),
-                    None | Some("YES" | "NO")
-                )
-            })
-        {
-            Some("Direct solver export supports ITERLOG and TIMELOG with YES or NO")
-        } else {
-            None
-        }
+        h.params.contains_key("PRECOND")
+            .then_some("PRECOND on a direct solver header without data rows cannot be preserved")
     } else if !matches!(
         parameter_value(h, "PRECOND").as_deref(),
         Some("1" | "2" | "3")
-    ) || !parameter_is(h, "ITERLOG", "YES")
-        || !parameter_is(h, "TIMELOG", "YES")
-    {
-        Some("Only explicit PRECOND=1, 2 or 3 with ITERLOG=YES and TIMELOG=YES is preserved")
+    ) {
+        Some("Only explicit PRECOND=1, 2 or 3 is preserved")
     } else if solver.max_iterations == 0
         || solver.max_iterations > i32::MAX as u32
         || solver.preconditioner_iterations == 0
@@ -572,7 +564,8 @@ mod tests {
             "!SOLUTION, TYPE=STATICEIGEN",
             "!SOLUTION, TYPE=TYPO",
             "!SOLUTION, TYPE=DYNAMIC, NONLINEAR",
-            "!SOLVER, METHOD=DIRECTMKL, TIMELOG=VERBOSE",
+            "!SOLVER, METHOD=DIRECTMKL, TIMELOG=INVALID",
+            "!SOLVER, METHOD=DIRECTMKL, ITERLOG=VERBOSE",
             "!SOLVER, METHOD=UNKNOWN",
             "!SOLVER, METHOD=CG, PRECOND=2",
             "!STEP, SUBSTEPS=3, CONVERG=1e-8",

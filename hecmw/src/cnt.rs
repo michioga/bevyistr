@@ -44,7 +44,7 @@ mod visual;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
     DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, MatrixDumpFormat,
-    NodalLoad, NodeId, RotationCenter, Section, SectionKind, SolverSettings,
+    NodalLoad, NodeId, RotationCenter, Section, SectionKind, SolverSettings, SolverTimeLog,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -485,13 +485,15 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     .params
                     .get("DUMPEXIT")
                     .is_some_and(|value| value.eq_ignore_ascii_case("YES"));
-                if !solver.solver_method.is_iterative() {
-                    let log_enabled = |name| {
-                        header.params.get(name).is_some_and(|value| value.eq_ignore_ascii_case("YES"))
-                    };
-                    solver.direct_iteration_log = log_enabled("ITERLOG");
-                    solver.direct_time_log = log_enabled("TIMELOG");
-                }
+                solver.iteration_log = header.params.get("ITERLOG").and_then(|value| {
+                    match value.to_ascii_uppercase().as_str() {
+                        "YES" => Some(true),
+                        "NO" => Some(false),
+                        _ => None,
+                    }
+                });
+                solver.time_log = header.params.get("TIMELOG")
+                    .and_then(|value| SolverTimeLog::from_frontistr(value));
                 if let Some(value) = header.params.get("PRECOND").and_then(|v| v.parse().ok()) {
                     solver.preconditioner = value;
                 }

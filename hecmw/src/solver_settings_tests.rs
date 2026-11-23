@@ -138,6 +138,43 @@ fn hinge_solver_options_and_implicit_group_one_survive_export() {
 }
 
 #[test]
+fn solver_log_settings_preserve_explicit_values_and_omissions() {
+    for (solver, rows) in [
+        ("METHOD=CG, PRECOND=2", "100,1\n1e-6,1,0\n"),
+        ("METHOD=MUMPS", ""),
+    ] {
+        for (iter_param, iteration_log) in [
+            ("", None),
+            (", ITERLOG=yes", Some(true)),
+            (", ITERLOG=NO", Some(false)),
+        ] {
+            for (time_param, time_log) in [
+                ("", None),
+                (", TIMELOG=YES", Some(SolverTimeLog::Summary)),
+                (", TIMELOG=no", Some(SolverTimeLog::Off)),
+                (", TIMELOG=Verbose", Some(SolverTimeLog::Verbose)),
+            ] {
+                let imported = parsed(&format!(
+                    "!SOLVER, {solver}{iter_param}{time_param}\n{rows}!END"
+                ));
+                assert!(imported.import_issues.is_empty(), "{:?}", imported.import_issues);
+                let mut setup = AnalysisSetup::default();
+                imported.merge_into(&mut setup);
+                assert_eq!(setup.solver.iteration_log, iteration_log);
+                assert_eq!(setup.solver.time_log, time_log);
+
+                let output = crate::cnt_writer::build_cnt(&setup, &[]);
+                assert_eq!(output.contains("ITERLOG="), iteration_log.is_some());
+                assert_eq!(output.contains("TIMELOG="), time_log.is_some());
+                let reloaded = parsed(&output);
+                assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+                assert_eq!(reloaded.solver.unwrap(), setup.solver);
+            }
+        }
+    }
+}
+
+#[test]
 fn matrix_dump_settings_round_trip_for_iterative_and_direct_solvers() {
     for (header, rows) in [
         (

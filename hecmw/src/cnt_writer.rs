@@ -210,19 +210,13 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     // ── SOLVER ──
     write!(o, "!SOLVER, METHOD={}", s.solver_method.frontistr_method()).unwrap();
     if s.solver_method.is_iterative() {
-        write!(
-            o,
-            ", PRECOND={}, ITERLOG=YES, TIMELOG=YES",
-            s.preconditioner
-        )
-        .unwrap();
-    } else {
-        if s.direct_iteration_log {
-            write!(o, ", ITERLOG=YES").unwrap();
-        }
-        if s.direct_time_log {
-            write!(o, ", TIMELOG=YES").unwrap();
-        }
+        write!(o, ", PRECOND={}", s.preconditioner).unwrap();
+    }
+    if let Some(enabled) = s.iteration_log {
+        write!(o, ", ITERLOG={}", if enabled { "YES" } else { "NO" }).unwrap();
+    }
+    if let Some(setting) = s.time_log {
+        write!(o, ", TIMELOG={}", setting.frontistr_value()).unwrap();
     }
     if s.matrix_dump_format != fem_core::MatrixDumpFormat::None {
         write!(o, ", DUMPTYPE={}", s.matrix_dump_format.frontistr_value()).unwrap();

@@ -16,12 +16,16 @@ use bevy::{
         popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
     },
 };
-use fem_core::{AnalysisSetup, AnalysisType, LinearSolverMethod, MatrixDumpFormat, SolverSettings};
+use fem_core::{
+    AnalysisSetup, AnalysisType, LinearSolverMethod, MatrixDumpFormat, SolverSettings, SolverTimeLog,
+};
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Analysis,
     Method,
+    ResidualLog,
+    TimingLog,
     MatrixDump,
     DumpExit,
 }
@@ -39,6 +43,8 @@ struct Popup {
 enum Choice {
     Analysis(AnalysisType),
     Method(LinearSolverMethod),
+    ResidualLog(Option<bool>),
+    TimingLog(Option<SolverTimeLog>),
     MatrixDump(MatrixDumpFormat),
     DumpExit(bool),
 }
@@ -48,6 +54,8 @@ impl Kind {
         match self {
             Self::Analysis => "Analysis type",
             Self::Method => "Linear solver",
+            Self::ResidualLog => "Residual log",
+            Self::TimingLog => "Solver timing log",
             Self::MatrixDump => "Matrix dump",
             Self::DumpExit => "Dump action",
         }
@@ -56,6 +64,8 @@ impl Kind {
         match self {
             Self::Analysis => Choice::Analysis(settings.analysis_type),
             Self::Method => Choice::Method(settings.solver_method),
+            Self::ResidualLog => Choice::ResidualLog(settings.iteration_log),
+            Self::TimingLog => Choice::TimingLog(settings.time_log),
             Self::MatrixDump => Choice::MatrixDump(settings.matrix_dump_format),
             Self::DumpExit => Choice::DumpExit(settings.exit_after_matrix_dump),
         }
@@ -79,6 +89,17 @@ impl Kind {
             ]
             .map(Choice::Method)
             .to_vec(),
+            Self::ResidualLog => [None, Some(false), Some(true)]
+                .map(Choice::ResidualLog)
+                .to_vec(),
+            Self::TimingLog => [
+                None,
+                Some(SolverTimeLog::Off),
+                Some(SolverTimeLog::Summary),
+                Some(SolverTimeLog::Verbose),
+            ]
+            .map(Choice::TimingLog)
+            .to_vec(),
             Self::MatrixDump => [
                 MatrixDumpFormat::None,
                 MatrixDumpFormat::MatrixMarket,
@@ -96,6 +117,11 @@ impl Choice {
         match self {
             Self::Analysis(a) => a.label(),
             Self::Method(m) => m.label(),
+            Self::ResidualLog(None) | Self::TimingLog(None) => "Default",
+            Self::ResidualLog(Some(false)) | Self::TimingLog(Some(SolverTimeLog::Off)) => "Off",
+            Self::ResidualLog(Some(true)) => "On",
+            Self::TimingLog(Some(SolverTimeLog::Summary)) => "Summary",
+            Self::TimingLog(Some(SolverTimeLog::Verbose)) => "Verbose",
             Self::MatrixDump(MatrixDumpFormat::None) => "Off",
             Self::MatrixDump(MatrixDumpFormat::MatrixMarket) => "Matrix Market (MM)",
             Self::MatrixDump(format) => format.frontistr_value(),
@@ -108,6 +134,11 @@ impl Choice {
             Self::Analysis(AnalysisType::NlStatic) => "!SOLUTION, TYPE=STATIC, NONLINEAR".into(),
             Self::Analysis(a) => format!("!SOLUTION, TYPE={}", a.frontistr_type()),
             Self::Method(m) => format!("!SOLVER, METHOD={}", m.frontistr_method()),
+            Self::ResidualLog(None) => "!SOLVER without ITERLOG".into(),
+            Self::ResidualLog(Some(false)) => "ITERLOG=NO".into(),
+            Self::ResidualLog(Some(true)) => "ITERLOG=YES".into(),
+            Self::TimingLog(None) => "!SOLVER without TIMELOG".into(),
+            Self::TimingLog(Some(setting)) => format!("TIMELOG={}", setting.frontistr_value()),
             Self::MatrixDump(format) => format!("!SOLVER, DUMPTYPE={}", format.frontistr_value()),
             Self::DumpExit(false) => "!SOLVER, DUMPEXIT=NO".into(),
             Self::DumpExit(true) => "!SOLVER, DUMPEXIT=YES".into(),
@@ -117,6 +148,8 @@ impl Choice {
         match self {
             Self::Analysis(a) => settings.analysis_type == a,
             Self::Method(m) => settings.solver_method == m,
+            Self::ResidualLog(setting) => settings.iteration_log == setting,
+            Self::TimingLog(setting) => settings.time_log == setting,
             Self::MatrixDump(format) => settings.matrix_dump_format == format,
             Self::DumpExit(exit) => settings.exit_after_matrix_dump == exit,
         }
@@ -138,6 +171,8 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     for kind in [
         Kind::Analysis,
         Kind::Method,
+        Kind::ResidualLog,
+        Kind::TimingLog,
         Kind::MatrixDump,
         Kind::DumpExit,
     ] {
@@ -330,6 +365,8 @@ fn choose(
     match *choice {
         Choice::Analysis(value) => setup.solver.analysis_type = value,
         Choice::Method(value) => setup.solver.solver_method = value,
+        Choice::ResidualLog(setting) => setup.solver.iteration_log = setting,
+        Choice::TimingLog(setting) => setup.solver.time_log = setting,
         Choice::MatrixDump(format) => setup.solver.matrix_dump_format = format,
         Choice::DumpExit(exit) => setup.solver.exit_after_matrix_dump = exit,
     }

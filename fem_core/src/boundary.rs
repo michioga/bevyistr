@@ -443,9 +443,10 @@ pub struct SolverSettings {
     pub nonlinear_convergence_tol: f32,
     /// Linear solver method.
     pub solver_method: LinearSolverMethod,
-    /// Explicit log options for direct solvers. Authored projects enable both.
-    pub direct_iteration_log: bool,
-    pub direct_time_log: bool,
+    /// FrontISTR ITERLOG. None leaves the solver's default in effect.
+    pub iteration_log: Option<bool>,
+    /// FrontISTR TIMELOG. None leaves the solver's default in effect.
+    pub time_log: Option<SolverTimeLog>,
     /// FrontISTR DUMPTYPE for the assembled matrix and right-hand side.
     pub matrix_dump_format: MatrixDumpFormat,
     /// FrontISTR DUMPEXIT, effective when matrix dumping is enabled.
@@ -465,11 +466,34 @@ impl Default for SolverSettings {
             nonlinear_max_iterations: 50,
             nonlinear_convergence_tol: 1.0e-3,
             solver_method: LinearSolverMethod::Cg,
-            direct_iteration_log: true,
-            direct_time_log: true,
+            iteration_log: Some(true),
+            time_log: Some(SolverTimeLog::Summary),
             matrix_dump_format: MatrixDumpFormat::None,
             exit_after_matrix_dump: false,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolverTimeLog {
+    Off,
+    Summary,
+    Verbose,
+}
+
+impl SolverTimeLog {
+    pub const fn frontistr_value(self) -> &'static str {
+        match self {
+            Self::Off => "NO",
+            Self::Summary => "YES",
+            Self::Verbose => "VERBOSE",
+        }
+    }
+
+    pub fn from_frontistr(value: &str) -> Option<Self> {
+        [Self::Off, Self::Summary, Self::Verbose]
+            .into_iter()
+            .find(|setting| value.eq_ignore_ascii_case(setting.frontistr_value()))
     }
 }
 
