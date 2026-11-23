@@ -105,6 +105,11 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
     request.request(mesh.unwrap());
     let mut pending_cnt = PendingCntLoad::default();
     pending_cnt.request(cnt.unwrap(), 0, 0);
+    pending_cnt.project_control = Some(fem_core::FrontistrControlImport {
+        control: files.settings,
+        partition: None,
+        issues: files.import_issues,
+    });
     run.register_export(output.into(), "bar".into());
 
     let mut app = App::new();
@@ -368,6 +373,28 @@ fn fixture_run(directory: &Path) -> FrontistrRunState {
 fn subprocess_workflow_preserves_results_on_stop_and_loads_the_retry() {
     let directory = tempfile::tempdir().unwrap();
     check_latest_results(fixture_run(directory.path()), true);
+}
+
+#[test]
+fn subprocess_workflow_loads_a_custom_result_header_from_the_imported_project() {
+    let input = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    write_reference_project(input.path());
+    let control = input.path().join("hecmw_ctrl.dat");
+    let source = std::fs::read_to_string(&control).unwrap();
+    std::fs::write(
+        &control,
+        source.replace(" bar.res\n", " custom/bar-solver.out\n")
+            .replace(" bar_vis\n", " plots/bar-preview\n"),
+    ).unwrap();
+    std::fs::write(output.path().join("bar.res.0.99"), "unrelated").unwrap();
+    let run = fixture_run(output.path());
+    let (mut app, button, _) = load_project(input.path(), output.path(), run);
+    solve_and_check(&mut app, button, NODAL_FORCE, 10);
+    assert!(output.path().join("custom/bar-solver.out.0.1").is_file());
+    assert!(output.path().join("plots").is_dir());
+    let exported = hecmw::load_hecmw_ctrl(output.path().join("hecmw_ctrl.dat")).unwrap();
+    assert_eq!(exported.settings.visual_header.as_deref(), Some("plots/bar-preview"));
 }
 
 fn installed_run(launch_mode: SolverLaunchMode) -> FrontistrRunState {

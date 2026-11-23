@@ -20,7 +20,7 @@ pub(crate) struct RunResultSource {
     pub(crate) id: u64,
     pub(crate) model_version: u64,
     directory: PathBuf,
-    stem: String,
+    result_header: String,
     ranks: u16,
     subdirectory_limit: Option<u32>,
     before: Snapshot,
@@ -39,27 +39,51 @@ fn stamp(path: &Path) -> Result<Stamp, String> {
     })
 }
 
-fn snapshot(directory: &Path, stem: &str, subdirectory_limit: Option<u32>) -> Result<Snapshot, String> {
-    let prefix = format!("{stem}.res.");
+fn result_entries(directory: &Path) -> Result<Option<std::fs::ReadDir>, String> {
+    match directory.read_dir() {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", directory.display())),
+    }
+}
+
+fn snapshot(
+    directory: &Path,
+    result_header: &str,
+    subdirectory_limit: Option<u32>,
+) -> Result<Snapshot, String> {
+    let (parents, filename) = result_header.rsplit_once(['/', '\\']).unwrap_or(("", result_header));
+    let parents: PathBuf = parents.split(['/', '\\']).filter(|part| !part.is_empty()).collect();
+    let prefix = format!("{filename}.");
     let mut snapshot = BTreeMap::new();
     if subdirectory_limit.is_some() {
-        let root = directory.join("fstrRES");
-        let steps = match root.read_dir() {
-            Ok(steps) => steps,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(snapshot),
-            Err(error) => return Err(error.to_string()),
-        };
-        for step in steps {
+        for step in result_entries(&directory.join("fstrRES"))?.into_iter().flatten() {
             let step = step.map_err(|e| e.to_string())?;
-            let step_number = step.file_name().to_str().and_then(|name| {
+            let Some(step_number) = step.file_name().to_str().and_then(|name| {
                 name.strip_prefix("STEP")?.parse::<u32>().ok()
-            });
-            if step_number.is_some() && step.file_type().map_err(|e| e.to_string())?.is_dir() {
-                scan_results(&step.path(), &prefix, step_number, true, &mut snapshot)?;
+            }) else {
+                continue;
+            };
+            if !step.file_type().map_err(|e| e.to_string())?.is_dir() {
+                continue;
             }
+            let step_path = step.path();
+            let expected_step = Some(step_number);
+            for trunk in result_entries(&step_path)?.into_iter().flatten() {
+                let trunk = trunk.map_err(|e| e.to_string())?;
+                if trunk.file_name().to_str().and_then(|name| name.strip_prefix("TRUNK"))
+                    .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+                    && trunk.file_type().map_err(|e| e.to_string())?.is_dir()
+                {
+                    scan_results(
+                        &trunk.path().join(&parents), &prefix, expected_step, &mut snapshot,
+                    )?;
+                }
+            }
+            scan_results(&step_path.join(&parents), &prefix, expected_step, &mut snapshot)?;
         }
     } else {
-        scan_results(directory, &prefix, None, false, &mut snapshot)?;
+        scan_results(&directory.join(&parents), &prefix, None, &mut snapshot)?;
     }
     Ok(snapshot)
 }
@@ -68,20 +92,11 @@ fn scan_results(
     directory: &Path,
     prefix: &str,
     expected_step: Option<u32>,
-    scan_trunks: bool,
     snapshot: &mut Snapshot,
 ) -> Result<(), String> {
-    for entry in directory.read_dir().map_err(|e| e.to_string())? {
+    for entry in result_entries(directory)?.into_iter().flatten() {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        if scan_trunks
-            && name.to_str().and_then(|name| name.strip_prefix("TRUNK"))
-                .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
-            && entry.file_type().map_err(|e| e.to_string())?.is_dir()
-        {
-            scan_results(&entry.path(), prefix, expected_step, false, snapshot)?;
-            continue;
-        }
         let Some(suffix) = name.to_str().and_then(|n| n.strip_prefix(prefix)) else {
             continue;
         };
@@ -112,12 +127,12 @@ impl RunResultSource {
         ranks: u16,
         model_version: u64,
     ) -> Result<Self, String> {
-        Self::capture_with_subdirectories(directory, stem, ranks, model_version, None)
+        Self::capture_with_subdirectories(directory, &format!("{stem}.res"), ranks, model_version, None)
     }
 
     pub(crate) fn capture_with_subdirectories(
         directory: &Path,
-        stem: &str,
+        result_header: &str,
         ranks: u16,
         model_version: u64,
         subdirectory_limit: Option<u32>,
@@ -127,10 +142,10 @@ impl RunResultSource {
         Ok(Self {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
             model_version,
-            before: snapshot(directory, stem, subdirectory_limit)?,
+            before: snapshot(directory, result_header, subdirectory_limit)?,
             completed: None,
             directory: directory.into(),
-            stem: stem.into(),
+            result_header: result_header.into(),
             ranks,
             subdirectory_limit,
             partition_prefix: None,
@@ -140,7 +155,7 @@ impl RunResultSource {
     /// Freeze the completed run before a later external solver invocation
     /// can replace its values in the same directory.
     pub(crate) fn finish(&mut self) -> Result<(), String> {
-        self.completed = Some(snapshot(&self.directory, &self.stem, self.subdirectory_limit)?);
+        self.completed = Some(snapshot(&self.directory, &self.result_header, self.subdirectory_limit)?);
         Ok(())
     }
 
@@ -182,7 +197,7 @@ impl RunResultSource {
         } else {
             None
         };
-        let after = snapshot(&self.directory, &self.stem, self.subdirectory_limit)?;
+        let after = snapshot(&self.directory, &self.result_header, self.subdirectory_limit)?;
         if self
             .completed
             .as_ref()
@@ -250,8 +265,29 @@ mod tests {
         std::fs::write(step.join("job.res.1.4"), "wrong step").unwrap();
         std::fs::write(directory.path().join("job.res.0.5"), "other layout").unwrap();
 
-        let found = snapshot(directory.path(), "job", Some(1)).unwrap();
+        let found = snapshot(directory.path(), "job.res", Some(1)).unwrap();
         assert_eq!(found.keys().copied().collect::<Vec<_>>(), [(5, 1)]);
+    }
+
+    #[test]
+    fn discovers_the_configured_header_in_the_output_folder_or_subdir_trunk() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let header = "custom/simulation.out";
+        for folder in ["custom", "fstrRES/STEP5/TRUNK1/custom"] {
+            let folder = root.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("simulation.out.1.5"), "current").unwrap();
+            std::fs::write(folder.join("project.res.1.5"), "another result").unwrap();
+        }
+        for (limit, folder) in [
+            (None, "custom"),
+            (Some(1), "fstrRES/STEP5/TRUNK1/custom"),
+        ] {
+            let results = snapshot(root, header, limit).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[&(5, 1)].0, root.join(folder).join("simulation.out.1.5"));
+        }
     }
 
     fn record(id: u32, value: f32) -> String {

@@ -622,9 +622,12 @@ impl std::fmt::Display for SetupImportIssue {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FrontistrControlSettings {
     pub binary_result: Option<bool>,
+    pub result_header: Option<String>,
+    pub visual_header: Option<String>,
+    pub binary_visual: Option<bool>,
     pub subdirectories: Option<FrontistrSubdirectories>,
 }
 
@@ -635,7 +638,14 @@ pub struct FrontistrSubdirectories {
 }
 
 impl FrontistrControlSettings {
-    pub fn subdirectory_limit(self) -> Option<u32> {
+    pub fn result_header<'a>(&'a self, stem: &str) -> std::borrow::Cow<'a, str> {
+        match &self.result_header {
+            Some(header) => std::borrow::Cow::Borrowed(header),
+            None => std::borrow::Cow::Owned(format!("{stem}.res")),
+        }
+    }
+
+    pub fn subdirectory_limit(&self) -> Option<u32> {
         self.subdirectories
             .filter(|subdirectories| subdirectories.enabled)
             .map(|subdirectories| subdirectories.limit.map_or(5000, |limit| limit.get()))

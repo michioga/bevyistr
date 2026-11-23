@@ -56,6 +56,8 @@ FrontISTRの仕様を確認する際は、設定項目ごとのページを参�
 
 `hecmw_ctrl.dat` の `fstrDYNA`、`result-in`、`fstrTEMP` は、既存プロジェクトを開いたときに再出力制限の理由として表示されます。 [結果ファイルの指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html)
 
+0.5.0開発版では、Open Projectで読み込んだ `fstrRES` と `vis_out` の出力ファイル名と相対フォルダを、ExportとRun FrontISTRで保持します。たとえば `results/hinge.res` は、選択した出力フォルダを基準に使われます。`!SUBDIR,ON` を使用する場合は、そのファイル名と相対フォルダがFrontISTRのステップ・ランク別のフォルダ配置に組み込まれます。テキスト結果の自動読込も `fstrRES` の指定に従います。絶対パスや `..` を含む出力指定は、Solveに再出力制限として表示されます。 [FrontISTRの結果ファイル指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html) · [サブディレクトリ設定](https://source-docs.frontistr.com/en/keyword_reference/dat/subdir.html)
+
 公式の`!OUTPUT_RES`と`!OUTPUT_VIS`は、物理量ごとのON／OFFを定義します。GROUP／ACTIONを含むカードや未知の項目を保持するのはbevyistrの再出力動作です。利用するFrontISTRの版で有効な指定は、その版の仕様を確認してください。 [RES出力の開始 `!WRITE, RESULT`](https://source-docs.frontistr.com/keyword_reference/cnt/write_result.html) · [RESの物理量 `!OUTPUT_RES`](https://source-docs.frontistr.com/keyword_reference/cnt/output_res.html) · [可視化の物理量 `!OUTPUT_VIS`](https://source-docs.frontistr.com/keyword_reference/cnt/output_vis.html)
 
 `19_conrod`の`PRECOND=3`と、PSRの全外表面1面の可視化ブロックを保持します。`VTK`と`COMPLETE_MICROAVS`では、読み込んだ出力形式のまま再出力します。名前付き表面グループ、複数面、等値面、その他の出力形式を含む入力には再出力制限が適用されます。

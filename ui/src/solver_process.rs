@@ -366,7 +366,7 @@ fn run_pipeline(
                 },
                 distributed,
                 config.mpi_ranks,
-                config.control_settings,
+                &config.control_settings,
                 None,
             )
             .map_err(|e| format!("Could not write partition controls: {e}"))?;

@@ -787,7 +787,7 @@ pub fn write_parallel_frontistr_project(
 }
 
 fn write_project_inputs(
-    dir: &Path,
+    destination: &Path,
     stem: &str,
     model: &FemModel,
     setup: &AnalysisSetup,
@@ -804,7 +804,7 @@ fn write_project_inputs(
             io::Error::new(io::ErrorKind::InvalidInput, "Expected a simple file stem"),
         ));
     }
-    let staged = crate::staged_inputs::StagedInputs::new(dir)
+    let staged = crate::staged_inputs::StagedInputs::new(destination)
         .map_err(|error| FrontistrExportError::new("staging project input", error))?;
     let dir = staged.path();
 
@@ -819,12 +819,12 @@ fn write_project_inputs(
             &ctrl,
             prefix,
             ranks,
-            setup.frontistr_control,
+            &setup.frontistr_control,
             setup.frontistr_partition.as_ref(),
         )
         .map_err(|error| FrontistrExportError::new("parallel control files", error))?;
     } else {
-        write_hecmw_ctrl_with_settings(dir, &ctrl, setup.frontistr_control)
+        write_hecmw_ctrl_with_settings(dir, &ctrl, &setup.frontistr_control)
             .map_err(|error| FrontistrExportError::new("hecmw_ctrl.dat", error))?;
     }
 
@@ -860,6 +860,8 @@ fn write_project_inputs(
         files.push("hecmw_part_ctrl.dat");
     }
     files.push("hecmw_ctrl.dat");
+    crate::ctrl_writer::prepare_output_directories(destination, &setup.frontistr_control)
+        .map_err(|error| FrontistrExportError::new("result output directories", error))?;
     staged.publish(&files)
         .map_err(|error| FrontistrExportError::new("replacing project input", error))?;
 

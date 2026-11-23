@@ -8,13 +8,13 @@ pub struct HecmwCtrlParams<'a> {
 }
 
 pub fn write_hecmw_ctrl(dir: impl AsRef<Path>, p: &HecmwCtrlParams<'_>) -> io::Result<()> {
-    write_hecmw_ctrl_with_settings(dir, p, FrontistrControlSettings::default())
+    write_hecmw_ctrl_with_settings(dir, p, &FrontistrControlSettings::default())
 }
 
 pub fn write_hecmw_ctrl_with_settings(
     dir: impl AsRef<Path>,
     p: &HecmwCtrlParams<'_>,
-    settings: FrontistrControlSettings,
+    settings: &FrontistrControlSettings,
 ) -> io::Result<()> {
     let path = dir.as_ref().join("hecmw_ctrl.dat");
     let mut out = String::new();
@@ -26,7 +26,7 @@ pub fn write_hecmw_ctrl_with_settings(
     )
     .unwrap();
     writeln!(out, "!CONTROL, NAME=fstrCNT\n {}.cnt", p.cnt_name).unwrap();
-    write_result_controls(&mut out, p, settings);
+    write_result_controls(&mut out, p, settings)?;
     std::fs::write(path, out.as_bytes())
 }
 
@@ -44,7 +44,7 @@ pub fn write_parallel_hecmw_ctrl(
         p,
         distributed_name,
         ranks,
-        FrontistrControlSettings::default(),
+        &FrontistrControlSettings::default(),
         None,
     )
 }
@@ -54,7 +54,7 @@ pub fn write_parallel_hecmw_ctrl_with_settings(
     p: &HecmwCtrlParams<'_>,
     distributed_name: &str,
     ranks: u16,
-    settings: FrontistrControlSettings,
+    settings: &FrontistrControlSettings,
     partition: Option<&FrontistrPartitionSettings>,
 ) -> io::Result<()> {
     if ranks == 0
@@ -85,7 +85,7 @@ pub fn write_parallel_hecmw_ctrl_with_settings(
     )
     .unwrap();
     writeln!(out, "!CONTROL, NAME=fstrCNT\n {}.cnt", p.cnt_name).unwrap();
-    write_result_controls(&mut out, p, settings);
+    write_result_controls(&mut out, p, settings)?;
     let staged = crate::staged_inputs::StagedInputs::new(dir.as_ref())?;
     std::fs::write(
         staged.path().join("hecmw_part_ctrl.dat"),
@@ -98,14 +98,40 @@ pub fn write_parallel_hecmw_ctrl_with_settings(
 fn write_result_controls(
     out: &mut String,
     p: &HecmwCtrlParams<'_>,
-    settings: FrontistrControlSettings,
-) {
-    write!(out, "!RESULT, NAME=fstrRES, IO=OUT").unwrap();
-    if let Some(binary) = settings.binary_result {
-        write!(out, ", TYPE={}", if binary { "BINARY" } else { "TEXT" }).unwrap();
+    settings: &FrontistrControlSettings,
+) -> io::Result<()> {
+    for (role, header) in [
+        ("fstrRES", settings.result_header.as_deref()),
+        ("vis_out", settings.visual_header.as_deref()),
+    ] {
+        if let Some(header) = header
+            && !is_relative_output_header(header)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{role} output must name a relative file within the output folder: {header}"),
+            ));
+        }
     }
-    writeln!(out, "\n {}.res", p.result_name).unwrap();
-    writeln!(out, "!RESULT, NAME=vis_out, IO=OUT\n {}_vis", p.result_name).unwrap();
+    let result = settings.result_header(p.result_name);
+    let visual_default;
+    let visual = match settings.visual_header.as_deref() {
+        Some(header) => header,
+        None => {
+            visual_default = format!("{}_vis", p.result_name);
+            &visual_default
+        }
+    };
+    for (role, header, format) in [
+        ("fstrRES", result.as_ref(), settings.binary_result),
+        ("vis_out", visual, settings.binary_visual),
+    ] {
+        write!(out, "!RESULT, NAME={role}, IO=OUT").unwrap();
+        if let Some(binary) = format {
+            write!(out, ", TYPE={}", if binary { "BINARY" } else { "TEXT" }).unwrap();
+        }
+        writeln!(out, "\n {header}").unwrap();
+    }
     if let Some(subdir) = settings.subdirectories {
         write!(out, "!SUBDIR,{}", if subdir.enabled { "ON" } else { "OFF" }).unwrap();
         if let Some(limit) = subdir.limit {
@@ -113,6 +139,52 @@ fn write_result_controls(
         }
         writeln!(out).unwrap();
     }
+    Ok(())
+}
+
+pub(crate) fn is_relative_output_header(header: &str) -> bool {
+    !header.ends_with('.')
+        && header.split(['/', '\\']).all(|part| {
+            part == "."
+                || (!part.is_empty()
+                    && !part.ends_with('.')
+                    && part.bytes().all(|c| c.is_ascii_alphanumeric() || b"-._".contains(&c)))
+        })
+}
+
+/// FrontISTR creates the step directories itself with SUBDIR enabled.
+/// For direct file output it expects the result header's parent to exist.
+pub(crate) fn prepare_output_directories(
+    directory: &Path,
+    settings: &FrontistrControlSettings,
+) -> io::Result<()> {
+    let subdir = settings.subdirectory_limit().is_some();
+    for (header, root) in [
+        (settings.result_header.as_deref().filter(|_| !subdir), None),
+        (settings.visual_header.as_deref(), subdir.then_some("vis_out")),
+    ] {
+        let Some((parents, _)) = header.and_then(|path| path.rsplit_once(['/', '\\'])) else {
+            continue;
+        };
+        let selected = directory.canonicalize()?;
+        let mut parent = selected.clone();
+        for name in root.into_iter().chain(parents.split(['/', '\\'])) {
+            parent.push(name);
+            match std::fs::create_dir(&parent) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists && parent.is_dir() => {}
+                Err(err) => return Err(err),
+            }
+            parent = parent.canonicalize()?;
+            if !parent.starts_with(&selected) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Result output directory points outside the selected folder",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn partition_mesh_path(
@@ -141,6 +213,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let settings = FrontistrControlSettings {
             binary_result: Some(true),
+            result_header: Some("results/analysis.out".into()),
+            visual_header: Some("view/shape".into()),
+            binary_visual: Some(false),
             subdirectories: Some(fem_core::FrontistrSubdirectories {
                 enabled: true,
                 limit: std::num::NonZeroU32::new(8000),
@@ -151,10 +226,17 @@ mod tests {
             cnt_name: "new",
             result_name: "new",
         };
-        write_hecmw_ctrl_with_settings(directory.path(), &params, settings).unwrap();
-        let reloaded = crate::load_hecmw_ctrl(directory.path().join("hecmw_ctrl.dat")).unwrap();
-        assert_eq!(reloaded.settings, settings);
-        assert!(reloaded.import_issues.is_empty());
-        assert_eq!(reloaded.result_path.as_deref(), Some("new.res"));
+        let check = || {
+            let reloaded = crate::load_hecmw_ctrl(directory.path().join("hecmw_ctrl.dat")).unwrap();
+            assert_eq!(reloaded.settings, settings);
+            assert!(reloaded.import_issues.is_empty());
+            assert_eq!(reloaded.result_path.as_deref(), Some("results/analysis.out"));
+        };
+        write_hecmw_ctrl_with_settings(directory.path(), &params, &settings).unwrap();
+        check();
+        write_parallel_hecmw_ctrl_with_settings(
+            directory.path(), &params, "distributed", 2, &settings, None,
+        ).unwrap();
+        check();
     }
 }

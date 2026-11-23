@@ -310,7 +310,7 @@ impl FrontistrRunState {
             None
         };
         self.register_export(target.directory, target.stem);
-        self.control_settings = setup.frontistr_control;
+        self.control_settings = setup.frontistr_control.clone();
         self.prepared_partition_prefix = prepared_partition_prefix;
         Ok(true)
     }
@@ -331,7 +331,7 @@ impl FrontistrRunState {
                 Some(
                     crate::run_results::RunResultSource::capture_with_subdirectories(
                         &target.directory,
-                        &target.stem,
+                        &self.control_settings.result_header(&target.stem),
                         if self.launch_mode == SolverLaunchMode::Mpi {
                             self.mpi_ranks
                         } else {
@@ -347,7 +347,7 @@ impl FrontistrRunState {
         let process = spawn_solver_process(SolverProcessConfig {
             executable: self.executable.clone(),
             project_stem: target.stem.clone(),
-            control_settings: self.control_settings,
+            control_settings: self.control_settings.clone(),
             prepared_partition_prefix: self.prepared_partition_prefix.take(),
             partitioner: self.partitioner.clone(),
             working_directory: target.directory.clone(),

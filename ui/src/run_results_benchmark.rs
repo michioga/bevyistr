@@ -12,7 +12,7 @@ fn real_mpi_res_baseline() {
     let mesh = hecmw::load_mesh_file(directory.join("hinge.msh")).unwrap();
     let nodes = [mesh.nodes.iter().map(|node| node.id).collect()];
     let elements = [mesh.elements.iter().map(|element| element.id).collect()];
-    let completed = snapshot(&directory, "hinge", None).unwrap();
+    let completed = snapshot(&directory, "hinge.res", None).unwrap();
     assert_eq!(completed.len(), 8, "expected two RES frames of four ranks");
     let bytes: u64 = completed.values().map(|(_, stamp)| stamp.bytes).sum();
     // Simulate the result loader receiving these existing files from one run.
@@ -20,7 +20,7 @@ fn real_mpi_res_baseline() {
         id: 0,
         model_version: 0,
         directory,
-        stem: "hinge".into(),
+        result_header: "hinge.res".into(),
         ranks: 4,
         subdirectory_limit: None,
         before: Default::default(),

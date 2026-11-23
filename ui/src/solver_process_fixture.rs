@@ -91,6 +91,13 @@ fn main() {
 }
 
 fn write_bar_results() {
+    let control = fs::read_to_string("hecmw_ctrl.dat").unwrap();
+    let mut lines = control.lines();
+    let result_header = loop {
+        if lines.next().unwrap().starts_with("!RESULT, NAME=fstrRES,") {
+            break lines.next().unwrap().trim();
+        }
+    };
     let cnt = fs::read_to_string("bar.cnt").unwrap();
     let mut loads = Vec::new();
     let mut in_load = false;
@@ -104,7 +111,7 @@ fn write_bar_results() {
     }
     assert_eq!(loads.len(), 4);
     for step in 0..=1 {
-        let mut result = fs::File::create(format!("bar.res.0.{step}")).unwrap();
+        let mut result = fs::File::create(format!("{result_header}.0.{step}")).unwrap();
         writeln!(result, "*fstrresult\n20 0\n1 0\n3\nDISPLACEMENT").unwrap();
         // Reverse file order to exercise the actual node-ID remapping.
         for id in (1..=20).rev() {

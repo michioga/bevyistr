@@ -72,6 +72,7 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
     let mut c = HecmwCtrlContent::default();
     let mut mesh_priority = 0;
     let mut seen_result = false;
+    let mut seen_visual = false;
     let mut seen_subdir = false;
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
@@ -100,6 +101,11 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                 c.has_partition_input = true;
             }
             let result = keyword.eq_ignore_ascii_case("!RESULT");
+            let filename = lines[i + 1..]
+                .iter()
+                .map(|line| line.trim())
+                .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("!!"))
+                .filter(|line| !line.starts_with('!'));
             let mut problem = None;
             if keyword.eq_ignore_ascii_case("!SUBDIR") {
                 if seen_subdir {
@@ -111,29 +117,22 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                         problem = Some("Invalid SUBDIR options");
                     }
                 }
-            } else if result && name.eq_ignore_ascii_case("fstrRES") {
-                if seen_result {
-                    problem = Some("Repeated fstrRES results cannot be preserved");
+            } else if result {
+                if name.eq_ignore_ascii_case("fstrRES") {
+                    c.result_path = filename.map(str::to_owned);
+                    problem = read_result_output(
+                        line, filename, &mut seen_result,
+                        &mut c.settings.result_header, &mut c.settings.binary_result,
+                    ).err();
+                } else if name.eq_ignore_ascii_case("vis_out") {
+                    problem = read_result_output(
+                        line, filename, &mut seen_visual,
+                        &mut c.settings.visual_header, &mut c.settings.binary_visual,
+                    ).err();
                 } else {
-                    seen_result = true;
-                    c.settings.binary_result = match parameter("TYPE").map(str::to_ascii_uppercase).as_deref() {
-                        Some("BINARY") => Some(true),
-                        Some("TEXT") => Some(false),
-                        None => None,
-                        _ => {
-                            problem = Some("Unsupported result file TYPE");
-                            None
-                        }
-                    };
-                    if parameter("IO").is_some_and(|io| !io.eq_ignore_ascii_case("OUT")) {
-                        problem = Some("Only fstrRES output files can be regenerated");
-                    }
+                    problem = Some("This global control setting cannot be regenerated");
                 }
             } else if keyword.eq_ignore_ascii_case("!RESTART")
-                || (result
-                    && ["fstrTEMP", "fstrDYNA", "result-in"]
-                        .iter()
-                        .any(|role| name.eq_ignore_ascii_case(role)))
                 || (keyword.eq_ignore_ascii_case("!MESH") && parameter("REFINE").is_some())
             {
                 problem = Some("This global control setting cannot be regenerated");
@@ -172,35 +171,19 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                 || keyword.eq_ignore_ascii_case("!CONTROL")
             {
                 Some("cnt")
-            } else if name.eq_ignore_ascii_case("fstrRES") {
-                Some("res")
             } else {
                 None
             };
 
-            if let Some(role) = role {
-                // Next non-blank, non-comment, non-! line is the path
-                let mut j = i + 1;
-                while j < lines.len() {
-                    let next = lines[j].trim();
-                    if next.is_empty() || next.starts_with('#') || next.starts_with("!!") {
-                        j += 1;
-                        continue;
+            if let (Some(role), Some(path)) = (role, filename) {
+                match role {
+                    "mesh" if candidate_priority >= mesh_priority => {
+                        c.mesh_path = Some(path.to_owned());
+                        mesh_priority = candidate_priority;
                     }
-                    if next.starts_with('!') {
-                        break;
-                    }
-                    match role {
-                        "mesh" if candidate_priority >= mesh_priority => {
-                            c.mesh_path = Some(next.to_string());
-                            mesh_priority = candidate_priority;
-                        }
-                        "distributed" => c.distributed_mesh_path = Some(next.to_string()),
-                        "cnt" => c.cnt_path = Some(next.to_string()),
-                        "res" => c.result_path = Some(next.to_string()),
-                        _ => {}
-                    }
-                    break;
+                    "distributed" => c.distributed_mesh_path = Some(path.to_owned()),
+                    "cnt" => c.cnt_path = Some(path.to_owned()),
+                    _ => {}
                 }
             }
         }
@@ -209,6 +192,42 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
     }
 
     c
+}
+
+fn read_result_output(
+    line: &str,
+    filename: Option<&str>,
+    seen: &mut bool,
+    header: &mut Option<String>,
+    binary: &mut Option<bool>,
+) -> Result<(), &'static str> {
+    if std::mem::replace(seen, true) {
+        return Err("Repeated result output cards cannot be preserved");
+    }
+    let mut name = false;
+    let mut output = false;
+    let mut format = None;
+    for field in line.split(',').skip(1) {
+        let (key, value) = field.split_once('=').ok_or("Invalid result output option")?;
+        let value = value.trim().to_ascii_uppercase();
+        match (key.trim().to_ascii_uppercase().as_str(), value.as_str()) {
+            ("NAME", _) if !name => name = true,
+            ("IO", "OUT") if !output => output = true,
+            ("TYPE", "BINARY") if format.is_none() => format = Some(true),
+            ("TYPE", "TEXT") if format.is_none() => format = Some(false),
+            _ => return Err("Unsupported or repeated result output option"),
+        }
+    }
+    if !output {
+        return Err("Only result cards with IO=OUT can be regenerated");
+    }
+    let filename = filename.ok_or("Missing result output file header")?;
+    if !super::ctrl_writer::is_relative_output_header(filename) {
+        return Err("Result output must name a relative file within the output folder");
+    }
+    *header = Some(filename.to_owned());
+    *binary = format;
+    Ok(())
 }
 
 fn parse_subdir(line: &str) -> Option<FrontistrSubdirectories> {
@@ -244,6 +263,25 @@ mod tests {
         ));
         assert_eq!(data.import_issues.len(), 2);
         assert_eq!(data.result_path.as_deref(), Some("hinge.res"));
+    }
+
+    #[test]
+    fn reports_unsafe_or_unwritable_result_cards_with_line_numbers() {
+        for card in [
+            "!RESULT,NAME=vis_out,IO=IN\nplots/view",
+            "!RESULT,NAME=fstrRES,IO=OUT\n../escape.res",
+            "!RESULT,NAME=fstrRES,IO=OUT\nC:/external/saved.res",
+            "!RESULT,NAME=vis_out,IO=OUT\n/absolute/view",
+            "!RESULT,NAME=fstrRES,IO=OUT\nresults/dir/../../escape.res",
+            "!RESULT,NAME=vis_out,IO=OUT\n",
+            "!RESULT,NAME=vis_out,IO=OUT,TYPE=UNKNOWN\nplot",
+            "!RESULT,NAME=vis_out,IO=OUT\nplot\n!RESULT,NAME=vis_out,IO=OUT\nother",
+        ] {
+            let data = parse_ctrl(card);
+            assert_eq!(data.import_issues.len(), 1, "{card}");
+            let issue = &data.import_issues[0];
+            assert_eq!(issue.line, if card.ends_with("other") { 3 } else { 1 });
+        }
     }
 
     #[test]
