@@ -9,6 +9,9 @@ This build targets Windows x86_64; it is not an ARM64 build.
 FrontISTR, MPI, Gmsh and Intel oneAPI are not included. They are not needed to view
 existing results. To solve a model, configure your installed FrontISTR in Solve.
 VTU/PVTU files include geometry; RES files need their matching mesh.
+To use a working FrontISTR environment from PowerShell, set
+$env:FRONTISTR_RUNTIME = 'inherit' and run .\bevyistr.exe in the same session.
+For MPI, select the launcher that matches your FrontISTR installation in Solve.
 To generate a mesh from STEP, install Gmsh and put gmsh.exe on PATH. In Model,
 use Open Model or Add Part, then review the preview and select Use Mesh.
 

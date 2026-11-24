@@ -95,6 +95,21 @@ FrontISTRでは、`hecmw_ctrl.dat`の`part_in`／`part_out`で分割対象と出
 
 実行ファイルなどのアプリ設定はTOMLに保持します。Windows／Linuxで実行ファイルとMPIランタイムをそれぞれの環境に合わせてください。設定例はリポジトリの`bevyistr.example.toml`を参照してください。
 
+### Windowsで起動元の環境を使う
+
+Windowsでは、Intel MPIがすでに設定されていれば、bevyistrは起動元の環境を引き継ぎます。未設定でoneAPIが見つかる場合は、FrontISTRの実行時に `setvars.bat` で初期化します。
+
+普段の端末で `fistr1` と `hecmw_part1` が動く場合や、Windows TerminalのoneAPIプロファイルを使う場合は、その端末から環境の引き継ぎを明示できます。起動中のbevyistrを閉じ、同じPowerShellで実行します。
+
+```powershell
+$env:FRONTISTR_RUNTIME = 'inherit'
+bevyistr
+```
+
+ZIP版では、展開先で `bevyistr` の代わりに `./bevyistr.exe` を実行します。MPIを使う場合は **Choose mpiexec / mpirun...** で、FrontISTRのビルドに対応するランチャーを選びます。Solveの **Runtime** が `inherited process environment` なら、起動元の環境が使われます。
+
+`setvars.bat` が「入力行が長すぎます」で止まる場合にも、実行環境を用意した端末から上記の方法で起動できます。Windowsエラー623が出る場合は、同じ端末から `fistr1.exe` や `hecmw_part1.exe` を直接起動し、DLL読み込みの失敗が再現するか確認してください。
+
 ログはアプリ内部に表示します。停止する場合はSolveのStopを使います。プロセスの正常終了だけで解析の収束やモデルの妥当性まで保証されるわけではありません。
 
 成功した実行の結果はResultsへ引き継ぎます。既存結果を手動で開く操作と、その実行のMPI所有情報を使う自動引き継ぎは異なります。[結果形式の対応範囲](../results/limitations.md)も確認してください。
