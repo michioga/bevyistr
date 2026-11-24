@@ -2,13 +2,13 @@
 
 <img src="assets/bevyistr.png" alt="bevyistr — rainbow finite-element mesh duck" width="160" height="160">
 
-A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR-Commons/FrontISTR), built with Rust, Bevy 0.19, and `bevy_ui`.
+A viewport-first pre/post processor for [FrontISTR](https://gitlab.com/FrontISTR-Commons/FrontISTR), built with Rust, Bevy 0.20, and `bevy_ui`.
 
 `bevyistr` is read **Bevy Aistar** (ベビーアイスター).
 
-This source tree targets **0.4.0**. See the [release notes](docs/src/release-notes.md),
+This source tree targets **0.5.0**. See the [release notes](docs/src/release-notes.md),
 [crates.io packages](https://crates.io/crates/bevyistr), and
-[release checklist](docs/release-0.4.0.md).
+[release checklist](docs/release-0.5.0.md).
 See the [release record and maintainer procedures](docs/releasing.md) for verification
 results and the exact source commit.
 
@@ -20,10 +20,10 @@ bevyistr is under active development. It can currently assemble meshes, author a
 
 ## Install from crates.io
 
-Once 0.4.0 is available on crates.io, install it with:
+Once 0.5.0 is available on crates.io, install it with:
 
 ```sh
-cargo install bevyistr --version 0.4.0 --locked
+cargo install bevyistr --version 0.5.0 --locked
 bevyistr
 ```
 
@@ -41,7 +41,7 @@ Read the manual for the published version on GitHub Pages. Build the manual for 
 
 ## Current capabilities
 
-**0.4.0** improves loading of VTU/PVTU and native RES, speeds up large selection groups, and adds screen-axis orbit and configurable touchpad navigation. Solve can set the MPI partitioner and launcher paths separately. [Release notes](docs/src/release-notes.md)
+**0.5.0** adds STEP-to-FrontISTR meshing with Gmsh, including a preview and local refinement on selected contact faces. The viewport uses SolidCraft-style mouse bindings. Solve can edit and preserve more FrontISTR solver settings, and the UI embeds Japanese fonts. [Release notes](docs/src/release-notes.md)
 
 **0.3.0** adds **Export pinned history CSV...** below the pinned probe's
 history plot. It saves all loaded frames of the selected part-local node/element
@@ -285,6 +285,7 @@ priority; clearing a contour restores the current material colors.
 | Input | FrontISTR `.cnt` | Reads the setup subset represented by the current UI, including solver settings, BCs, loads, materials, sections, and contact behaviour. |
 | Input | Gmsh `.msh` | ASCII MSH 4.x revision 4.1 or newer; physical groups are preserved. Binary MSH is rejected. |
 | Input | Gmsh `.geo` | Runs the external `gmsh` command with `-3 -format msh41`, then loads the generated mesh. |
+| Input | STEP `.step` / `.stp` | Uses Gmsh to generate a first-order tetrahedral mesh from one solid. Preview and refine the mesh before using it or exporting a FrontISTR project. |
 | Input | Abaqus/CalculiX `.inp` | Reads `*NODE`, `*ELEMENT`, `*NSET`, and `*ELSET`; unknown element types remain marked unsupported. |
 | Result | FrontISTR `.res.<rank>.<step>` | Native ASCII v1/v2.0 nodal and element data. Solve handoff joins MPI owners and assembly parts; manual Open Result loads a single-rank series. |
 | Result | CalculiX `.frd` | Reads nodal scalar/vector fields and derives vector magnitude or von Mises values where applicable. |
@@ -354,11 +355,11 @@ Tool-specific hints are shown beside the relevant controls. Assembly, contact, B
 
 - Cluster schedulers, remote-job cancellation, structured iteration progress, and solver-error localization in the viewport are not integrated yet. The current runner targets local workstation MPI (`mpiexec` / `mpirun`) and shows text output; exit code 0 alone is not a convergence or model-validity check.
 - The UI does not yet expose all FrontISTR analysis types and keywords. Unsupported data may not round-trip through the editable setup model.
-- Direct CAD/STEP import and CAD meshing are not implemented; use Gmsh to generate an ASCII MSH 4.1+ mesh.
+- STEP meshing requires Gmsh on `PATH` and supports one solid per file with first-order tetrahedra. Import multiple solids as separate parts.
 - Open Results runs file parsing in the background. VTU/PVTU supplies its own geometry; RES suggests a nearby MSH/project and asks for confirmation, or lets you choose a matching MSH. Manually opened results have independent read-only geometry: switching to Model returns to the unchanged editable model.
 - Manual RES opening targets a single mesh or flattened assembly. Complete native MPI results are supported through the Solve handoff, not by opening one rank file. Multi-piece PVTU loading does not reconstruct global ownership or remove unmarked partition overlaps. Probe IDs must be interpreted together with the piece/part number.
 - VTK XML support is limited to inline ASCII point/cell data and supported cell types, with fixed piece order/count and geometry across a sequence. Ghost support is limited to duplicate/hidden flags; other flags are rejected. Binary/appended VTK and global-ID-based partition welding remain unsupported.
-- A pinned node/element has a read-only history graph for the selected field, with a current-frame marker. Recorded time/load-factor spacing is used only when finite and strictly increasing; otherwise the axis explicitly uses frame order. Missing values break the line rather than being zero-filled. Multiple-target comparisons, history export and interactive clipping remain planned. Detailed visualization will continue to rely on ParaView.
+- Probe histories use recorded time/load-factor spacing when finite and strictly increasing, and frame order otherwise. Missing values break the line. Up to four probes can share a comparison plot, and CSV export saves the pinned probe. Interactive clipping remains planned.
 
 The long-term goal is to make the full FrontISTR workflow accessible without returning to a dialog-heavy pre/post interface, while preserving explicit numeric confirmation and valid solver input.
 

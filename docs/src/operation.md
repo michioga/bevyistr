@@ -4,7 +4,7 @@
 
 ## カメラ
 
-0.5.0向け開発版では、SolidCraftの標準マウス操作を使います。 [SolidCraftのビューポート操作](https://docs.solidcraft.io/guide/ui-tour.html)
+ビューポートでは、SolidCraftと同じマウス操作を使います。 [SolidCraftのビューポート操作](https://docs.solidcraft.io/guide/ui-tour.html)
 
 | 操作 | 動作 |
 | --- | --- |

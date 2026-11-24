@@ -8,15 +8,15 @@ Select geometry in the viewport; confirm engineering data numerically. Includes
 mesh assembly, contact and boundary-condition setup, material assignment, solver
 execution, and RES / VTU / PVTU result visualization with animation and probes.
 
-Version **0.4.0** improves result loading and large mesh selection, adds touchpad navigation,
-and lets users choose the MPI partitioner and launcher in Solve.
+Version **0.5.0** adds STEP meshing with Gmsh, preview and local contact-face refinement,
+SolidCraft-style mouse controls, and support for more FrontISTR input settings.
 See [crates.io](https://crates.io/crates/bevyistr) for package versions and
 [release notes](https://michioga.github.io/bevyistr/release-notes.html) for changes and limitations.
 
 ## Installation
 
 ```sh
-cargo install bevyistr --version 0.4.0 --locked
+cargo install bevyistr --version 0.5.0 --locked
 bevyistr
 ```
 

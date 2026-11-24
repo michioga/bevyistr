@@ -16,20 +16,20 @@ MUMPSとMKLは別のMETHODとして読み込み・出力します。メニュー
 
 Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数・許容差・最大反復数・シフト量を編集できます。[固有値解析の設定](eigen.md)を参照してください。
 
-0.5.0開発版では、Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角スケーリング（`PRECOND=3`）を選べます。CG／GMRESの数値欄は次のとおりです。
+Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角スケーリング（`PRECOND=3`）を選べます。CG／GMRESの数値欄は次のとおりです。
 
 - **Precond. iterations**（`iterPREmax`）は前処理の反復回数です。**GMRES subspaces**（`NREST`）はGMRESで表示します。
 - **Ordering colors**（`NCOLOR_IN`）は多色順序付けの色数で、FrontISTRではOpenMPが2スレッド以上のときに適用されます。**Precond. reuse**（`RECYCLEPRE`）は非線形静解析で表示し、`0` で再利用を無効にします。
 - **Diagonal scale**（`SIGMA_DIAG`）は対角スケーリング、**SSOR relaxation**（`OMEGA`）はSSORで表示します。FrontISTRは `0 < OMEGA < 2` の範囲を使い、従来の `0` は `1` として扱います。
 - 線形反復欄を空欄にしてEnterを押すと、FrontISTRの既定値を使います。`NITER`、`iterPREmax`、`RESID` の省略も、解析タイプや前処理を切り替えて表示されなくなった値も保持します。`RESID` は倍精度で扱います。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
 
-### ソルバーログを設定する（0.5.0開発版）
+### ソルバーログを設定する
 
 - **Residual log** は `ITERLOG` に対応します。Onで、反復法では残差履歴、直接法では解の相対残差を出力します。
 - **Solver timing log** は `TIMELOG` に対応します。Summaryで計算時間を出力し、Verboseでソルバーが対応する詳細を追加します。
 - **Default** は対応するパラメーターを `.cnt` から省略し、使用するFrontISTRの既定動作を適用します。読み込んだファイルの明示的なOffもそのまま保持します。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
 
-### 係数行列と右辺を保存する（0.5.0開発版）
+### 係数行列と右辺を保存する
 
 - **Matrix dump** で Matrix Market（`MM`）、`CSR`、`BSR`、または **Off**（`NONE`）を選びます。設定は `.cnt` の `!SOLVER, DUMPTYPE=...` に反映されます。
 - **Dump action** が **Continue solve** の場合はダンプ後も計算を続けます。**Exit after dump**（`DUMPEXIT=YES`）ではダンプ後に終了するため、bevyistrは解析結果の自動読込を行わず、実行フォルダの確認を案内します。Matrix dump が Off のときは、ダンプによる終了は発生しません。
@@ -69,7 +69,7 @@ FrontISTRの仕様を確認する際は、設定項目ごとのページを参�
 
 `hecmw_ctrl.dat` の `fstrDYNA`、`result-in`、`fstrTEMP` は、既存プロジェクトを開いたときに再出力制限の理由として表示されます。 [結果ファイルの指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html)
 
-0.5.0開発版では、Open Projectで読み込んだ `fstrRES` と `vis_out` の出力ファイル名と相対フォルダを、ExportとRun FrontISTRで保持します。たとえば `results/hinge.res` は、選択した出力フォルダを基準に使われます。`!SUBDIR,ON` を使用する場合は、そのファイル名と相対フォルダがFrontISTRのステップ・ランク別のフォルダ配置に組み込まれます。テキスト結果の自動読込も `fstrRES` の指定に従います。絶対パスや `..` を含む出力指定は、Solveに再出力制限として表示されます。 [FrontISTRの結果ファイル指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html) · [サブディレクトリ設定](https://source-docs.frontistr.com/en/keyword_reference/dat/subdir.html)
+Open Projectで読み込んだ `fstrRES` と `vis_out` の出力ファイル名と相対フォルダを、ExportとRun FrontISTRで保持します。たとえば `results/hinge.res` は、選択した出力フォルダを基準に使われます。`!SUBDIR,ON` を使用する場合は、そのファイル名と相対フォルダがFrontISTRのステップ・ランク別のフォルダ配置に組み込まれます。テキスト結果の自動読込も `fstrRES` の指定に従います。絶対パスや `..` を含む出力指定は、Solveに再出力制限として表示されます。 [FrontISTRの結果ファイル指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html) · [サブディレクトリ設定](https://source-docs.frontistr.com/en/keyword_reference/dat/subdir.html)
 
 公式の`!OUTPUT_RES`と`!OUTPUT_VIS`は、物理量ごとのON／OFFを定義します。GROUP／ACTIONを含むカードや未知の項目を保持するのはbevyistrの再出力動作です。利用するFrontISTRの版で有効な指定は、その版の仕様を確認してください。 [RES出力の開始 `!WRITE, RESULT`](https://source-docs.frontistr.com/keyword_reference/cnt/write_result.html) · [RESの物理量 `!OUTPUT_RES`](https://source-docs.frontistr.com/keyword_reference/cnt/output_res.html) · [可視化の物理量 `!OUTPUT_VIS`](https://source-docs.frontistr.com/keyword_reference/cnt/output_vis.html)
 

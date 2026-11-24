@@ -1,4 +1,4 @@
-bevyistr 0.4.0 — Windows x86_64
+bevyistr 0.5.0 — Windows x86_64
 FrontISTR Pre/Post
 Michio Ogawa (michioga)
 
@@ -9,6 +9,8 @@ This build targets Windows x86_64; it is not an ARM64 build.
 FrontISTR, MPI, Gmsh and Intel oneAPI are not included. They are not needed to view
 existing results. To solve a model, configure your installed FrontISTR in Solve.
 VTU/PVTU files include geometry; RES files need their matching mesh.
+To generate a mesh from STEP, install Gmsh and put gmsh.exe on PATH. In Model,
+use Open Model or Add Part, then review the preview and select Use Mesh.
 
 materials.toml is the editable material library. A file in the current working
 directory takes precedence over the file beside the executable. If neither

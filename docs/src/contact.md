@@ -18,6 +18,6 @@ MPCや剛体スパイダーは接触とは別の拘束です。定義した式�
 
 ## 接触を含むプロジェクトを開き直す
 
-0.5.0開発版では、bevyistrで出力した非線形静解析の接触設定を **Open Project** で再読込できます。対象は、単一の固定増分ステップで全接触ペアを有効にする `ALAGRANGE` の設定です。接触形式、摩擦係数、第2行の摩擦ペナルティを保持します。FrontISTRのヘルツ接触例題もこの範囲に入ります。 [接触条件](https://source-docs.frontistr.com/keyword_reference/cnt/contact.html) · [ヘルツ接触例題](https://source-docs.frontistr.com/examples/tutorial_09.html)
+bevyistrで出力した非線形静解析の接触設定を **Open Project** で再読込できます。対象は、単一の固定増分ステップで全接触ペアを有効にする `ALAGRANGE` の設定です。接触形式、摩擦係数、第2行の摩擦ペナルティを保持します。FrontISTRのヘルツ接触例題もこの範囲に入ります。 [接触条件](https://source-docs.frontistr.com/keyword_reference/cnt/contact.html) · [ヘルツ接触例題](https://source-docs.frontistr.com/examples/tutorial_09.html)
 
 同名のSTEP部品などを統合出力するときは、グループ名の衝突を防ぐため `PART1_`、`PART2_` などの接頭辞を使います。生成されたCNTの拘束・荷重とMSHの接触ペアは同じ接頭辞を参照します。
