@@ -56,6 +56,11 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
             blockers.push(reason.into());
         }
     }
+    if setup.solver.solver_method.is_iterative()
+        && let Err(reason) = setup.solver.validate_linear_options()
+    {
+        blockers.push(format!("Linear solver: {reason}"));
+    }
     for load in &setup.distributed_loads {
         if load.kind == DistributedLoadKind::Pressure
             && matches!(load.target, DistributedLoadTarget::Elements(_))
@@ -226,8 +231,23 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
     writeln!(o).unwrap();
     if s.solver_method.is_iterative() {
-        writeln!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
-        writeln!(o, " {:.8e}, 1.0, 0.0", s.convergence_tol).unwrap();
+        write!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
+        write_optional_columns(
+            &mut o,
+            [
+                s.gmres_subspaces.map(|value| value.to_string()),
+                s.ordering_colors.map(|value| value.to_string()),
+                s.preconditioner_reuse.map(|value| value.to_string()),
+            ],
+        );
+        write!(o, " {:.8e}", s.convergence_tol).unwrap();
+        write_optional_columns(
+            &mut o,
+            [
+                s.diagonal_scale.map(|value| format!("{value:e}")),
+                s.ssor_relaxation.map(|value| format!("{value:e}")),
+            ],
+        );
     }
 
     writeln!(o).unwrap();
@@ -264,6 +284,15 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     writeln!(o, "!END").unwrap();
 
     o
+}
+
+fn write_optional_columns<const N: usize>(output: &mut String, columns: [Option<String>; N]) {
+    if let Some(last) = columns.iter().rposition(Option::is_some) {
+        for column in &columns[..=last] {
+            write!(output, ", {}", column.as_deref().unwrap_or_default()).unwrap();
+        }
+    }
+    writeln!(output).unwrap();
 }
 
 fn write_condition_header(out: &mut String, keyword: &str, center: Option<&RotationCenter>) {

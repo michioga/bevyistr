@@ -27,6 +27,7 @@ pub(crate) enum SolverField {
     Substeps,
     MaxIterations,
     ConvergenceTolerance,
+    GmresSubspaces,
     NonlinearMaxIterations,
     NonlinearConvergenceTolerance,
     EigenModes,
@@ -41,6 +42,7 @@ impl SolverField {
             Self::Substeps => "Substeps",
             Self::MaxIterations => "Linear max iterations",
             Self::ConvergenceTolerance => "Linear tolerance",
+            Self::GmresSubspaces => "GMRES subspaces",
             Self::NonlinearMaxIterations => "Nonlinear max iterations",
             Self::NonlinearConvergenceTolerance => "Nonlinear residual tolerance",
             Self::EigenModes => "Requested modes",
@@ -55,6 +57,7 @@ impl SolverField {
             Self::MaxIterations | Self::ConvergenceTolerance => {
                 settings.solver_method.is_iterative()
             }
+            Self::GmresSubspaces => settings.solver_method == fem_core::LinearSolverMethod::Gmres,
             Self::EigenModes
             | Self::EigenTolerance
             | Self::EigenMaxIterations
@@ -67,6 +70,7 @@ impl SolverField {
 #[derive(Component)]
 pub(crate) enum SolverControlGroup {
     Linear,
+    Gmres,
     Nonlinear,
     DirectHint,
     Eigen,
@@ -85,6 +89,7 @@ pub(crate) struct SolverEditorState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ParsedSolverValue {
+    Default,
     Integer(u32),
     Float(f32),
     Double(f64),
@@ -114,6 +119,20 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
                 SolverField::ConvergenceTolerance,
                 "SolverConvergenceToleranceInput",
             );
+            group
+                .spawn((
+                    Node { flex_direction: FlexDirection::Column, ..default() },
+                    SolverControlGroup::Gmres,
+                ))
+                .with_children(|gmres| {
+                    solver_value_row(
+                        gmres,
+                        "GMRES subspaces",
+                        SolverField::GmresSubspaces,
+                        "SolverGmresSubspacesInput",
+                    );
+                    solver_hint(gmres, "Blank uses the FrontISTR default.");
+                });
         });
     parent.spawn((Node::default(), SolverControlGroup::DirectHint)).with_children(|group| {
         solver_hint(group, "Direct method: linear iteration controls are not used. Availability depends on the FrontISTR build.");
@@ -233,6 +252,7 @@ fn solver_value_row(
                 EditableTextFilter::new(move |character| match field {
                     SolverField::Substeps
                     | SolverField::MaxIterations
+                    | SolverField::GmresSubspaces
                     | SolverField::NonlinearMaxIterations
                     | SolverField::EigenModes
                     | SolverField::EigenMaxIterations => character.is_ascii_digit(),
@@ -286,6 +306,7 @@ pub(crate) fn solver_numeric_input_system(
     for (group, mut node) in &mut groups {
         let visible = match group {
             SolverControlGroup::Linear => setup.solver.solver_method.is_iterative(),
+            SolverControlGroup::Gmres => SolverField::GmresSubspaces.active(&setup.solver),
             SolverControlGroup::Nonlinear => {
                 setup.solver.analysis_type == fem_core::AnalysisType::NlStatic
             }
@@ -370,6 +391,8 @@ fn solver_value_text(settings: &fem_core::SolverSettings, field: SolverField) ->
         SolverField::Substeps => settings.substeps.to_string(),
         SolverField::MaxIterations => settings.max_iterations.to_string(),
         SolverField::ConvergenceTolerance => format!("{:.8e}", settings.convergence_tol),
+        SolverField::GmresSubspaces => settings.gmres_subspaces
+            .map(|value| value.to_string()).unwrap_or_default(),
         SolverField::NonlinearMaxIterations => settings.nonlinear_max_iterations.to_string(),
         SolverField::NonlinearConvergenceTolerance => {
             format!("{:.8e}", settings.nonlinear_convergence_tol)
@@ -382,9 +405,13 @@ fn solver_value_text(settings: &fem_core::SolverSettings, field: SolverField) ->
 }
 
 fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValue, String> {
+    if field == SolverField::GmresSubspaces && text.trim().is_empty() {
+        return Ok(ParsedSolverValue::Default);
+    }
     match field {
         SolverField::Substeps
         | SolverField::MaxIterations
+        | SolverField::GmresSubspaces
         | SolverField::NonlinearMaxIterations
         | SolverField::EigenModes
         | SolverField::EigenMaxIterations => {
@@ -438,6 +465,12 @@ fn apply_solver_value(
         (SolverField::ConvergenceTolerance, ParsedSolverValue::Float(value)) => {
             settings.convergence_tol = value;
         }
+        (SolverField::GmresSubspaces, ParsedSolverValue::Integer(value)) => {
+            settings.gmres_subspaces = Some(value);
+        }
+        (SolverField::GmresSubspaces, ParsedSolverValue::Default) => {
+            settings.gmres_subspaces = None;
+        }
         (SolverField::NonlinearMaxIterations, ParsedSolverValue::Integer(value)) => {
             settings.nonlinear_max_iterations = value
         }
@@ -475,6 +508,27 @@ mod tests {
             Ok(ParsedSolverValue::Float(1.0e-8))
         );
         assert!(parse_solver_value(SolverField::ConvergenceTolerance, "-1e-8").is_err());
+    }
+
+    #[test]
+    fn gmres_field_edits_the_optional_subspace_count() {
+        use fem_core::LinearSolverMethod::{Cg, Gmres};
+
+        let field = SolverField::GmresSubspaces;
+        let mut settings = fem_core::SolverSettings::default();
+        settings.ordering_colors = Some(100);
+        assert!(!field.active(&settings));
+        settings.solver_method = Gmres;
+        assert!(field.active(&settings));
+        assert!(parse_solver_value(field, "0").is_err());
+        apply_solver_value(&mut settings, field, parse_solver_value(field, "40").unwrap());
+        settings.solver_method = Cg;
+        assert!(!field.active(&settings));
+        settings.solver_method = Gmres;
+        assert_eq!(solver_value_text(&settings, field), "40");
+        apply_solver_value(&mut settings, field, parse_solver_value(field, "").unwrap());
+        assert_eq!(solver_value_text(&settings, field), "");
+        assert_eq!(settings.ordering_colors, Some(100));
     }
 
     #[test]

@@ -376,28 +376,18 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
         Some("1" | "2" | "3")
     ) {
         Some("Only explicit PRECOND=1, 2 or 3 is preserved")
-    } else if solver.max_iterations == 0
-        || solver.max_iterations > i32::MAX as u32
-        || solver.preconditioner_iterations == 0
-        || solver.preconditioner_iterations > i32::MAX as u32
-        || !solver.convergence_tol.is_finite()
-        || solver.convergence_tol <= 0.0
-    {
-        Some("Linear iterations/tolerance must be valid positive values")
-    } else if body.len() != 2
-        || !body[0]
-            .split(',')
-            .map(|field| field.trim().parse::<u32>().ok())
-            .eq([
-                Some(solver.max_iterations),
-                Some(solver.preconditioner_iterations),
-            ])
-        || !numbers(body[1], &[solver.convergence_tol, 1.0, 0.0])
-    {
-        Some(
-            "Only NITER, iterPREmax and RESID with SIGMA_DIAG=1 and OMEGA=0 are currently preserved; missing/extra options remain blocked",
-        )
     } else {
+        let mut parameters = solver.clone();
+        if let Err(reason) = super::solver_rows::read(body, &mut parameters) {
+            return Some(reason);
+        }
+        // Older direct-solver files may include the two standard placeholder rows.
+        if !solver.solver_method.is_iterative()
+            && (body[0].split(',').count() != 2
+                || !numbers(body[1], &[parameters.convergence_tol, 1.0, 0.0]))
+        {
+            return Some("Non-default direct solver data rows cannot be preserved");
+        }
         None
     }
 }

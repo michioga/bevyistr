@@ -435,8 +435,15 @@ pub struct SolverSettings {
     /// FrontISTR PRECOND code for the supported two-row SOLVER card.
     pub preconditioner: u8,
     pub preconditioner_iterations: u32,
+    /// Optional NREST, NCOLOR_IN and RECYCLEPRE entries in the first solver row.
+    pub gmres_subspaces: Option<u32>,
+    pub ordering_colors: Option<u32>,
+    pub preconditioner_reuse: Option<u32>,
     /// Linear solver relative residual tolerance (`!SOLVER` RESID).
     pub convergence_tol: f32,
+    /// Optional SIGMA_DIAG and OMEGA entries in the second solver row.
+    pub diagonal_scale: Option<f64>,
+    pub ssor_relaxation: Option<f64>,
     /// Newton iteration limit per substep (`!STEP, MAXITER`).
     pub nonlinear_max_iterations: u32,
     /// Nonlinear residual convergence threshold (`!STEP, CONVERG`).
@@ -462,7 +469,12 @@ impl Default for SolverSettings {
             max_iterations: 100,
             preconditioner: 1,
             preconditioner_iterations: 1,
+            gmres_subspaces: None,
+            ordering_colors: None,
+            preconditioner_reuse: None,
             convergence_tol: 1.0e-6,
+            diagonal_scale: Some(1.0),
+            ssor_relaxation: Some(0.0),
             nonlinear_max_iterations: 50,
             nonlinear_convergence_tol: 1.0e-3,
             solver_method: LinearSolverMethod::Cg,
@@ -471,6 +483,28 @@ impl Default for SolverSettings {
             matrix_dump_format: MatrixDumpFormat::None,
             exit_after_matrix_dump: false,
         }
+    }
+}
+
+impl SolverSettings {
+    pub fn validate_linear_options(&self) -> Result<(), &'static str> {
+        let positive = 1..=i32::MAX as u32;
+        if self.gmres_subspaces.is_some_and(|n| !positive.contains(&n)) {
+            return Err("NREST must be in 1..=2147483647");
+        }
+        if self.ordering_colors.is_some_and(|n| !positive.contains(&n)) {
+            return Err("NCOLOR_IN must be in 1..=2147483647");
+        }
+        if self.preconditioner_reuse.is_some_and(|n| n > i32::MAX as u32) {
+            return Err("RECYCLEPRE must be in 0..=2147483647");
+        }
+        if self.diagonal_scale.is_some_and(|value| !value.is_finite()) {
+            return Err("SIGMA_DIAG must be finite");
+        }
+        if self.ssor_relaxation.is_some_and(|value| !value.is_finite()) {
+            return Err("OMEGA must be finite");
+        }
+        Ok(())
     }
 }
 

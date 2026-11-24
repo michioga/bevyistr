@@ -96,9 +96,12 @@ fn unsupported_step_features_and_invalid_values_remain_blocked() {
     assert!(!data.import_issues.is_empty());
     for row in [
         "100,0\n1e-8,1,0",
-        "100,1,30\n1e-8,1,0",
+        "100,1,30,20,3,1\n1e-8,1,0",
         "100.0,1\n1e-8,1,0",
-        "100,1\n1e-8,1.1,0",
+        "100,1\n1e-8,1.1,NaN",
+        "100,1,0\n1e-8,1,0",
+        "100,1,,0\n1e-8,1,0",
+        "100,1,,20,-1\n1e-8,1,0",
     ] {
         assert!(
             !parsed(&format!(
@@ -107,6 +110,38 @@ fn unsupported_step_features_and_invalid_values_remain_blocked() {
             .import_issues
             .is_empty()
         );
+    }
+}
+
+#[test]
+fn iterative_solver_rows_round_trip_with_positional_omissions() {
+    for (rows, expected) in [
+        (
+            "10000,1,40,100\n1e-8,1,0",
+            (Some(40), Some(100), None, Some(1.0), Some(0.0)),
+        ),
+        (
+            "10000,2,,100,0\n1e-8,,1.2345678901234567",
+            (None, Some(100), Some(0), None, Some(1.2345678901234567)),
+        ),
+        (
+            "10000,1\n1e-8,1.2345678901234567",
+            (None, None, None, Some(1.2345678901234567), None),
+        ),
+    ] {
+        let data = parsed(&format!("!SOLVER,METHOD=GMRES,PRECOND=1\n{rows}\n!END"));
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        let mut setup = AnalysisSetup::default();
+        data.merge_into(&mut setup);
+        let s = &setup.solver;
+        assert_eq!(
+            (s.gmres_subspaces, s.ordering_colors, s.preconditioner_reuse,
+             s.diagonal_scale, s.ssor_relaxation),
+            expected,
+        );
+        let reloaded = parsed(&crate::cnt_writer::build_cnt(&setup, &[]));
+        assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+        assert_eq!(reloaded.solver.unwrap(), setup.solver);
     }
 }
 

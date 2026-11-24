@@ -39,6 +39,8 @@ mod eigen_settings;
 mod solver_settings_tests;
 #[path = "write_settings.rs"]
 mod write_settings;
+#[path = "solver_rows.rs"]
+mod solver_rows;
 #[path = "cnt_visual.rs"]
 mod visual;
 use fem_core::{
@@ -497,35 +499,14 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 if let Some(value) = header.params.get("PRECOND").and_then(|v| v.parse().ok()) {
                     solver.preconditioner = value;
                 }
-                // The first two SOLVER data rows belong to the linear solve,
-                // independent of STEP ordering. Remaining options are audited
-                // by the compatibility checker before export is permitted.
                 let rows: Vec<_> = lines[i + 1..]
                     .iter()
                     .take_while(|line| !is_keyword(line))
                     .map(|line| strip_comment(line))
                     .filter(|line| !line.is_empty())
                     .collect();
-                if let Some(value) = rows
-                    .first()
-                    .and_then(|row| row.split(',').next())
-                    .and_then(|value| value.trim().parse::<u32>().ok())
-                {
-                    solver.max_iterations = value;
-                }
-                if let Some(value) = rows.first()
-                    .and_then(|row| row.split(',').nth(1))
-                    .and_then(|value| value.trim().parse::<u32>().ok())
-                {
-                    solver.preconditioner_iterations = value;
-                }
-                if let Some(value) = rows
-                    .get(1)
-                    .and_then(|row| row.split(',').next())
-                    .and_then(|value| value.trim().parse::<f32>().ok())
-                {
-                    solver.convergence_tol = value;
-                }
+                // Compatibility auditing reports malformed or unsupported rows.
+                let _ = solver_rows::read(&rows, solver);
                 i += 1;
             }
 
