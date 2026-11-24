@@ -430,17 +430,17 @@ pub struct SolverSettings {
     pub analysis_type: AnalysisType,
     /// Number of substeps (for nonlinear or time-dependent analyses).
     pub substeps: u32,
-    /// Linear solver iteration limit (`!SOLVER` NITER), not Newton iterations.
-    pub max_iterations: u32,
+    /// Linear solver iteration limit (`!SOLVER` NITER). None uses the solver default.
+    pub max_iterations: Option<u32>,
     /// FrontISTR PRECOND code for the supported two-row SOLVER card.
     pub preconditioner: u8,
-    pub preconditioner_iterations: u32,
+    pub preconditioner_iterations: Option<u32>,
     /// Optional NREST, NCOLOR_IN and RECYCLEPRE entries in the first solver row.
     pub gmres_subspaces: Option<u32>,
     pub ordering_colors: Option<u32>,
     pub preconditioner_reuse: Option<u32>,
-    /// Linear solver relative residual tolerance (`!SOLVER` RESID).
-    pub convergence_tol: f32,
+    /// Linear solver relative residual tolerance (`!SOLVER` RESID). None uses the solver default.
+    pub convergence_tol: Option<f64>,
     /// Optional SIGMA_DIAG and OMEGA entries in the second solver row.
     pub diagonal_scale: Option<f64>,
     pub ssor_relaxation: Option<f64>,
@@ -466,13 +466,13 @@ impl Default for SolverSettings {
             eigen: EigenSettings::default(),
             analysis_type: AnalysisType::Static,
             substeps: 1,
-            max_iterations: 100,
+            max_iterations: Some(100),
             preconditioner: 1,
-            preconditioner_iterations: 1,
+            preconditioner_iterations: Some(1),
             gmres_subspaces: None,
             ordering_colors: None,
             preconditioner_reuse: None,
-            convergence_tol: 1.0e-6,
+            convergence_tol: Some(1.0e-6),
             diagonal_scale: Some(1.0),
             ssor_relaxation: Some(0.0),
             nonlinear_max_iterations: 50,
@@ -489,6 +489,15 @@ impl Default for SolverSettings {
 impl SolverSettings {
     pub fn validate_linear_options(&self) -> Result<(), &'static str> {
         let positive = 1..=i32::MAX as u32;
+        if self.max_iterations.is_some_and(|n| !positive.contains(&n)) {
+            return Err("NITER must be in 1..=2147483647");
+        }
+        if self.preconditioner_iterations.is_some_and(|n| !positive.contains(&n)) {
+            return Err("iterPREmax must be in 1..=2147483647");
+        }
+        if self.convergence_tol.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err("RESID must be finite and positive");
+        }
         if self.gmres_subspaces.is_some_and(|n| !positive.contains(&n)) {
             return Err("NREST must be in 1..=2147483647");
         }

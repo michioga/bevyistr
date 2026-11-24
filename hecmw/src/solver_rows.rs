@@ -3,21 +3,21 @@ use fem_core::SolverSettings;
 use std::str::FromStr;
 
 pub(super) fn read(rows: &[&str], solver: &mut SolverSettings) -> Result<(), &'static str> {
-    let [integer_row, real_row] = rows else {
-        return Err("Expected the two standard SOLVER data rows");
+    let (integer_row, real_row) = match rows {
+        [] => ("", ""),
+        [integer_row] => (*integer_row, ""),
+        [integer_row, real_row] => (*integer_row, *real_row),
+        _ => return Err("Additional SOLVER data rows cannot be preserved"),
     };
     let mut integers = integer_row.split(',');
-    let max_iterations = required_integer(integers.next(), "NITER must be a positive integer")?;
-    let preconditioner_iterations =
-        required_integer(integers.next(), "iterPREmax must be a positive integer")?;
+    let max_iterations = optional(integers.next(), "Invalid NITER")?;
+    let preconditioner_iterations = optional(integers.next(), "Invalid iterPREmax")?;
     let gmres_subspaces = optional(integers.next(), "Invalid NREST")?;
     let ordering_colors = optional(integers.next(), "Invalid NCOLOR_IN")?;
     let preconditioner_reuse = optional(integers.next(), "Invalid RECYCLEPRE")?;
 
     let mut reals = real_row.split(',');
-    let convergence_tol: f32 = optional(reals.next(), "RESID must be finite and positive")?
-        .filter(|value: &f32| value.is_finite() && *value > 0.0)
-        .ok_or("RESID must be finite and positive")?;
+    let convergence_tol = optional(reals.next(), "Invalid RESID")?;
     let diagonal_scale = optional(reals.next(), "Invalid SIGMA_DIAG")?;
     let ssor_relaxation = optional(reals.next(), "Invalid OMEGA")?;
     if integers.next().is_some() || reals.next().is_some() {
@@ -36,12 +36,6 @@ pub(super) fn read(rows: &[&str], solver: &mut SolverSettings) -> Result<(), &'s
     candidate.validate_linear_options()?;
     *solver = candidate;
     Ok(())
-}
-
-fn required_integer(field: Option<&str>, error: &'static str) -> Result<u32, &'static str> {
-    optional(field, error)?
-        .filter(|value| (1..=i32::MAX as u32).contains(value))
-        .ok_or(error)
 }
 
 fn optional<T: FromStr>(field: Option<&str>, error: &'static str) -> Result<Option<T>, &'static str> {

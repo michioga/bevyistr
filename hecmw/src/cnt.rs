@@ -506,7 +506,9 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     .filter(|line| !line.is_empty())
                     .collect();
                 // Compatibility auditing reports malformed or unsupported rows.
-                let _ = solver_rows::read(&rows, solver);
+                if solver.solver_method.is_iterative() || !rows.is_empty() {
+                    let _ = solver_rows::read(&rows, solver);
+                }
                 i += 1;
             }
 
@@ -1222,8 +1224,8 @@ mod tests {
         assert_eq!(solver.substeps, 100);
         assert_eq!(solver.nonlinear_max_iterations, 1000);
         assert_eq!(solver.nonlinear_convergence_tol, 1.0e-4);
-        assert_eq!(solver.max_iterations, 100);
-        assert_eq!(solver.convergence_tol, 1.0e-6);
+        assert_eq!(solver.max_iterations, Some(100));
+        assert_eq!(solver.convergence_tol, Some(1.0e-6));
         assert_eq!(solver.solver_method, LinearSolverMethod::Mumps);
 
         let mut contacts = vec![ContactPair::new(

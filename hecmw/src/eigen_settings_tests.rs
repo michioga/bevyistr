@@ -33,8 +33,8 @@ fn round_trip_preserves_all_four_values_and_independent_solver_controls() {
         assert!(data.import_issues.is_empty());
         let mut setup = AnalysisSetup::default();
         data.merge_into(&mut setup);
-        setup.solver.max_iterations = 432;
-        setup.solver.convergence_tol = 2e-7;
+        setup.solver.max_iterations = Some(432);
+        setup.solver.convergence_tol = Some(2e-7);
         let output = crate::cnt_writer::build_cnt(&setup, &[]);
         let reloaded = read(&output);
         assert!(

@@ -170,8 +170,8 @@ fn pointer_selection_preserves_numbers_exports_and_supports_undo_redo() {
     let mut app = app();
     let original = SolverSettings {
         substeps: 17,
-        max_iterations: 123,
-        convergence_tol: 2e-7,
+        max_iterations: Some(123),
+        convergence_tol: Some(2e-7),
         nonlinear_max_iterations: 37,
         nonlinear_convergence_tol: 3.456789e-4,
         eigen: fem_core::EigenSettings { mode_count: 7, tolerance: 1.2345678901234567e-9, max_iterations: 90, shift: -0.12345678901234567 },

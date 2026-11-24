@@ -231,23 +231,20 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
     writeln!(o).unwrap();
     if s.solver_method.is_iterative() {
-        write!(o, " {}, {}", s.max_iterations, s.preconditioner_iterations).unwrap();
-        write_optional_columns(
-            &mut o,
-            [
-                s.gmres_subspaces.map(|value| value.to_string()),
-                s.ordering_colors.map(|value| value.to_string()),
-                s.preconditioner_reuse.map(|value| value.to_string()),
-            ],
-        );
-        write!(o, " {:.8e}", s.convergence_tol).unwrap();
-        write_optional_columns(
-            &mut o,
-            [
-                s.diagonal_scale.map(|value| format!("{value:e}")),
-                s.ssor_relaxation.map(|value| format!("{value:e}")),
-            ],
-        );
+        let counts = [
+            s.max_iterations,
+            s.preconditioner_iterations,
+            s.gmres_subspaces,
+            s.ordering_colors,
+            s.preconditioner_reuse,
+        ].map(|value| value.map(|count| count.to_string()));
+        let reals = [s.convergence_tol, s.diagonal_scale, s.ssor_relaxation]
+            .map(|value| value.map(|number| format!("{number:e}")));
+        if !write_solver_row(&mut o, &counts) && reals.iter().any(Option::is_some) {
+            // A comma-only row keeps the real values in the second data row.
+            writeln!(o, " ,").unwrap();
+        }
+        write_solver_row(&mut o, &reals);
     }
 
     writeln!(o).unwrap();
@@ -286,13 +283,16 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     o
 }
 
-fn write_optional_columns<const N: usize>(output: &mut String, columns: [Option<String>; N]) {
-    if let Some(last) = columns.iter().rposition(Option::is_some) {
-        for column in &columns[..=last] {
-            write!(output, ", {}", column.as_deref().unwrap_or_default()).unwrap();
-        }
+fn write_solver_row(output: &mut String, columns: &[Option<String>]) -> bool {
+    let Some(last) = columns.iter().rposition(Option::is_some) else {
+        return false;
+    };
+    for (index, column) in columns[..=last].iter().enumerate() {
+        let separator = if index == 0 { " " } else { ", " };
+        write!(output, "{separator}{}", column.as_deref().unwrap_or_default()).unwrap();
     }
     writeln!(output).unwrap();
+    true
 }
 
 fn write_condition_header(out: &mut String, keyword: &str, center: Option<&RotationCenter>) {

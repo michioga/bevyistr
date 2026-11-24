@@ -17,8 +17,8 @@ fn linear_and_nonlinear_values_are_independent_in_both_card_orders() {
         let mut setup = AnalysisSetup::default();
         data.merge_into(&mut setup);
         assert_eq!(setup.solver.substeps, 8);
-        assert_eq!(setup.solver.max_iterations, 432);
-        assert_eq!(setup.solver.convergence_tol, 1.2345679e-9);
+        assert_eq!(setup.solver.max_iterations, Some(432));
+        assert_eq!(setup.solver.convergence_tol, Some(1.2345679e-9));
         assert_eq!(setup.solver.nonlinear_max_iterations, 27);
         assert_eq!(setup.solver.nonlinear_convergence_tol, 2.3456789e-4);
         let output = crate::cnt_writer::build_cnt(&setup, &[]);
@@ -43,8 +43,8 @@ fn step_defaults_are_frontistr_defaults_not_linear_editor_values() {
     let settings = data.solver.unwrap();
     assert_eq!(settings.nonlinear_max_iterations, 50);
     assert_eq!(settings.nonlinear_convergence_tol, 1e-3);
-    assert_eq!(settings.max_iterations, 100);
-    assert_eq!(settings.convergence_tol, 1e-6);
+    assert_eq!(settings.max_iterations, Some(100));
+    assert_eq!(settings.convergence_tol, Some(1e-6));
 }
 
 #[test]
@@ -146,6 +146,38 @@ fn iterative_solver_rows_round_trip_with_positional_omissions() {
 }
 
 #[test]
+fn omitted_solver_rows_and_columns_preserve_frontistr_defaults() {
+    let header = "!SOLVER, METHOD=GMRES, PRECOND=1";
+    for (rows, expected_values, emitted_rows) in [
+        ("", (None, None, None), "\n"),
+        ("123\n", (Some(123), None, None), " 123\n\n"),
+        (",2\n", (None, Some(2), None), " , 2\n\n"),
+        (
+            ",\n1.2345678901234567e-12\n",
+            (None, None, Some(1.2345678901234567e-12)),
+            " ,\n 1.2345678901234567e-12\n\n",
+        ),
+        (",,40\n,,0\n", (None, None, None), " , , 40\n , , 0e0\n\n"),
+    ] {
+        let input = format!("{header}\n{rows}!END\n");
+        let data = parsed(&input);
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        let mut setup = AnalysisSetup::default();
+        data.merge_into(&mut setup);
+        let solver = &setup.solver;
+        assert_eq!(
+            (solver.max_iterations, solver.preconditioner_iterations, solver.convergence_tol),
+            expected_values,
+        );
+        let exported = crate::cnt_writer::build_cnt(&setup, &[]);
+        assert!(exported.contains(&format!("{header}\n{emitted_rows}")), "{exported}");
+        let reloaded = parsed(&exported);
+        assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+        assert_eq!(reloaded.solver.unwrap(), setup.solver);
+    }
+}
+
+#[test]
 fn hinge_solver_options_and_implicit_group_one_survive_export() {
     let text = concat!(
         "!SOLUTION, TYPE=STATIC\n!BOUNDARY\n1,1,3,0\n!CLOAD\n2,1,10\n",
@@ -156,7 +188,7 @@ fn hinge_solver_options_and_implicit_group_one_survive_export() {
     assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
     let mut setup = AnalysisSetup::default();
     data.merge_into(&mut setup);
-    assert_eq!(setup.solver.preconditioner_iterations, 2);
+    assert_eq!(setup.solver.preconditioner_iterations, Some(2));
     let output = crate::cnt_writer::build_cnt(&setup, &[]);
     assert!(output.contains("!BOUNDARY, GRPID=1"));
     assert!(output.contains("!CLOAD, GRPID=1"));
@@ -273,12 +305,12 @@ fn unsupported_matrix_dump_parameters_still_block_export() {
 fn editing_one_tolerance_does_not_change_the_other_on_export() {
     let mut setup = AnalysisSetup::default();
     setup.solver.analysis_type = AnalysisType::NlStatic;
-    for value in [1.2345679e-18, 2.3456789e-4, f32::MIN_POSITIVE] {
-        setup.solver.convergence_tol = value;
+    for value in [1.2345678901234567e-18, 2.3456789e-4, f64::MIN_POSITIVE] {
+        setup.solver.convergence_tol = Some(value);
         let after_linear = parsed(&crate::cnt_writer::build_cnt(&setup, &[]))
             .solver
             .unwrap();
-        assert_eq!(after_linear.convergence_tol.to_bits(), value.to_bits());
+        assert_eq!(after_linear.convergence_tol.unwrap().to_bits(), value.to_bits());
         assert_eq!(after_linear.nonlinear_convergence_tol, 1e-3);
     }
     setup.solver.nonlinear_convergence_tol = 5.6789123e-5;
@@ -303,7 +335,7 @@ fn invalid_authoring_values_are_rejected_by_preflight() {
     setup.solver.nonlinear_convergence_tol = f32::NAN;
     assert!(crate::validate_frontistr_project(&model, &setup).has_errors());
     setup.solver.nonlinear_convergence_tol = 1e-3;
-    setup.solver.max_iterations = u32::MAX;
+    setup.solver.max_iterations = Some(u32::MAX);
     assert!(
         crate::validate_frontistr_project(&model, &setup)
             .summary(100)

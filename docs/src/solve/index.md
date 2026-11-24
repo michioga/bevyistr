@@ -21,7 +21,7 @@ Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数
 - **Precond. iterations**（`iterPREmax`）は前処理の反復回数です。**GMRES subspaces**（`NREST`）はGMRESで表示します。
 - **Ordering colors**（`NCOLOR_IN`）は多色順序付けの色数で、FrontISTRではOpenMPが2スレッド以上のときに適用されます。**Precond. reuse**（`RECYCLEPRE`）は非線形静解析で表示し、`0` で再利用を無効にします。
 - **Diagonal scale**（`SIGMA_DIAG`）は対角スケーリング、**SSOR relaxation**（`OMEGA`）はSSORで表示します。FrontISTRは `0 < OMEGA < 2` の範囲を使い、従来の `0` は `1` として扱います。
-- 任意欄を空欄にしてEnterを押すと、FrontISTRの既定値を使います。解析タイプや前処理を切り替えて表示されなくなった値も保持されます。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
+- 線形反復欄を空欄にしてEnterを押すと、FrontISTRの既定値を使います。`NITER`、`iterPREmax`、`RESID` の省略も、解析タイプや前処理を切り替えて表示されなくなった値も保持します。`RESID` は倍精度で扱います。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
 
 ### ソルバーログを設定する（0.5.0開発版）
 

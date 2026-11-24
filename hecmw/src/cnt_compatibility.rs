@@ -383,8 +383,13 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
         }
         // Older direct-solver files may include the two standard placeholder rows.
         if !solver.solver_method.is_iterative()
-            && (body[0].split(',').count() != 2
-                || !numbers(body[1], &[parameters.convergence_tol, 1.0, 0.0]))
+            && (body.len() != 2
+                || body[0].split(',').count() != 2
+                || parameters.max_iterations.is_none()
+                || parameters.preconditioner_iterations.is_none()
+                || parameters.convergence_tol.is_none()
+                || parameters.diagonal_scale != Some(1.0)
+                || parameters.ssor_relaxation != Some(0.0))
         {
             return Some("Non-default direct solver data rows cannot be preserved");
         }
@@ -557,7 +562,7 @@ mod tests {
             "!SOLVER, METHOD=DIRECTMKL, TIMELOG=INVALID",
             "!SOLVER, METHOD=DIRECTMKL, ITERLOG=VERBOSE",
             "!SOLVER, METHOD=UNKNOWN",
-            "!SOLVER, METHOD=CG, PRECOND=2",
+            "!SOLVER, METHOD=CG, PRECOND=4",
             "!STEP, SUBSTEPS=3, CONVERG=1e-8",
             "!EIGEN\n10, 1e-8, 100, 0.001",
             "!DYNAMIC\n1, 1",
@@ -749,8 +754,8 @@ mod tests {
         let parsed = read(text);
         assert!(parsed.import_issues.is_empty());
         let solver = parsed.solver.unwrap();
-        assert_eq!(solver.max_iterations, 200);
-        assert_eq!(solver.convergence_tol, 1e-8);
+        assert_eq!(solver.max_iterations, Some(200));
+        assert_eq!(solver.convergence_tol, Some(1e-8));
     }
 
     #[test]

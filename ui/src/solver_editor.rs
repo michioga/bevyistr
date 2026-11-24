@@ -88,7 +88,8 @@ impl SolverField {
     fn optional(self) -> bool {
         matches!(
             self,
-            Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
+            Self::MaxIterations | Self::ConvergenceTolerance | Self::PreconditionerIterations
+                | Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
                 | Self::DiagonalScale | Self::SsorRelaxation
         )
     }
@@ -412,16 +413,14 @@ pub(crate) fn solver_numeric_input_system(
 fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
     match field {
         SolverField::Substeps => settings.substeps.to_string(),
-        SolverField::MaxIterations => settings.max_iterations.to_string(),
-        SolverField::ConvergenceTolerance => format!("{:.8e}", settings.convergence_tol),
-        SolverField::PreconditionerIterations => settings.preconditioner_iterations.to_string(),
+        SolverField::MaxIterations => format_optional_count(settings.max_iterations),
+        SolverField::ConvergenceTolerance => format_optional_real(settings.convergence_tol),
+        SolverField::PreconditionerIterations => format_optional_count(settings.preconditioner_iterations),
         SolverField::GmresSubspaces => format_optional_count(settings.gmres_subspaces),
         SolverField::OrderingColors => format_optional_count(settings.ordering_colors),
         SolverField::PreconditionerReuse => format_optional_count(settings.preconditioner_reuse),
-        SolverField::DiagonalScale => settings
-            .diagonal_scale.map(|value| format!("{value:e}")).unwrap_or_default(),
-        SolverField::SsorRelaxation => settings
-            .ssor_relaxation.map(|value| format!("{value:e}")).unwrap_or_default(),
+        SolverField::DiagonalScale => format_optional_real(settings.diagonal_scale),
+        SolverField::SsorRelaxation => format_optional_real(settings.ssor_relaxation),
         SolverField::NonlinearMaxIterations => settings.nonlinear_max_iterations.to_string(),
         SolverField::NonlinearConvergenceTolerance => {
             format!("{:.8e}", settings.nonlinear_convergence_tol)
@@ -435,6 +434,10 @@ fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
 
 fn format_optional_count(value: Option<u32>) -> String {
     value.map(|count| count.to_string()).unwrap_or_default()
+}
+
+fn format_optional_real(value: Option<f64>) -> String {
+    value.map(|number| format!("{number:e}")).unwrap_or_default()
 }
 
 fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValue, String> {
@@ -455,10 +458,7 @@ fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValu
         });
     }
 
-    if matches!(
-        field,
-        SolverField::ConvergenceTolerance | SolverField::NonlinearConvergenceTolerance
-    ) {
+    if field == SolverField::NonlinearConvergenceTolerance {
         let value = text
             .parse::<f32>()
             .ok()
@@ -471,7 +471,9 @@ fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValu
     }
     let value = text.parse::<f64>().ok().filter(|value| value.is_finite())
         .ok_or("enter a finite number")?;
-    if field == SolverField::EigenTolerance && value <= 0.0 {
+    if matches!(field, SolverField::EigenTolerance | SolverField::ConvergenceTolerance)
+        && value <= 0.0
+    {
         return Err("tolerance must be finite and positive".into());
     }
     Ok(if optional {
@@ -488,13 +490,13 @@ fn apply_solver_value(
 ) {
     match (field, value) {
         (SolverField::Substeps, ParsedSolverValue::Integer(value)) => settings.substeps = value,
-        (SolverField::MaxIterations, ParsedSolverValue::Integer(value)) => {
+        (SolverField::MaxIterations, ParsedSolverValue::OptionalInteger(value)) => {
             settings.max_iterations = value;
         }
-        (SolverField::ConvergenceTolerance, ParsedSolverValue::Float(value)) => {
+        (SolverField::ConvergenceTolerance, ParsedSolverValue::OptionalDouble(value)) => {
             settings.convergence_tol = value;
         }
-        (SolverField::PreconditionerIterations, ParsedSolverValue::Integer(value)) => {
+        (SolverField::PreconditionerIterations, ParsedSolverValue::OptionalInteger(value)) => {
             settings.preconditioner_iterations = value;
         }
         (SolverField::GmresSubspaces, ParsedSolverValue::OptionalInteger(value)) => {
@@ -546,7 +548,7 @@ mod tests {
         assert!(parse_solver_value(SolverField::MaxIterations, "0").is_err());
         assert_eq!(
             parse_solver_value(SolverField::ConvergenceTolerance, "1e-8"),
-            Ok(ParsedSolverValue::Float(1.0e-8))
+            Ok(ParsedSolverValue::OptionalDouble(Some(1.0e-8)))
         );
         assert!(parse_solver_value(SolverField::ConvergenceTolerance, "-1e-8").is_err());
     }
@@ -591,6 +593,8 @@ mod tests {
 
         let diagonal_scale = 1.2345678901234567_f64;
         for (field, typed) in [
+            (SolverField::MaxIterations, ""),
+            (SolverField::ConvergenceTolerance, "1.2345678901234567e-25"),
             (SolverField::PreconditionerIterations, "2"),
             (SolverField::OrderingColors, "24"),
             (SolverField::PreconditionerReuse, "0"),
@@ -613,7 +617,9 @@ mod tests {
         }
 
         let setup = app.world().resource::<fem_core::AnalysisSetup>();
-        assert_eq!(setup.solver.preconditioner_iterations, 2);
+        assert_eq!(setup.solver.max_iterations, None);
+        assert_eq!(setup.solver.convergence_tol, Some(1.2345678901234567e-25));
+        assert_eq!(setup.solver.preconditioner_iterations, Some(2));
         assert_eq!(setup.solver.ordering_colors, Some(24));
         assert_eq!(setup.solver.preconditioner_reuse, Some(0));
         assert_eq!(setup.solver.diagonal_scale, Some(diagonal_scale));
@@ -633,36 +639,41 @@ mod tests {
         apply_solver_value(
             &mut settings,
             SolverField::MaxIterations,
-            ParsedSolverValue::Integer(250),
+            ParsedSolverValue::OptionalInteger(Some(250)),
         );
 
         assert_eq!(settings.substeps, 1);
-        assert_eq!(settings.max_iterations, 250);
-        assert_eq!(settings.convergence_tol, 1.0e-6);
+        assert_eq!(settings.max_iterations, Some(250));
+        assert_eq!(settings.convergence_tol, Some(1.0e-6));
         assert_eq!(settings.nonlinear_max_iterations, 50);
         apply_solver_value(
             &mut settings,
             SolverField::NonlinearMaxIterations,
             ParsedSolverValue::Integer(37),
         );
-        assert_eq!(settings.max_iterations, 250);
+        assert_eq!(settings.max_iterations, Some(250));
         assert_eq!(settings.nonlinear_max_iterations, 37);
     }
 
     #[test]
     fn tolerances_round_trip_without_display_rounding() {
         let mut settings = fem_core::SolverSettings::default();
-        for field in [
-            SolverField::ConvergenceTolerance,
-            SolverField::NonlinearConvergenceTolerance,
+        for (field, value) in [
+            (
+                SolverField::ConvergenceTolerance,
+                ParsedSolverValue::OptionalDouble(Some(1.2345678901234567e-125)),
+            ),
+            (
+                SolverField::ConvergenceTolerance,
+                ParsedSolverValue::OptionalDouble(None),
+            ),
+            (
+                SolverField::NonlinearConvergenceTolerance,
+                ParsedSolverValue::Float(f32::MIN_POSITIVE),
+            ),
         ] {
-            for value in [1.2345679e-18, 2.3456789e-4, f32::MIN_POSITIVE] {
-                apply_solver_value(&mut settings, field, ParsedSolverValue::Float(value));
-                assert_eq!(
-                    parse_solver_value(field, &solver_value_text(&settings, field)),
-                    Ok(ParsedSolverValue::Float(value))
-                );
-            }
+            apply_solver_value(&mut settings, field, value);
+            assert_eq!(parse_solver_value(field, &solver_value_text(&settings, field)), Ok(value));
             for invalid in ["NaN", "inf", "0", "-1"] {
                 assert!(parse_solver_value(field, invalid).is_err());
             }
@@ -736,7 +747,7 @@ mod tests {
                 .resource::<fem_core::AnalysisSetup>()
                 .solver
                 .max_iterations,
-            100
+            Some(100)
         );
         assert_eq!(
             app.world()
@@ -792,7 +803,7 @@ mod tests {
                 .resource::<fem_core::AnalysisSetup>()
                 .solver
                 .max_iterations,
-            100
+            Some(100)
         );
         assert!(app.world().resource::<InputFocus>().get().is_none());
         assert_eq!(
