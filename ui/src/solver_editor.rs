@@ -9,7 +9,7 @@ use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use bevy::ui_widgets::SelectAllOnFocus;
-use fem_core::UiKeyboardState;
+use fem_core::{AnalysisType, LinearSolverMethod, SolverSettings, UiKeyboardState};
 
 const INPUT_BG: Color = Color::srgba(0.075, 0.09, 0.10, 0.98);
 const INPUT_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -27,7 +27,12 @@ pub(crate) enum SolverField {
     Substeps,
     MaxIterations,
     ConvergenceTolerance,
+    PreconditionerIterations,
     GmresSubspaces,
+    OrderingColors,
+    PreconditionerReuse,
+    DiagonalScale,
+    SsorRelaxation,
     NonlinearMaxIterations,
     NonlinearConvergenceTolerance,
     EigenModes,
@@ -42,7 +47,12 @@ impl SolverField {
             Self::Substeps => "Substeps",
             Self::MaxIterations => "Linear max iterations",
             Self::ConvergenceTolerance => "Linear tolerance",
+            Self::PreconditionerIterations => "Preconditioner iterations",
             Self::GmresSubspaces => "GMRES subspaces",
+            Self::OrderingColors => "Ordering colors",
+            Self::PreconditionerReuse => "Preconditioner reuse",
+            Self::DiagonalScale => "Diagonal scaling factor",
+            Self::SsorRelaxation => "SSOR relaxation",
             Self::NonlinearMaxIterations => "Nonlinear max iterations",
             Self::NonlinearConvergenceTolerance => "Nonlinear residual tolerance",
             Self::EigenModes => "Requested modes",
@@ -52,25 +62,51 @@ impl SolverField {
         }
     }
 
-    fn active(self, settings: &fem_core::SolverSettings) -> bool {
+    fn active(self, settings: &SolverSettings) -> bool {
+        let iterative = settings.solver_method.is_iterative();
         match self {
-            Self::MaxIterations | Self::ConvergenceTolerance => {
-                settings.solver_method.is_iterative()
+            Self::MaxIterations
+            | Self::ConvergenceTolerance
+            | Self::PreconditionerIterations
+            | Self::OrderingColors => iterative,
+            Self::GmresSubspaces => settings.solver_method == LinearSolverMethod::Gmres,
+            Self::PreconditionerReuse => {
+                iterative && settings.analysis_type == AnalysisType::NlStatic
             }
-            Self::GmresSubspaces => settings.solver_method == fem_core::LinearSolverMethod::Gmres,
+            Self::DiagonalScale => iterative && settings.preconditioner == 3,
+            Self::SsorRelaxation => iterative && matches!(settings.preconditioner, 1 | 2),
             Self::EigenModes
             | Self::EigenTolerance
             | Self::EigenMaxIterations
-            | Self::EigenShift => settings.analysis_type == fem_core::AnalysisType::Eigen,
-            _ => settings.analysis_type == fem_core::AnalysisType::NlStatic,
+            | Self::EigenShift => settings.analysis_type == AnalysisType::Eigen,
+            Self::Substeps | Self::NonlinearMaxIterations | Self::NonlinearConvergenceTolerance => {
+                settings.analysis_type == AnalysisType::NlStatic
+            }
         }
+    }
+
+    fn optional(self) -> bool {
+        matches!(
+            self,
+            Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
+                | Self::DiagonalScale | Self::SsorRelaxation
+        )
+    }
+
+    fn integer(self) -> bool {
+        matches!(
+            self,
+            Self::Substeps | Self::MaxIterations | Self::PreconditionerIterations
+                | Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
+                | Self::NonlinearMaxIterations | Self::EigenModes | Self::EigenMaxIterations
+        )
     }
 }
 
 #[derive(Component)]
 pub(crate) enum SolverControlGroup {
     Linear,
-    Gmres,
+    Field(SolverField),
     Nonlinear,
     DirectHint,
     Eigen,
@@ -89,10 +125,11 @@ pub(crate) struct SolverEditorState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ParsedSolverValue {
-    Default,
     Integer(u32),
+    OptionalInteger(Option<u32>),
     Float(f32),
     Double(f64),
+    OptionalDouble(Option<f64>),
 }
 
 pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
@@ -107,32 +144,27 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
         ))
         .with_children(|group| {
             solver_hint(group, "LINEAR ITERATION | !SOLVER");
-            solver_value_row(
-                group,
-                "Max iterations",
-                SolverField::MaxIterations,
-                "SolverMaxIterationsInput",
-            );
-            solver_value_row(
-                group,
-                "Relative residual",
-                SolverField::ConvergenceTolerance,
-                "SolverConvergenceToleranceInput",
-            );
-            group
-                .spawn((
-                    Node { flex_direction: FlexDirection::Column, ..default() },
-                    SolverControlGroup::Gmres,
-                ))
-                .with_children(|gmres| {
-                    solver_value_row(
-                        gmres,
-                        "GMRES subspaces",
-                        SolverField::GmresSubspaces,
-                        "SolverGmresSubspacesInput",
-                    );
-                    solver_hint(gmres, "Blank uses the FrontISTR default.");
-                });
+            for (label, field, name) in [
+                ("Max iterations", SolverField::MaxIterations, "SolverMaxIterationsInput"),
+                (
+                    "Relative residual",
+                    SolverField::ConvergenceTolerance,
+                    "SolverConvergenceToleranceInput",
+                ),
+                (
+                    "Precond. iterations",
+                    SolverField::PreconditionerIterations,
+                    "SolverPreconditionerIterationsInput",
+                ),
+                ("GMRES subspaces", SolverField::GmresSubspaces, "SolverGmresSubspacesInput"),
+                ("Ordering colors", SolverField::OrderingColors, "SolverOrderingColorsInput"),
+                ("Precond. reuse", SolverField::PreconditionerReuse, "SolverPreconditionerReuseInput"),
+                ("Diagonal scale", SolverField::DiagonalScale, "SolverDiagonalScaleInput"),
+                ("SSOR relaxation", SolverField::SsorRelaxation, "SolverSsorRelaxationInput"),
+            ] {
+                solver_value_row(group, label, field, name);
+            }
+            solver_hint(group, "Blank optional fields use FrontISTR defaults.");
         });
     parent.spawn((Node::default(), SolverControlGroup::DirectHint)).with_children(|group| {
         solver_hint(group, "Direct method: linear iteration controls are not used. Availability depends on the FrontISTR build.");
@@ -211,14 +243,17 @@ fn solver_value_row(
     name: &'static str,
 ) {
     parent
-        .spawn((Node {
-            width: percent(100.0),
-            height: px(25.0),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(5.0),
-            ..default()
-        },))
+        .spawn((
+            Node {
+                width: percent(100.0),
+                height: px(25.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(5.0),
+                ..default()
+            },
+            SolverControlGroup::Field(field),
+        ))
         .with_children(|row| {
             row.spawn((
                 Text::new(label),
@@ -249,20 +284,9 @@ fn solver_value_row(
                     allow_newlines: false,
                     ..EditableText::new("0")
                 },
-                EditableTextFilter::new(move |character| match field {
-                    SolverField::Substeps
-                    | SolverField::MaxIterations
-                    | SolverField::GmresSubspaces
-                    | SolverField::NonlinearMaxIterations
-                    | SolverField::EigenModes
-                    | SolverField::EigenMaxIterations => character.is_ascii_digit(),
-                    SolverField::ConvergenceTolerance
-                    | SolverField::NonlinearConvergenceTolerance
-                    | SolverField::EigenTolerance
-                    | SolverField::EigenShift => {
-                        character.is_ascii_digit()
-                            || matches!(character, '+' | '-' | '.' | 'e' | 'E')
-                    }
+                EditableTextFilter::new(move |character| {
+                    character.is_ascii_digit()
+                        || (!field.integer() && matches!(character, '+' | '-' | '.' | 'e' | 'E'))
                 }),
                 TextLayout {
                     justify: Justify::End,
@@ -306,20 +330,19 @@ pub(crate) fn solver_numeric_input_system(
     for (group, mut node) in &mut groups {
         let visible = match group {
             SolverControlGroup::Linear => setup.solver.solver_method.is_iterative(),
-            SolverControlGroup::Gmres => SolverField::GmresSubspaces.active(&setup.solver),
+            SolverControlGroup::Field(field) => field.active(&setup.solver),
             SolverControlGroup::Nonlinear => {
-                setup.solver.analysis_type == fem_core::AnalysisType::NlStatic
+                setup.solver.analysis_type == AnalysisType::NlStatic
             }
             SolverControlGroup::DirectHint => !setup.solver.solver_method.is_iterative(),
             SolverControlGroup::Eigen => {
-                setup.solver.analysis_type == fem_core::AnalysisType::Eigen
+                setup.solver.analysis_type == AnalysisType::Eigen
             }
         };
-        node.display = if visible {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        let display = if visible { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
     }
     let focused_entity = input_focus.get();
     if !focused_entity.is_some_and(|entity| inputs.contains(entity)) {
@@ -386,13 +409,19 @@ pub(crate) fn solver_numeric_input_system(
     }
 }
 
-fn solver_value_text(settings: &fem_core::SolverSettings, field: SolverField) -> String {
+fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
     match field {
         SolverField::Substeps => settings.substeps.to_string(),
         SolverField::MaxIterations => settings.max_iterations.to_string(),
         SolverField::ConvergenceTolerance => format!("{:.8e}", settings.convergence_tol),
-        SolverField::GmresSubspaces => settings.gmres_subspaces
-            .map(|value| value.to_string()).unwrap_or_default(),
+        SolverField::PreconditionerIterations => settings.preconditioner_iterations.to_string(),
+        SolverField::GmresSubspaces => format_optional_count(settings.gmres_subspaces),
+        SolverField::OrderingColors => format_optional_count(settings.ordering_colors),
+        SolverField::PreconditionerReuse => format_optional_count(settings.preconditioner_reuse),
+        SolverField::DiagonalScale => settings
+            .diagonal_scale.map(|value| format!("{value:e}")).unwrap_or_default(),
+        SolverField::SsorRelaxation => settings
+            .ssor_relaxation.map(|value| format!("{value:e}")).unwrap_or_default(),
         SolverField::NonlinearMaxIterations => settings.nonlinear_max_iterations.to_string(),
         SolverField::NonlinearConvergenceTolerance => {
             format!("{:.8e}", settings.nonlinear_convergence_tol)
@@ -404,56 +433,56 @@ fn solver_value_text(settings: &fem_core::SolverSettings, field: SolverField) ->
     }
 }
 
+fn format_optional_count(value: Option<u32>) -> String {
+    value.map(|count| count.to_string()).unwrap_or_default()
+}
+
 fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValue, String> {
-    if field == SolverField::GmresSubspaces && text.trim().is_empty() {
-        return Ok(ParsedSolverValue::Default);
+    let text = text.trim();
+    let optional = field.optional();
+    if field.integer() {
+        if optional && text.is_empty() {
+            return Ok(ParsedSolverValue::OptionalInteger(None));
+        }
+        let minimum = u32::from(field != SolverField::PreconditionerReuse);
+        let value = text.parse::<u32>().ok()
+            .filter(|value| (minimum..=i32::MAX as u32).contains(value))
+            .ok_or_else(|| format!("enter a whole number from {minimum} to {}", i32::MAX))?;
+        return Ok(if optional {
+            ParsedSolverValue::OptionalInteger(Some(value))
+        } else {
+            ParsedSolverValue::Integer(value)
+        });
     }
-    match field {
-        SolverField::Substeps
-        | SolverField::MaxIterations
-        | SolverField::GmresSubspaces
-        | SolverField::NonlinearMaxIterations
-        | SolverField::EigenModes
-        | SolverField::EigenMaxIterations => {
-            let value = text
-                .trim()
-                .parse::<u32>()
-                .map_err(|_| "enter a positive whole number".to_string())?;
-            if value == 0 || value > i32::MAX as u32 {
-                return Err("value must be between 1 and 2147483647".to_string());
-            }
-            Ok(ParsedSolverValue::Integer(value))
-        }
-        SolverField::EigenTolerance | SolverField::EigenShift => {
-            let value = text
-                .trim()
-                .parse::<f64>()
-                .map_err(|_| "enter a finite number".to_string())?;
-            if !value.is_finite() || (field == SolverField::EigenTolerance && value <= 0.0) {
-                return Err(if field == SolverField::EigenTolerance {
-                    "tolerance must be finite and positive"
-                } else {
-                    "shift must be finite"
-                }
-                .into());
-            }
-            Ok(ParsedSolverValue::Double(value))
-        }
-        SolverField::ConvergenceTolerance | SolverField::NonlinearConvergenceTolerance => {
-            let value = text
-                .trim()
-                .parse::<f32>()
-                .map_err(|_| "enter a finite positive number".to_string())?;
-            if !value.is_finite() || value <= 0.0 {
-                return Err("value must be finite and positive".to_string());
-            }
-            Ok(ParsedSolverValue::Float(value))
-        }
+
+    if matches!(
+        field,
+        SolverField::ConvergenceTolerance | SolverField::NonlinearConvergenceTolerance
+    ) {
+        let value = text
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or("enter a finite positive number")?;
+        return Ok(ParsedSolverValue::Float(value));
     }
+    if optional && text.is_empty() {
+        return Ok(ParsedSolverValue::OptionalDouble(None));
+    }
+    let value = text.parse::<f64>().ok().filter(|value| value.is_finite())
+        .ok_or("enter a finite number")?;
+    if field == SolverField::EigenTolerance && value <= 0.0 {
+        return Err("tolerance must be finite and positive".into());
+    }
+    Ok(if optional {
+        ParsedSolverValue::OptionalDouble(Some(value))
+    } else {
+        ParsedSolverValue::Double(value)
+    })
 }
 
 fn apply_solver_value(
-    settings: &mut fem_core::SolverSettings,
+    settings: &mut SolverSettings,
     field: SolverField,
     value: ParsedSolverValue,
 ) {
@@ -465,11 +494,23 @@ fn apply_solver_value(
         (SolverField::ConvergenceTolerance, ParsedSolverValue::Float(value)) => {
             settings.convergence_tol = value;
         }
-        (SolverField::GmresSubspaces, ParsedSolverValue::Integer(value)) => {
-            settings.gmres_subspaces = Some(value);
+        (SolverField::PreconditionerIterations, ParsedSolverValue::Integer(value)) => {
+            settings.preconditioner_iterations = value;
         }
-        (SolverField::GmresSubspaces, ParsedSolverValue::Default) => {
-            settings.gmres_subspaces = None;
+        (SolverField::GmresSubspaces, ParsedSolverValue::OptionalInteger(value)) => {
+            settings.gmres_subspaces = value;
+        }
+        (SolverField::OrderingColors, ParsedSolverValue::OptionalInteger(value)) => {
+            settings.ordering_colors = value;
+        }
+        (SolverField::PreconditionerReuse, ParsedSolverValue::OptionalInteger(value)) => {
+            settings.preconditioner_reuse = value;
+        }
+        (SolverField::DiagonalScale, ParsedSolverValue::OptionalDouble(value)) => {
+            settings.diagonal_scale = value;
+        }
+        (SolverField::SsorRelaxation, ParsedSolverValue::OptionalDouble(value)) => {
+            settings.ssor_relaxation = value;
         }
         (SolverField::NonlinearMaxIterations, ParsedSolverValue::Integer(value)) => {
             settings.nonlinear_max_iterations = value
@@ -529,6 +570,61 @@ mod tests {
         apply_solver_value(&mut settings, field, parse_solver_value(field, "").unwrap());
         assert_eq!(solver_value_text(&settings, field), "");
         assert_eq!(settings.ordering_colors, Some(100));
+    }
+
+    #[test]
+    fn solve_preconditioner_fields_commit_and_round_trip_through_cnt() {
+        let mut setup = fem_core::AnalysisSetup::default();
+        setup.solver.analysis_type = AnalysisType::NlStatic;
+        setup.solver.solver_method = LinearSolverMethod::Gmres;
+        let mut app = App::new();
+        app.insert_resource(setup)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<UiKeyboardState>()
+            .init_resource::<SolverEditorState>()
+            .add_systems(Startup, |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(spawn_solver_exact_editor);
+            })
+            .add_systems(Update, solver_numeric_input_system);
+        app.update();
+
+        let diagonal_scale = 1.2345678901234567_f64;
+        for (field, typed) in [
+            (SolverField::PreconditionerIterations, "2"),
+            (SolverField::OrderingColors, "24"),
+            (SolverField::PreconditionerReuse, "0"),
+            (SolverField::SsorRelaxation, "1.125"),
+            (SolverField::DiagonalScale, "1.2345678901234567"),
+        ] {
+            if field == SolverField::DiagonalScale {
+                app.world_mut().resource_mut::<fem_core::AnalysisSetup>().solver.preconditioner = 3;
+            }
+            let input = app.world_mut().query::<(Entity, &SolverValueInput)>().iter(app.world())
+                .find(|(_, input)| input.0 == field).unwrap().0;
+            app.world_mut().get_mut::<EditableText>(input).unwrap().editor_mut().set_text(typed);
+            app.world_mut().resource_mut::<InputFocus>()
+                .set(input, bevy::input_focus::FocusCause::Navigated);
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::Enter);
+            app.update();
+            assert!(app.world().resource::<InputFocus>().get().is_none(), "{field:?}");
+        }
+
+        let setup = app.world().resource::<fem_core::AnalysisSetup>();
+        assert_eq!(setup.solver.preconditioner_iterations, 2);
+        assert_eq!(setup.solver.ordering_colors, Some(24));
+        assert_eq!(setup.solver.preconditioner_reuse, Some(0));
+        assert_eq!(setup.solver.diagonal_scale, Some(diagonal_scale));
+        assert_eq!(setup.solver.ssor_relaxation, Some(1.125));
+        assert_eq!(setup.solver.gmres_subspaces, None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("solver.cnt");
+        hecmw::cnt_writer::write_cnt_file(&path, setup).unwrap();
+        let data = hecmw::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0).unwrap();
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        assert_eq!(data.solver.as_ref(), Some(&setup.solver));
     }
 
     #[test]

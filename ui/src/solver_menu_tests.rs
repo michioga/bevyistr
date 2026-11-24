@@ -120,6 +120,27 @@ fn matrix_dump_menus_control_export_without_changing_the_solver_method() {
 }
 
 #[test]
+fn preconditioner_menu_exports_the_selected_code_and_hides_for_direct_methods() {
+    let mut app = app();
+    open(&mut app, Kind::Preconditioner);
+    click_choice(&mut app, Choice::Preconditioner(3));
+    assert_export(&app, Choice::Preconditioner(3));
+    let selector = button(&mut app, Kind::Preconditioner);
+    let anchor = app.world().get::<ChildOf>(selector).unwrap().parent();
+    app.world_mut().resource_mut::<InputFocus>().set(selector, FocusCause::Navigated);
+    app.world_mut().resource_mut::<AnalysisSetup>().solver.solver_method =
+        LinearSolverMethod::Mumps;
+    app.update();
+    assert_eq!(app.world().get::<Node>(anchor).unwrap().display, Display::None);
+    assert!(app.world().resource::<InputFocus>().get().is_none());
+    app.world_mut().resource_mut::<AnalysisSetup>().solver.solver_method =
+        LinearSolverMethod::Cg;
+    app.update();
+    assert_eq!(app.world().get::<Node>(anchor).unwrap().display, Display::Flex);
+    assert_export(&app, Choice::Preconditioner(3));
+}
+
+#[test]
 fn solver_log_menus_keep_settings_across_method_changes_and_export() {
     let mut app = app();
     open(&mut app, Kind::ResidualLog);

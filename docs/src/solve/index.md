@@ -16,7 +16,12 @@ MUMPSとMKLは別のMETHODとして読み込み・出力します。メニュー
 
 Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数・許容差・最大反復数・シフト量を編集できます。[固有値解析の設定](eigen.md)を参照してください。
 
-0.5.0開発版では、GMRESを選ぶと **GMRES subspaces** で `NREST` を編集できます。空欄でEnterを押すとFrontISTRの既定値を使います。既存の `.cnt` を開いた場合は、`NCOLOR_IN`、`RECYCLEPRE`、`SIGMA_DIAG`、`OMEGA` も、空欄を含めて保持します。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
+0.5.0開発版では、Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角スケーリング（`PRECOND=3`）を選べます。CG／GMRESの数値欄は次のとおりです。
+
+- **Precond. iterations**（`iterPREmax`）は前処理の反復回数です。**GMRES subspaces**（`NREST`）はGMRESで表示します。
+- **Ordering colors**（`NCOLOR_IN`）は多色順序付けの色数で、FrontISTRではOpenMPが2スレッド以上のときに適用されます。**Precond. reuse**（`RECYCLEPRE`）は非線形静解析で表示し、`0` で再利用を無効にします。
+- **Diagonal scale**（`SIGMA_DIAG`）は対角スケーリング、**SSOR relaxation**（`OMEGA`）はSSORで表示します。FrontISTRは `0 < OMEGA < 2` の範囲を使い、従来の `0` は `1` として扱います。
+- 任意欄を空欄にしてEnterを押すと、FrontISTRの既定値を使います。解析タイプや前処理を切り替えて表示されなくなった値も保持されます。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
 
 ### ソルバーログを設定する（0.5.0開発版）
 

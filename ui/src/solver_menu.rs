@@ -24,6 +24,7 @@ use fem_core::{
 enum Kind {
     Analysis,
     Method,
+    Preconditioner,
     ResidualLog,
     TimingLog,
     MatrixDump,
@@ -43,6 +44,7 @@ struct Popup {
 enum Choice {
     Analysis(AnalysisType),
     Method(LinearSolverMethod),
+    Preconditioner(u8),
     ResidualLog(Option<bool>),
     TimingLog(Option<SolverTimeLog>),
     MatrixDump(MatrixDumpFormat),
@@ -54,16 +56,21 @@ impl Kind {
         match self {
             Self::Analysis => "Analysis type",
             Self::Method => "Linear solver",
+            Self::Preconditioner => "Preconditioner",
             Self::ResidualLog => "Residual log",
             Self::TimingLog => "Solver timing log",
             Self::MatrixDump => "Matrix dump",
             Self::DumpExit => "Dump action",
         }
     }
+    fn available(self, settings: &SolverSettings) -> bool {
+        self != Self::Preconditioner || settings.solver_method.is_iterative()
+    }
     fn current(self, settings: &SolverSettings) -> Choice {
         match self {
             Self::Analysis => Choice::Analysis(settings.analysis_type),
             Self::Method => Choice::Method(settings.solver_method),
+            Self::Preconditioner => Choice::Preconditioner(settings.preconditioner),
             Self::ResidualLog => Choice::ResidualLog(settings.iteration_log),
             Self::TimingLog => Choice::TimingLog(settings.time_log),
             Self::MatrixDump => Choice::MatrixDump(settings.matrix_dump_format),
@@ -89,6 +96,7 @@ impl Kind {
             ]
             .map(Choice::Method)
             .to_vec(),
+            Self::Preconditioner => [1, 2, 3].map(Choice::Preconditioner).to_vec(),
             Self::ResidualLog => [None, Some(false), Some(true)]
                 .map(Choice::ResidualLog)
                 .to_vec(),
@@ -117,6 +125,10 @@ impl Choice {
         match self {
             Self::Analysis(a) => a.label(),
             Self::Method(m) => m.label(),
+            Self::Preconditioner(1) => "SSOR (1)",
+            Self::Preconditioner(2) => "SSOR (2)",
+            Self::Preconditioner(3) => "Diagonal scaling (3)",
+            Self::Preconditioner(_) => "Unsupported",
             Self::ResidualLog(None) | Self::TimingLog(None) => "Default",
             Self::ResidualLog(Some(false)) | Self::TimingLog(Some(SolverTimeLog::Off)) => "Off",
             Self::ResidualLog(Some(true)) => "On",
@@ -134,6 +146,7 @@ impl Choice {
             Self::Analysis(AnalysisType::NlStatic) => "!SOLUTION, TYPE=STATIC, NONLINEAR".into(),
             Self::Analysis(a) => format!("!SOLUTION, TYPE={}", a.frontistr_type()),
             Self::Method(m) => format!("!SOLVER, METHOD={}", m.frontistr_method()),
+            Self::Preconditioner(code) => format!("PRECOND={code}"),
             Self::ResidualLog(None) => "!SOLVER without ITERLOG".into(),
             Self::ResidualLog(Some(false)) => "ITERLOG=NO".into(),
             Self::ResidualLog(Some(true)) => "ITERLOG=YES".into(),
@@ -148,6 +161,7 @@ impl Choice {
         match self {
             Self::Analysis(a) => settings.analysis_type == a,
             Self::Method(m) => settings.solver_method == m,
+            Self::Preconditioner(code) => settings.preconditioner == code,
             Self::ResidualLog(setting) => settings.iteration_log == setting,
             Self::TimingLog(setting) => settings.time_log == setting,
             Self::MatrixDump(format) => settings.matrix_dump_format == format,
@@ -171,6 +185,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
     for kind in [
         Kind::Analysis,
         Kind::Method,
+        Kind::Preconditioner,
         Kind::ResidualLog,
         Kind::TimingLog,
         Kind::MatrixDump,
@@ -231,14 +246,14 @@ fn menu_event(
             }
         }
         MenuAction::FocusRoot => {
-            if *page == SidebarPage::Solve {
+            if *page == SidebarPage::Solve && kind.available(&setup.solver) {
                 if let Some(button) = children.iter().find(|e| buttons.contains(*e)) {
                     focus.set(button, FocusCause::Navigated);
                 }
             }
         }
         MenuAction::Open(_) | MenuAction::Toggle => {
-            if *page != SidebarPage::Solve {
+            if *page != SidebarPage::Solve || !kind.available(&setup.solver) {
                 return;
             }
             if let Some(e) = existing {
@@ -365,6 +380,7 @@ fn choose(
     match *choice {
         Choice::Analysis(value) => setup.solver.analysis_type = value,
         Choice::Method(value) => setup.solver.solver_method = value,
+        Choice::Preconditioner(code) => setup.solver.preconditioner = code,
         Choice::ResidualLog(setting) => setup.solver.iteration_log = setting,
         Choice::TimingLog(setting) => setup.solver.time_log = setting,
         Choice::MatrixDump(format) => setup.solver.matrix_dump_format = format,
@@ -386,6 +402,7 @@ fn sync(
     mut commands: Commands,
     popups: Query<(Entity, &Popup)>,
     mut labels: Query<(&Label, &mut Text)>,
+    mut anchors: Query<(&Kind, &Children, &mut Node)>,
     mut items: Query<(Entity, &Choice, &Hovered, &mut BackgroundColor)>,
     mut focus: ResMut<InputFocus>,
     lists: Query<&ActiveDescendant>,
@@ -408,6 +425,15 @@ fn sync(
             label.0.title(),
             label.0.current(&setup.solver).label()
         )));
+    }
+    for (kind, children, mut anchor) in &mut anchors {
+        let display = if kind.available(&setup.solver) { Display::Flex } else { Display::None };
+        if anchor.display != display {
+            anchor.display = display;
+        }
+        if display == Display::None && focus.get().is_some_and(|entity| children.contains(&entity)) {
+            focus.clear();
+        }
     }
     let active_row = crate::popup_select::active_row(&focus, &lists);
     for (entity, choice, hovered, mut color) in &mut items {

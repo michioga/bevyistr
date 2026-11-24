@@ -221,7 +221,7 @@ pub(crate) fn update_analysis_setup_stats_text(
     }
 
     if let Ok(mut text) = query.single_mut() {
-        let mut summary = if setup.is_empty() {
+        let summary = if setup.is_empty() {
             "Setup: none loaded".to_string()
         } else {
             let constrained_nodes: usize = setup.boundary_conditions.iter()
@@ -237,9 +237,6 @@ pub(crate) fn update_analysis_setup_stats_text(
                 setup.sections.len()
             )
         };
-        if setup.solver.preconditioner != 1 {
-            summary.push_str(&format!("\nImported solver PRECOND={}", setup.solver.preconditioner));
-        }
         text.set_if_neq(Text::new(summary));
     }
 
