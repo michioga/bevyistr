@@ -107,6 +107,14 @@ impl Aabb {
         (point - clamped).length_squared()
     }
 
+    /// Squared lower bound on the distance between primitives in the boxes.
+    fn distance_squared_to_aabb(self, other: Self) -> f32 {
+        (self.min - other.max)
+            .max(other.min - self.max)
+            .max(Vec3::ZERO)
+            .length_squared()
+    }
+
     /// `true` if any point of this AABB is within `radius` of `point`.
     pub fn within_radius(&self, point: Vec3, radius: f32) -> bool {
         self.distance_squared_to_point(point) <= radius * radius
@@ -195,6 +203,71 @@ impl Bvh {
     /// `true` if this BVH covers zero primitives (e.g. an empty mesh).
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+
+    /// Finds the closest primitive pair across two trees. The callback returns
+    /// the squared distance and a value to keep when that pair is the closest.
+    pub fn closest_pair<T>(
+        &self,
+        other: &Self,
+        mut measure: impl FnMut(u32, u32) -> Option<(f32, T)>,
+    ) -> Option<T> {
+        if self.is_empty() || other.is_empty() {
+            return None;
+        }
+
+        let pair = |left: usize, right: usize| {
+            let bound = self.nodes[left]
+                .bounds
+                .distance_squared_to_aabb(other.nodes[right].bounds);
+            (left, right, bound)
+        };
+        let mut pending = vec![pair(0, 0)];
+        let mut best_squared = f32::INFINITY;
+        let mut best = None;
+        while let Some((left, right, lower_bound)) = pending.pop() {
+            // Allow a small rounding margin between AABB and primitive distances.
+            if lower_bound > best_squared * (1.0 + 8.0 * f32::EPSILON) {
+                continue;
+            }
+            let a = &self.nodes[left];
+            let b = &other.nodes[right];
+            if a.count > 0 && b.count > 0 {
+                for &i in self.leaf_indices(a) {
+                    for &j in other.leaf_indices(b) {
+                        if let Some((squared, value)) = measure(i, j) {
+                            if squared == 0.0 {
+                                return Some(value);
+                            }
+                            if squared < best_squared {
+                                best_squared = squared;
+                                best = Some(value);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Visit the tighter bound first to shorten the distance limit.
+            let children = if a.count == 0
+                && (b.count > 0
+                    || a.bounds.extent().max_element() >= b.bounds.extent().max_element())
+            {
+                let child = a.left_first as usize;
+                [pair(child, right), pair(child + 1, right)]
+            } else {
+                let child = b.left_first as usize;
+                [pair(left, child), pair(left, child + 1)]
+            };
+            let [first, second] = children;
+            if first.2 <= second.2 {
+                pending.extend([second, first]);
+            } else {
+                pending.extend([first, second]);
+            }
+        }
+        best
     }
 
     fn update_bounds(nodes: &mut [BvhNode], node_index: usize, bounds: &[Aabb], primitives: &[u32]) {
@@ -411,10 +484,13 @@ impl Bvh {
     }
 
     fn push_leaf(&self, node: &BvhNode, out: &mut Vec<u32>) {
+        out.extend_from_slice(self.leaf_indices(node));
+    }
+
+    fn leaf_indices(&self, node: &BvhNode) -> &[u32] {
         let first = node.left_first as usize;
         let count = node.count as usize;
-
-        out.extend_from_slice(&self.primitives[first..first + count]);
+        &self.primitives[first..first + count]
     }
 }
 
@@ -423,5 +499,30 @@ fn component(v: Vec3, axis: usize) -> f32 {
         0 => v.x,
         1 => v.y,
         _ => v.z,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closest_bvh_pair_prunes_distant_primitive_pairs() {
+        let mut left: Vec<_> = (0..128)
+            .map(|index| Aabb::from_point(Vec3::X * (-1000.0 - index as f32)))
+            .collect();
+        let mut right: Vec<_> = (0..128)
+            .map(|index| Aabb::from_point(Vec3::X * (1000.0 + index as f32)))
+            .collect();
+        left[77] = Aabb::from_point(Vec3::ZERO);
+        right[19] = Aabb::from_point(Vec3::Y);
+        let mut measurements = 0;
+        let closest = Bvh::build(&left).closest_pair(&Bvh::build(&right), |i, j| {
+            measurements += 1;
+            let distance = left[i as usize].min.distance_squared(right[j as usize].min);
+            Some((distance, (i, j)))
+        });
+        assert_eq!(closest, Some((77, 19)));
+        assert!(measurements < left.len() + right.len());
     }
 }

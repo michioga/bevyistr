@@ -62,7 +62,7 @@ These additions are **not included in the published 0.2.0 package**. See the
 - Read HEC-MW `.msh`, Gmsh ASCII MSH 4.1 or newer, Gmsh `.geo`, and basic Abaqus/CalculiX `.inp` meshes.
 - Preserve HEC-MW groups and Gmsh physical groups.
 - Move or rotate parts with the viewport gizmo, grouped axis controls, or an exact value entered in the lower-right measurement box.
-- Reset part poses and inspect clearance, touching, or interference against every other part. Avian is used only for these explicit geometric queries; it is not the FEM or picking engine.
+- Reset part poses and inspect clearance, touching, or interference against every other part.
 - Navigate with an orbit camera and an axis-aligned view cube.
 
 ### SketchUp-inspired selection

@@ -1,21 +1,15 @@
-//! On-demand assembly clearance checks backed by Avian's manual contact queries.
-//!
-//! This deliberately does not install Avian's physics plugins.  FEM picking,
-//! contact generation, and part transforms remain owned by bevyistr; Avian is
-//! used only as a robust geometric distance/intersection utility when the user
-//! explicitly asks for a check.
+//! On-demand assembly clearance checks using the FEM boundary surfaces.
 
-use crate::{ButtonInteraction, InteractionButton};
 use crate::assembly::AssemblyEditorState;
 use crate::layout::SidebarPage;
-use avian3d::collision::collider::contact_query::{
-    ClosestPoints, closest_points, contact, distance, intersection_test,
-};
-use avian3d::prelude::{Collider, TrimeshFlags};
+use crate::{ButtonInteraction, InteractionButton};
 use bevy::prelude::*;
-use fem_core::{FemMesh, FemModel, FemModelVersion, NodeId};
-use std::collections::BTreeMap;
+use fem_core::{FemMesh, FemModel, FemModelVersion};
 use visualization::ContactReviewSettings;
+
+#[path = "assembly_clearance_geometry.rs"]
+mod geometry;
+use geometry::BoundarySurface;
 
 const PANEL_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
@@ -78,7 +72,7 @@ struct ClearanceEvaluation {
 
 #[derive(Clone, Debug)]
 struct PartCollider {
-    shape: Collider,
+    shape: BoundarySurface,
     interior_sample: Option<Vec3>,
     bounds: (Vec3, Vec3),
 }
@@ -406,7 +400,7 @@ pub(crate) fn spawn_assembly_clearance_ui(parent: &mut ChildSpawnerCommands) {
     ));
 }
 
-/// Draws the most recent Avian query as a viewport measurement.  It is
+/// Draws the most recent clearance query as a viewport measurement.  It is
 /// intentionally immediate-mode: changing any mesh version makes the report
 /// stale and removes the preview until the user checks again.
 pub(crate) fn draw_assembly_clearance_preview(
@@ -646,56 +640,8 @@ fn build_boundary_collider(mesh: &FemMesh) -> Result<PartCollider, String> {
         .bounds()
         .filter(|(min, max)| min.is_finite() && max.is_finite())
         .ok_or_else(|| "part has no finite bounds".to_string())?;
-    let mut vertex_by_node = BTreeMap::<NodeId, u32>::new();
-    let mut vertices = Vec::<Vec3>::new();
-    let mut triangles = Vec::<[u32; 3]>::new();
-
-    for face in mesh.cached_boundary_faces() {
-        if face.nodes.len() < 3 {
-            continue;
-        }
-
-        let polygon: Option<Vec<u32>> = face
-            .nodes
-            .iter()
-            .map(|node_id| {
-                if let Some(index) = vertex_by_node.get(node_id) {
-                    return Some(*index);
-                }
-                let position = mesh.node_position(*node_id)?;
-                if !position.is_finite() {
-                    return None;
-                }
-                let index = u32::try_from(vertices.len()).ok()?;
-                vertices.push(position);
-                vertex_by_node.insert(*node_id, index);
-                Some(index)
-            })
-            .collect();
-        let Some(polygon) = polygon else {
-            continue;
-        };
-
-        for index in 1..(polygon.len() - 1) {
-            let triangle = [polygon[0], polygon[index], polygon[index + 1]];
-            let [a, b, c] = triangle.map(|vertex| vertices[vertex as usize]);
-            let area_squared = (b - a).cross(c - a).length_squared();
-            if area_squared.is_finite() && area_squared > 1.0e-20 {
-                triangles.push(triangle);
-            }
-        }
-    }
-
-    if triangles.is_empty() {
-        return Err("selected part has no supported boundary faces".to_string());
-    }
-
-    let flags = TrimeshFlags::MERGE_DUPLICATE_VERTICES
-        | TrimeshFlags::DELETE_DEGENERATE_TRIANGLES
-        | TrimeshFlags::DELETE_DUPLICATE_TRIANGLES
-        | TrimeshFlags::ORIENTED;
-    let shape = Collider::try_trimesh_with_config(vertices, triangles, flags)
-        .map_err(|error| format!("could not build boundary collider: {error:?}"))?;
+    let shape = BoundarySurface::from_mesh(mesh)
+        .ok_or_else(|| "selected part has no supported boundary faces".to_string())?;
     let interior_sample = mesh
         .elements
         .iter()
@@ -745,90 +691,28 @@ fn evaluate_selected_part(
             continue;
         };
 
-        let separation = distance(
-            &selected.shape,
-            Vec3::ZERO,
-            Quat::IDENTITY,
-            &other.shape,
-            Vec3::ZERO,
-            Quat::IDENTITY,
-        )
-        .map_err(|error| format!("Avian distance query failed: {error:?}"))?;
         let part_bounds = [selected.bounds, other.bounds];
         let tolerance = (pair_diagonal(part_bounds) * 1.0e-6).max(1.0e-7);
-
-        if separation <= tolerance {
-            let intersects = intersection_test(
-                &selected.shape,
-                Vec3::ZERO,
-                Quat::IDENTITY,
-                &other.shape,
-                Vec3::ZERO,
-                Quat::IDENTITY,
-            )
-            .map_err(|error| format!("Avian intersection query failed: {error:?}"))?;
-            let closest_points = contact(
-                &selected.shape,
-                Vec3::ZERO,
-                Quat::IDENTITY,
-                &other.shape,
-                Vec3::ZERO,
-                Quat::IDENTITY,
-                tolerance,
-            )
-            .ok()
-            .flatten()
-            .map(|contact| (contact.local_point1, contact.local_point2));
-            let report = ClearanceReport {
-                checked_version: version,
-                selected_part,
-                other_part,
-                kind: if intersects {
-                    ClearanceKind::Intersecting
-                } else {
-                    ClearanceKind::Touching
-                },
-                distance: separation,
-                closest_points,
-                part_bounds,
-            };
-            reports.push(report);
-            continue;
-        }
-
-        if parts_contain_each_other(selected, other) {
-            reports.push(ClearanceReport {
-                checked_version: version,
-                selected_part,
-                other_part,
-                kind: ClearanceKind::Intersecting,
-                distance: 0.0,
-                closest_points: None,
-                part_bounds,
-            });
-            continue;
-        }
-
-        let closest_points = closest_points(
-            &selected.shape,
-            Vec3::ZERO,
-            Quat::IDENTITY,
-            &other.shape,
-            Vec3::ZERO,
-            Quat::IDENTITY,
-            separation + tolerance,
-        )
-        .ok()
-        .and_then(|points| match points {
-            ClosestPoints::WithinMargin(a, b) => Some((a, b)),
-            ClosestPoints::Intersecting | ClosestPoints::OutsideMargin => None,
-        });
+        let proximity = selected
+            .shape
+            .distance_to(&other.shape, tolerance)
+            .ok_or("Boundary surface distance query failed")?;
+        let separation = proximity.squared.sqrt();
+        let (kind, distance, closest_points) = if separation == 0.0 {
+            (ClearanceKind::Intersecting, 0.0, proximity.points)
+        } else if separation <= tolerance {
+            (ClearanceKind::Touching, separation, proximity.points)
+        } else if parts_contain_each_other(selected, other) {
+            (ClearanceKind::Intersecting, 0.0, None)
+        } else {
+            (ClearanceKind::Separated, separation, proximity.points)
+        };
         let report = ClearanceReport {
             checked_version: version,
             selected_part,
             other_part,
-            kind: ClearanceKind::Separated,
-            distance: separation,
+            kind,
+            distance,
             closest_points,
             part_bounds,
         };
@@ -867,9 +751,9 @@ fn clearance_priority(kind: ClearanceKind) -> u8 {
 
 fn parts_contain_each_other(a: &PartCollider, b: &PartCollider) -> bool {
     a.interior_sample
-        .is_some_and(|point| b.shape.contains_point(Vec3::ZERO, Quat::IDENTITY, point))
+        .is_some_and(|point| b.shape.contains_solid_point(point))
         || b.interior_sample
-            .is_some_and(|point| a.shape.contains_point(Vec3::ZERO, Quat::IDENTITY, point))
+            .is_some_and(|point| a.shape.contains_solid_point(point))
 }
 
 fn pair_diagonal(bounds: [(Vec3, Vec3); 2]) -> f32 {

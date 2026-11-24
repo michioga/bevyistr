@@ -153,10 +153,9 @@ Windows ExplorerのアイコンはOSキャッシュにより更新が遅れる�
 
 - 全パッケージ名の空き／所有権確認、ソースとアイコンの公開権限確認。
 - 依存ライブラリのライセンス・yank・脆弱性の確認。
-- 0.5.0開発中の `rstar` 互換パッチは、リポジトリのワークスペースで `heapless 0.9.4` を使用します。
-  crates.ioで公開する前に、Parry側が `rstar 0.14` に対応した公開依存関係へ移行し、
-  レジストリから解決したロックファイルで `cargo audit --deny unsound` を再実行します。
-  [Cargoのパッチ適用範囲](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html#the-patch-section)
+- アセンブリの隙間・干渉チェックは、bevyistrの境界面BVHとParryの三角形クエリを使用します。
+  `parry3d` の既定フィーチャーと `alloc` を無効にして、`rstar` 経由の `heapless` 依存を外しました。
+  crates.io向けのアーカイブを展開してビルドし、配布ロックファイルで `cargo audit --deny unsound` を再実行します。
 - Windows/Linuxの検証、mainへのマージと最終版番号の一致。
 - ネット接続可能な環境で`cargo publish --workspace --dry-run --locked`を実行。
   単体dry-runが未公開の内部依存で止まる場合、workspace全体をpackageで検証します。

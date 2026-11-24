@@ -42,12 +42,61 @@ fn boundary_collider_reports_cube_clearance() {
 
     assert_eq!(report.kind, ClearanceKind::Separated);
     assert!((report.distance - 1.0).abs() < 1.0e-5);
+    let (a, b) = report
+        .closest_points
+        .expect("a measurable gap has witness points");
+    assert!((a.x - 1.0).abs() < 1.0e-5);
+    assert!((b.x - 2.0).abs() < 1.0e-5);
+    assert!((a.distance(b) - report.distance).abs() < 1.0e-5);
     assert_eq!(report.other_part, 1);
     assert_eq!(report.checked_version, 7);
     assert_eq!(
         report.part_bounds,
         [model.part_bounds(0).unwrap(), model.part_bounds(1).unwrap()]
     );
+}
+
+#[test]
+fn boundary_query_reports_the_positive_gap_as_touching_within_tolerance() {
+    let model = two_demo_parts(Vec3::X * (2.0 + 2.0e-6));
+    let colliders: Vec<_> = model.meshes.iter().map(build_boundary_collider).collect();
+    let evaluation = evaluate_selected_part(&colliders, 0, 0).unwrap();
+    let report = &evaluation.reports[0];
+    assert_eq!(report.kind, ClearanceKind::Touching);
+    assert!(report.distance > 0.0 && report.distance <= pair_diagonal(report.part_bounds) * 1e-6);
+    assert!(report.closest_points.is_some());
+}
+
+#[test]
+fn open_shell_does_not_enclose_the_nearby_solid() {
+    use fem_core::{ElementId, ElementType, FemElement, FemNode, NodeId};
+
+    let corners = [
+        Vec3::new(-2.0, -2.0, 2.0),
+        Vec3::new(2.0, -2.0, 2.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        Vec3::new(-2.0, 2.0, 2.0),
+    ];
+    let shell = FemMesh::new(
+        corners
+            .into_iter()
+            .enumerate()
+            .map(|(i, point)| FemNode::new(NodeId(i as u32), point))
+            .collect(),
+        vec![FemElement::new(
+            ElementId(0),
+            ElementType::ShellQuad4,
+            vec![NodeId(0), NodeId(1), NodeId(2), NodeId(3)],
+        )],
+    );
+    let colliders = [
+        build_boundary_collider(&FemMesh::demo_hex8()),
+        build_boundary_collider(&shell),
+    ];
+    let evaluation = evaluate_selected_part(&colliders, 0, 0).unwrap();
+    let report = &evaluation.reports[0];
+    assert_eq!(report.kind, ClearanceKind::Separated);
+    assert!((report.distance - 1.5).abs() < 1.0e-5);
 }
 
 #[test]
