@@ -37,8 +37,11 @@ FrontISTRチュートリアルの`18_cavity_flow`では、`cavityflow_vis_psf.00
 ## RESを開く場合
 
 1. Open Results...で、例えば`hinge.res.0.1`を選択します。
-2. 近くにある同名のMSH、または`hecmw_ctrl.dat`から解決したMSHが候補として提示されます。
-3. 内容を確認して進めます。
+2. 複数の出力ステップがある場合、**Selected frame**で選んだステップを、**All frames**で全フレームを開きます。例えば`cavityflow.res.0.10000`を選んで**Selected frame**を押すと、全ランクのStep 10000を結合して表示します。
+3. 近くにある同名のMSH、または`hecmw_ctrl.dat`から解決したMSHが候補として提示されます。
+4. 内容を確認して進めます。
+
+全フレームを開く場合、Resultsに`RES frames: 読み込み済み / 全フレーム`が表示され、完了後に結果が切り替わります。
 
 確認ダイアログの操作は次のとおりです。
 

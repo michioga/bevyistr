@@ -152,16 +152,39 @@ pub fn load_mesh_result_series(
     path: &Path,
     mesh: &fem_core::FemMesh,
 ) -> Result<Vec<fem_core::StepResult>, String> {
-    if let Some(steps) = load_distributed_series(path, mesh)? {
+    load_mesh_result_frames(path, mesh, FrameSelection::All, |_, _| {})
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FrameSelection {
+    All,
+    Selected,
+}
+
+/// Read the whole timeline or just the selected output step. An MPI step
+/// always includes every rank. Progress counts complete, validated steps.
+pub fn load_mesh_result_frames(
+    path: &Path,
+    mesh: &fem_core::FemMesh,
+    selection: FrameSelection,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<Vec<fem_core::StepResult>, String> {
+    if let Some(steps) = load_distributed_series(path, mesh, selection, &mut progress)? {
         return Ok(steps);
     }
-    let files = detect_result_series(path);
+    let files = match selection {
+        FrameSelection::All => detect_result_series(path),
+        FrameSelection::Selected => vec![(selected_step_number(path).unwrap_or(0), path.into())],
+    };
     if files.windows(2).any(|p| p[0].0 == p[1].0) {
         return Err("Ambiguous duplicate result steps".into());
     }
+    let total = files.len();
+    progress(0, total);
     files
         .iter()
-        .map(|(number, file)| {
+        .enumerate()
+        .map(|(index, (number, file))| {
             let result = if file
                 .extension()
                 .is_some_and(|s| s.eq_ignore_ascii_case("vtu") || s.eq_ignore_ascii_case("pvtu"))
@@ -185,7 +208,9 @@ pub fn load_mesh_result_series(
                         }
                     })
             };
-            result.map_err(|e| format!("{}: {e}", file.display()))
+            let step = result.map_err(|e| format!("{}: {e}", file.display()))?;
+            progress(index + 1, total);
+            Ok(step)
         })
         .collect()
 }
@@ -196,6 +221,8 @@ pub fn load_mesh_result_series(
 fn load_distributed_series(
     path: &Path,
     mesh: &fem_core::FemMesh,
+    selection: FrameSelection,
+    progress: &mut impl FnMut(usize, usize),
 ) -> Result<Option<Vec<fem_core::StepResult>>, String> {
     let Some((Pattern::Native { base }, step)) = path
         .file_name()
@@ -280,7 +307,11 @@ fn load_distributed_series(
     let mut frames = BTreeMap::<u32, Vec<PathBuf>>::new();
     for &rank in ranks.keys() {
         let rank_result = path.with_file_name(format!("{result_name}.{rank}.{step}"));
-        for (number, file) in detect_result_series(&rank_result) {
+        let candidates = match selection {
+            FrameSelection::All => detect_result_series(&rank_result),
+            FrameSelection::Selected => vec![(step, rank_result)],
+        };
+        for (number, file) in candidates {
             if !file.is_file() {
                 continue;
             }
@@ -297,11 +328,14 @@ fn load_distributed_series(
         return Err(format!("No MPI result set for selected step {step}"));
     }
     let count = ranks.len();
+    let total = frames.len();
+    progress(0, total);
     let owners =
         crate::distributed_nodes::read_partition_owners(&ranks.into_values().collect::<Vec<_>>())?;
     frames
         .into_iter()
-        .map(|(number, paths)| {
+        .enumerate()
+        .map(|(index, (number, paths))| {
             if paths.len() != count {
                 return Err(format!(
                     "Step {number}: expected {count} MPI rank results, found {}.",
@@ -309,9 +343,11 @@ fn load_distributed_series(
                 ));
             }
             let files: Vec<_> = paths.iter().map(PathBuf::as_path).collect();
-            crate::distributed_nodes::read_partitioned_step(&files, Some(&owners))?
+            let step = crate::distributed_nodes::read_partitioned_step(&files, Some(&owners))?
                 .step_for_mesh(mesh, number)
-                .map_err(|e| format!("Step {number}: {e}"))
+                .map_err(|e| format!("Step {number}: {e}"))?;
+            progress(index + 1, total);
+            Ok(step)
         })
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
@@ -384,7 +420,12 @@ mod tests {
             );
         }
         let selected = fixture.0.join("job.res.1.10");
-        let steps = load_mesh_result_series(&selected, &mesh).unwrap();
+        let mut progress = Vec::new();
+        let steps = load_mesh_result_frames(&selected, &mesh, FrameSelection::All, |done, total| {
+            progress.push((done, total));
+        })
+        .unwrap();
+        assert_eq!(progress, [(0, 2), (1, 2), (2, 2)]);
         assert_eq!(
             steps.iter().map(|step| step.step).collect::<Vec<_>>(),
             [2, 10]
@@ -397,6 +438,25 @@ mod tests {
         std::fs::remove_file(fixture.0.join("job.res.0.2")).unwrap();
         assert!(
             load_mesh_result_series(&selected, &mesh)
+                .unwrap_err()
+                .contains("missing")
+        );
+        let mut progress = Vec::new();
+        let one = load_mesh_result_frames(&selected, &mesh, FrameSelection::Selected, |done, total| {
+            progress.push((done, total));
+        })
+        .unwrap();
+        assert_eq!(progress, [(0, 1), (1, 1)]);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].step, 10);
+        let Some(ResultField::NodeScalar { values, .. }) = one[0].field_by_name("TEMP") else {
+            panic!("missing temperature");
+        };
+        assert_eq!(&values[..2], &[10.0, 13.0]);
+        assert!(values[2].is_nan());
+        std::fs::remove_file(fixture.0.join("job.res.0.10")).unwrap();
+        assert!(
+            load_mesh_result_frames(&selected, &mesh, FrameSelection::Selected, |_, _| {})
                 .unwrap_err()
                 .contains("missing")
         );

@@ -1,7 +1,10 @@
 //! Opt-in, read-only checks against the maintainer's existing tutorial outputs.
 //! CI uses small synthetic cases; never requires a machine-specific path.
 use fem_core::{ResultField, StepResult};
-use hecmw::{result_series::load_mesh_result_series, vtk_scene::load_scene};
+use hecmw::{
+    result_series::{FrameSelection, load_mesh_result_frames, load_mesh_result_series},
+    vtk_scene::load_scene,
+};
 use std::path::PathBuf;
 
 fn root() -> PathBuf {
@@ -263,7 +266,17 @@ fn tutorial_flow_components_and_constant_fields() {
             .all(|element| element.element_type == fem_core::ElementType::FluidTet4)
     );
     assert!(!mesh.cached_boundary_faces().is_empty());
-    let native = load_mesh_result_series(&folder.join("cavityflow.res.0.10000"), &mesh).unwrap();
+    let native_path = folder.join("cavityflow.res.0.10000");
+    let start = std::time::Instant::now();
+    let selected = load_mesh_result_frames(&native_path, &mesh, FrameSelection::Selected, |_, _| {})
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!((selected[0].step, selected[0].time), (10000, 100000.0));
+    println!("Selected MPI RES frame: {:?}", start.elapsed());
+
+    let start = std::time::Instant::now();
+    let native = load_mesh_result_series(&native_path, &mesh).unwrap();
+    println!("Complete MPI RES series: {:?}", start.elapsed());
     assert_eq!(native.len(), timeline.len());
     for (step, &(number, time)) in native.iter().zip(&timeline) {
         assert_eq!((step.step, step.time), (number, time));
@@ -282,6 +295,7 @@ fn tutorial_flow_components_and_constant_fields() {
     assert!(min_pressure < 0.0 && max_pressure > 0.0);
     for (field, (vtk_min, vtk_max)) in field_names.into_iter().zip(final_ranges) {
         let (res_min, res_max) = scalar_range(last, field);
+        assert_eq!(scalar_range(&selected[0], field), (res_min, res_max));
         for (vtk, res) in [(vtk_min, res_min), (vtk_max, res_max)] {
             // VTK rounds the ASCII data relative to RES. Compare the two
             // assembled ranges without treating piece-local IDs as global IDs.

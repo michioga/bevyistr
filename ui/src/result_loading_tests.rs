@@ -106,6 +106,7 @@ fn native_file_and_current_mesh_inputs_preserve_sparse_steps_and_id_order() {
         let loaded = ResultInput::WithMesh {
             path: path.clone(),
             mesh: input,
+            frames: FrameSelection::All,
         }
         .load()
         .unwrap();
@@ -127,15 +128,28 @@ fn native_file_and_current_mesh_inputs_preserve_sparse_steps_and_id_order() {
     assert!(
         ResultInput::WithMesh {
             path: path.clone(),
-            mesh: MeshInput::Current(mesh.clone())
+            mesh: MeshInput::Current(mesh.clone()),
+            frames: FrameSelection::All,
         }
         .load()
         .is_err()
     );
+    let mut progress = Vec::new();
+    let selected = ResultInput::WithMesh {
+        path: path.clone(),
+        mesh: MeshInput::Current(mesh.clone()),
+        frames: FrameSelection::Selected,
+    }
+    .load_with_progress(|done, total| progress.push((done, total)))
+    .unwrap();
+    assert_eq!(progress, [(0, 1), (1, 1)]);
+    assert_eq!(selected.steps[0].len(), 1);
+    assert_eq!(selected.steps[0][0].step, 2);
     assert!(
         ResultInput::WithMesh {
             path,
-            mesh: MeshInput::File(dir.path().join("missing.msh"))
+            mesh: MeshInput::File(dir.path().join("missing.msh")),
+            frames: FrameSelection::All,
         }
         .load()
         .is_err()

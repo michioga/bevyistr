@@ -10,6 +10,7 @@ use crate::{
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use fem_core::{FemModel, FemResultSet, ResultGeometry};
+use hecmw::result_series::{FrameSelection, detect_result_series, selected_step_number};
 use std::path::{Path, PathBuf};
 
 #[derive(Resource, Default)]
@@ -108,6 +109,37 @@ fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<MeshInput> {
         .map(MeshInput::File)
 }
 
+fn choose_native_frames(path: &Path) -> Option<FrameSelection> {
+    let Some(step) = selected_step_number(path) else {
+        return Some(FrameSelection::All);
+    };
+    let count = detect_result_series(path).len();
+    if count <= 1 {
+        return Some(FrameSelection::All);
+    }
+
+    let selected = "Selected frame";
+    let all = "All frames";
+    let choice = rfd::MessageDialog::new()
+        .set_title("Open RES results")
+        .set_description(format!(
+            "Open Step {step} for a quick view, or load all {count} frames for playback."
+        ))
+        .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+            selected.into(),
+            all.into(),
+            "Cancel".into(),
+        ))
+        .show();
+    match choice {
+        rfd::MessageDialogResult::Yes => Some(FrameSelection::Selected),
+        rfd::MessageDialogResult::No => Some(FrameSelection::All),
+        rfd::MessageDialogResult::Custom(name) if name == selected => Some(FrameSelection::Selected),
+        rfd::MessageDialogResult::Custom(name) if name == all => Some(FrameSelection::All),
+        _ => None,
+    }
+}
+
 pub(crate) fn open_result_button_system(
     mut buttons: Query<
         (
@@ -160,12 +192,16 @@ pub(crate) fn open_result_button_system(
         let input = if vtk {
             ResultInput::Vtk(path.clone())
         } else {
-            match choose_mesh(&path, model.as_deref()) {
-                Some(mesh) => ResultInput::WithMesh {
-                    path: path.clone(),
-                    mesh,
-                },
-                None => continue,
+            let Some(frames) = choose_native_frames(&path) else {
+                continue;
+            };
+            let Some(mesh) = choose_mesh(&path, model.as_deref()) else {
+                continue;
+            };
+            ResultInput::WithMesh {
+                path: path.clone(),
+                mesh,
+                frames,
             }
         };
         let pending = match ResultLoadTask::spawn(input) {
@@ -209,6 +245,17 @@ pub(crate) fn poll_result_open(
         return;
     };
     let Some(loaded) = task.poll() else {
+        if let Some(progress) = task.progress() {
+            let status = format!(
+                "Loading {} ...\nRES frames: {} / {}",
+                state.path.file_name().unwrap_or_default().to_string_lossy(),
+                progress.completed,
+                progress.total
+            );
+            if state.status != status {
+                state.status = status;
+            }
+        }
         return;
     };
     state.pending = None;
@@ -220,7 +267,7 @@ pub(crate) fn poll_result_open(
             return;
         }
     };
-    let requested = hecmw::result_series::selected_step_number(&state.path);
+    let requested = selected_step_number(&state.path);
     let count = scene.steps[0].len();
     let index = scene.steps[0]
         .iter()
