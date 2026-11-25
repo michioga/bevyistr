@@ -3,7 +3,7 @@
 use fem_core::{ResultField, StepResult};
 use hecmw::{
     result_series::{FrameSelection, load_mesh_result_frames, load_mesh_result_series},
-    vtk_scene::load_scene,
+    vtk_scene::{load_scene, load_scene_frames},
 };
 use std::path::PathBuf;
 
@@ -147,7 +147,14 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
 #[ignore = "Requires BEVYISTR_TUTORIAL_DIR; complete eight-rank cavity-flow RES and PVTU output"]
 fn tutorial_flow_components_and_constant_fields() {
     let folder = root().join("18_cavity_flow");
-    let scene = load_scene(&folder.join("cavityflow_vis_psf.0000.pvtu")).unwrap();
+    let initial_pvtu = folder.join("cavityflow_vis_psf.0000.pvtu");
+    let start = std::time::Instant::now();
+    let preview = load_scene_frames(&initial_pvtu, FrameSelection::Selected, |_, _| {}).unwrap();
+    assert_eq!(preview.model.meshes.len(), 8);
+    assert!(preview.steps.iter().all(|frames| frames.len() == 1 && frames[0].step == 0));
+    println!("Selected PVTU frame: {:?}", start.elapsed());
+
+    let scene = load_scene(&initial_pvtu).unwrap();
     assert_eq!(scene.model.meshes.len(), 8);
     assert_eq!(scene.steps.len(), 8);
     let timeline: Vec<_> = (0..=100)
@@ -172,6 +179,9 @@ fn tutorial_flow_components_and_constant_fields() {
             );
         }
         let step = &steps[0];
+        for field in field_names {
+            assert_eq!(scalar_range(&preview.steps[part][0], field), scalar_range(step, field));
+        }
         assert_eq!(step.step, 0);
         assert_eq!(step.time, 0.);
         assert!(step.eigenvalue.is_none());
@@ -258,6 +268,7 @@ fn tutorial_flow_components_and_constant_fields() {
             )
     });
     drop(scene);
+    drop(preview);
 
     let mesh = hecmw::load_mesh_file(folder.join("cavityflow.msh")).unwrap();
     assert!(

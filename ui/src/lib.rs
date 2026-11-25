@@ -238,7 +238,7 @@ impl Plugin for UiPlugin {
                 .after(playback_advance_system)
                 .before(apply_slider_to_results)
                 .before(update_result_stats_text),
-            result_open::sync_load_full_res_series.after(result_open::poll_result_open),
+            result_open::sync_load_full_series.after(result_open::poll_result_open),
             result_open::sync_result_page
                 .after(result_open::poll_result_open)
                 .after(solve_results_ui::poll_run_results_system)

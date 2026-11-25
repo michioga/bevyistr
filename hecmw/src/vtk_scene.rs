@@ -1,4 +1,5 @@
 //! Standalone ASCII VTK result geometry, never installed into the pre-model.
+use crate::result_series::{FrameSelection, detect_result_series, selected_vtk_frame};
 use crate::vtu::{arrays, attr_value, parse_vtu, section};
 use crate::vtk_partitions::PieceGeometry;
 use fem_core::{
@@ -227,8 +228,24 @@ fn vtk_time(source: &str) -> Result<Option<f32>, String> {
 }
 
 pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
+    load_scene_frames(path, FrameSelection::All, |_, _| {})
+}
+
+/// Load the chosen VTK frame or the complete series. Count a frame after all
+/// its pieces and their geometry have been validated.
+pub fn load_scene_frames(
+    path: &Path,
+    selection: FrameSelection,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<ResultScene, String> {
+    let files = match selection {
+        FrameSelection::All => detect_result_series(path),
+        FrameSelection::Selected => vec![selected_vtk_frame(path)],
+    };
+    let total = files.len();
+    progress(0, total);
     let mut scene: Option<ResultScene> = None;
-    for (number, file) in crate::result_series::detect_result_series(path) {
+    for (index, (number, file)) in files.into_iter().enumerate() {
         let mut parts = read_parts(&file).map_err(|e| format!("{}: {e}", file.display()))?;
         crate::vtk_partitions::validate_and_share_ranges(&mut parts)
             .map_err(|e| format!("{}: {e}", file.display()))?;
@@ -268,6 +285,7 @@ pub fn load_scene(path: &Path) -> Result<ResultScene, String> {
             }
             scene = Some(ResultScene { model, steps });
         }
+        progress(index + 1, total);
     }
     scene.ok_or("No result steps".into())
 }

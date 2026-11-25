@@ -427,16 +427,16 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
                             },
                             BackgroundColor(BUTTON_NORMAL),
                             BorderColor::all(PANEL_BORDER),
-                            crate::result_open::LoadFullResSeriesButton,
+                            crate::result_open::LoadFullSeriesButton,
                             bevy::ui_widgets::Button,
                             bevy::input_focus::tab_navigation::TabIndex(0),
                         ))
-                        .observe(crate::result_open::load_full_res_series)
+                        .observe(crate::result_open::load_full_series)
                         .with_children(|button| {
                             crate::ui_font::button_label(
                                 button,
                                 crate::ui_font::ButtonIcon::Open,
-                                crate::result_open::LOAD_FULL_RES_SERIES_LABEL,
+                                crate::result_open::LOAD_FULL_SERIES_LABEL,
                                 12.0,
                                 TEXT_MAIN,
                             );

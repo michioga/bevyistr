@@ -30,72 +30,55 @@ fn pattern(name: &str) -> Option<(Pattern, u32)> {
     ))
 }
 
+fn frontistr_piece_folder(path: &Path) -> Option<(&Path, &str)> {
+    let dir = path.parent()?;
+    let folder = dir.file_name()?.to_str()?;
+    let name = path.file_name()?.to_str()?;
+    name.strip_prefix(&format!("{folder}."))
+        .and_then(|tail| tail.strip_suffix(".vtu"))?
+        .parse::<u32>()
+        .ok()?;
+    Some((dir, folder))
+}
+
+fn referenced_piece_wrapper(path: &Path, directory: &Path, folder: &str) -> Option<PathBuf> {
+    let wrapper = directory.with_file_name(format!("{folder}.pvtu"));
+    let source = std::fs::read_to_string(&wrapper).ok()?;
+    let selected = path.canonicalize().ok()?;
+    let parent = wrapper.parent().unwrap_or(Path::new("."));
+    let references_selected = source
+        .split("Source=\"")
+        .skip(1)
+        .filter_map(|tail| tail.split('"').next())
+        .any(|source| parent.join(source).canonicalize().is_ok_and(|piece| piece == selected));
+    references_selected.then_some(wrapper)
+}
+
 /// The requested output number, not its ordinal in the sparse timeline.
 pub fn selected_step_number(path: &Path) -> Option<u32> {
-    let name = path.file_name()?.to_str()?;
-    if path
-        .extension()
-        .is_some_and(|s| s.eq_ignore_ascii_case("vtu"))
-    {
-        let folder = path.parent()?.file_name()?.to_str()?;
-        if name
-            .strip_prefix(&format!("{folder}."))
-            .and_then(|s| s.strip_suffix(".vtu"))
-            .is_some_and(|s| s.parse::<u32>().is_ok())
-        {
-            return folder.rsplit('.').next()?.parse().ok();
-        }
+    if let Some((_, folder)) = frontistr_piece_folder(path) {
+        return folder.rsplit('.').next()?.parse().ok();
     }
-    pattern(name).map(|(_, step)| step)
+    pattern(path.file_name()?.to_str()?).map(|(_, step)| step)
+}
+
+/// Select the whole frame when opening any piece referenced by its wrapper.
+pub(crate) fn selected_vtk_frame(path: &Path) -> (u32, PathBuf) {
+    let file = frontistr_piece_folder(path)
+        .and_then(|(directory, folder)| referenced_piece_wrapper(path, directory, folder))
+        .unwrap_or_else(|| path.into());
+    (selected_step_number(path).unwrap_or(0), file)
 }
 
 /// Sparse output numbers are sorted numerically, never assumed contiguous.
 /// FrontISTR piece VTUs prefer their PVTU wrapper when it references this
 /// exact piece. Rank files must never be mistaken for time steps.
 pub fn detect_result_series(path: &Path) -> Vec<(u32, PathBuf)> {
-    if path
-        .extension()
-        .is_some_and(|s| s.eq_ignore_ascii_case("vtu"))
-    {
-        if let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|s| s.to_str()))
-        {
-            if let Some(folder) = dir.file_name().and_then(|s| s.to_str()) {
-                if name
-                    .strip_prefix(&format!("{folder}."))
-                    .and_then(|s| s.strip_suffix(".vtu"))
-                    .is_some_and(|s| s.parse::<u32>().is_ok())
-                {
-                    let wrapper = dir.with_file_name(format!("{folder}.pvtu"));
-                    if let Ok(text) = std::fs::read_to_string(&wrapper) {
-                        let points_to_piece = text
-                            .split("Source=\"")
-                            .skip(1)
-                            .filter_map(|s| s.split('"').next())
-                            .any(|s| {
-                                wrapper
-                                    .parent()
-                                    .unwrap_or(Path::new("."))
-                                    .join(s)
-                                    .canonicalize()
-                                    .ok()
-                                    .zip(path.canonicalize().ok())
-                                    .is_some_and(|(a, b)| a == b)
-                            });
-                        if points_to_piece {
-                            return detect_result_series(&wrapper);
-                        }
-                    }
-                    return vec![(
-                        folder
-                            .rsplit('.')
-                            .next()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0),
-                        path.into(),
-                    )];
-                }
-            }
+    if let Some((directory, folder)) = frontistr_piece_folder(path) {
+        if let Some(wrapper) = referenced_piece_wrapper(path, directory, folder) {
+            return detect_result_series(&wrapper);
         }
+        return vec![(selected_step_number(path).unwrap_or(0), path.into())];
     }
     let Some((expected, selected_step)) =
         path.file_name().and_then(|s| s.to_str()).and_then(pattern)

@@ -20,7 +20,10 @@ pub(crate) enum MeshInput {
 }
 
 pub(crate) enum ResultInput {
-    Vtk(PathBuf),
+    Vtk {
+        path: PathBuf,
+        frames: FrameSelection,
+    },
     WithMesh {
         path: PathBuf,
         mesh: MeshInput,
@@ -36,7 +39,9 @@ impl ResultInput {
 
     fn load_with_progress(self, progress: impl FnMut(usize, usize)) -> Loaded {
         match self {
-            Self::Vtk(path) => hecmw::vtk_scene::load_scene(&path),
+            Self::Vtk { path, frames } => {
+                hecmw::vtk_scene::load_scene_frames(&path, frames, progress)
+            }
             Self::WithMesh { path, mesh, frames } => {
                 let mesh = match mesh {
                     MeshInput::File(path) => {

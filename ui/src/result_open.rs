@@ -13,7 +13,7 @@ use fem_core::{FemModel, FemResultSet, ResultGeometry};
 use hecmw::result_series::{FrameSelection, detect_result_series, selected_step_number};
 use std::path::{Path, PathBuf};
 
-pub(crate) const LOAD_FULL_RES_SERIES_LABEL: &str = "Load full RES series";
+pub(crate) const LOAD_FULL_SERIES_LABEL: &str = "Load full series";
 
 #[derive(Resource, Default)]
 pub(crate) struct ResultOpenState {
@@ -57,12 +57,12 @@ impl ResultOpenState {
 pub(crate) struct OpenResultRequested;
 
 #[derive(Component)]
-pub(crate) struct LoadFullResSeriesButton;
+pub(crate) struct LoadFullSeriesButton;
 
-pub(crate) fn sync_load_full_res_series(
+pub(crate) fn sync_load_full_series(
     state: Res<ResultOpenState>,
     requests: Res<ResultRequests>,
-    mut buttons: Query<&mut Node, With<LoadFullResSeriesButton>>,
+    mut buttons: Query<&mut Node, With<LoadFullSeriesButton>>,
 ) {
     let display = if state.expandable_preview(&requests).is_some() {
         Display::Flex
@@ -76,7 +76,7 @@ pub(crate) fn sync_load_full_res_series(
     }
 }
 
-pub(crate) fn load_full_res_series(
+pub(crate) fn load_full_series(
     _: On<Activate>,
     page: Res<SidebarPage>,
     geometry: Res<ResultGeometry>,
@@ -91,13 +91,20 @@ pub(crate) fn load_full_res_series(
     let Some(path) = state.expandable_preview(&requests).map(Path::to_path_buf) else {
         return;
     };
-    let Some([mesh]) = geometry.model.as_ref().map(|model| model.meshes.as_slice()) else {
-        return;
-    };
-    let input = ResultInput::WithMesh {
-        path: path.clone(),
-        mesh: MeshInput::Current(mesh.clone()),
-        frames: FrameSelection::All,
+    let input = if is_vtk_result(&path) {
+        ResultInput::Vtk {
+            path: path.clone(),
+            frames: FrameSelection::All,
+        }
+    } else {
+        let Some([mesh]) = geometry.model.as_ref().map(|model| model.meshes.as_slice()) else {
+            return;
+        };
+        ResultInput::WithMesh {
+            path: path.clone(),
+            mesh: MeshInput::Current(mesh.clone()),
+            frames: FrameSelection::All,
+        }
     };
     match ResultLoadTask::spawn(input) {
         Ok(task) => {
@@ -178,7 +185,12 @@ fn choose_mesh(path: &Path, model: Option<&FemModel>) -> Option<MeshInput> {
         .map(MeshInput::File)
 }
 
-fn choose_native_frames(path: &Path) -> Option<FrameSelection> {
+fn is_vtk_result(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("vtu") || extension.eq_ignore_ascii_case("pvtu"))
+}
+
+fn choose_result_frames(path: &Path) -> Option<FrameSelection> {
     let Some(step) = selected_step_number(path) else {
         return Some(FrameSelection::All);
     };
@@ -188,11 +200,11 @@ fn choose_native_frames(path: &Path) -> Option<FrameSelection> {
     }
 
     let selected = "Selected frame";
-    let all = LOAD_FULL_RES_SERIES_LABEL;
+    let all = LOAD_FULL_SERIES_LABEL;
     let choice = rfd::MessageDialog::new()
-        .set_title("Open RES results")
+        .set_title("Open result series")
         .set_description(format!(
-            "Selected frame: view Step {step} only.\n{all}: load {count} frames to use Play and the seek bar."
+            "Selected frame: view output {step} only.\n{all}: load {count} frames for playback."
         ))
         .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
             selected.into(),
@@ -255,26 +267,16 @@ pub(crate) fn open_result_button_system(
             state.status = "Result not opened; previous display retained.".into();
             continue;
         }
-        let vtk = path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("vtu") || e.eq_ignore_ascii_case("pvtu"));
-        let (input, frames) = if vtk {
-            (ResultInput::Vtk(path.clone()), None)
+        let Some(frames) = choose_result_frames(&path) else {
+            continue;
+        };
+        let input = if is_vtk_result(&path) {
+            ResultInput::Vtk { path: path.clone(), frames }
         } else {
-            let Some(frames) = choose_native_frames(&path) else {
-                continue;
-            };
             let Some(mesh) = choose_mesh(&path, model.as_deref()) else {
                 continue;
             };
-            (
-                ResultInput::WithMesh {
-                    path: path.clone(),
-                    mesh,
-                    frames,
-                },
-                Some(frames),
-            )
+            ResultInput::WithMesh { path: path.clone(), mesh, frames }
         };
         let pending = match ResultLoadTask::spawn(input) {
             Ok(pending) => pending,
@@ -286,7 +288,7 @@ pub(crate) fn open_result_button_system(
         };
         playback.playing = false;
         error.0 = None;
-        state.begin(path, pending, frames, &mut requests);
+        state.begin(path, pending, Some(frames), &mut requests);
     }
 }
 
@@ -321,7 +323,7 @@ pub(crate) fn poll_result_open(
     let Some(loaded) = task.poll() else {
         if let Some(progress) = task.progress() {
             let status = format!(
-                "Loading {} ...\nRES frames: {} / {}",
+                "Loading {} ...\nFrames loaded: {} / {}",
                 state.path.file_name().unwrap_or_default().to_string_lossy(),
                 progress.completed,
                 progress.total

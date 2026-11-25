@@ -163,7 +163,11 @@ fn vtk_worker_loads_geometry_without_a_pre_model_and_reports_bad_files() {
     let path = dir.path().join("scene.0002.vtu");
     std::fs::write(&path, source).unwrap();
     std::fs::write(dir.path().join("scene.0010.vtu"), source).unwrap();
-    let task = ResultLoadTask::spawn(ResultInput::Vtk(path.clone())).unwrap();
+    let task = ResultLoadTask::spawn(ResultInput::Vtk {
+        path: path.clone(),
+        frames: FrameSelection::All,
+    })
+    .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let loaded = loop {
         if let Some(loaded) = task.poll() {
@@ -179,5 +183,9 @@ fn vtk_worker_loads_geometry_without_a_pre_model_and_reports_bad_files() {
         [2, 10]
     );
     std::fs::write(&path, "broken VTU").unwrap();
-    assert!(ResultInput::Vtk(path).load().is_err());
+    assert!(
+        ResultInput::Vtk { path, frames: FrameSelection::All }
+            .load()
+            .is_err()
+    );
 }

@@ -1,6 +1,10 @@
 # 結果を開く
 
-**Results → Open Results...** から、表示したい結果ファイルを選びます。
+1. **Results → Open Results...** で `.res`、`.pvtu`、`.vtu` のいずれかを選びます。
+2. 連番が見つかると、**Selected frame** と **Load full series** が表示されます。**Selected frame** は選んだ出力を1コマだけ表示し、**Load full series** は再生とシークに使う全コマを読み込みます。
+3. RESを選んだ場合は、対応するMSHを確認します。
+
+1コマを表示した後でも、結果の情報欄の下にある **Load full series** で全コマを読み込めます。`18_cavity_flow` では `cavityflow.res.0.0` と `cavityflow_vis_psf.0000.pvtu` のどちらからも、全コマの読込完了後に `Frame 1 / 101` になります。
 
 ファイルダイアログはOpen Resultsボタンのクリック確定、またはそのボタンにフォーカスを合わせてEnter／Spaceを押した時だけ開きます。コンターフィールドの選択やメニューの開閉は、新しいファイルを開く操作ではありません。
 
@@ -12,15 +16,7 @@
 
 MPIのRESは、出力先の hecmw_ctrl.dat、全ランクの分割メッシュ、全ランクのRESを一緒に残してください。conrod.res.0.1 のようにどれか1ファイルを選ぶと、所有ランクの値を結合して表示します。MicroAVSの .inp を出力した計算も、RESがあればこの手順で表示できます。
 
-読み込みはバックグラウンドで行われ、Resultsに処理中のメッセージが表示されます。大きな連番結果では時間とメモリを使用します。読み込み中は重複したOpen Results操作を受け付けません。
-
-## VTU／PVTUを開く場合
-
-1. 起動直後でも、そのままResultsへ移動します。
-2. Open Results...で、例えば`hinge_vis_psf.0001.pvtu`を選択します。
-3. 読み込み完了後、結果の形状にカメラを合わせて表示します。
-
-起動時のデモメッシュや、プリで開いているメッシュへの対応付けは必要ありません。結果ファイル内の形状を使用します。
+読み込みはバックグラウンドで行われ、Resultsに `Frames loaded: 読み込み済み / 全フレーム` が表示されます。大きな連番結果では時間とメモリを使用します。読み込み中は重複したOpen Results操作を受け付けません。
 
 ## 複数ピースPVTU
 
@@ -34,14 +30,9 @@ PVTUを選ぶと、参照される全ピースの形状・結果を読み込み�
 
 FrontISTRチュートリアルの`18_cavity_flow`では、`cavityflow_vis_psf.0000.pvtu`を開くと出力済みのフレームを読み込みます。WindowsのIntel oneAPI MPIで8ランク実行したデータでは、Step 0〜10000の全101フレームを確認しました。PRESSUREやVELOCITYの大きさ／成分を選択できます。流速の表示ではDeformationは使用できません。
 
-## RESを開く場合
+## RESのメッシュを確認する
 
-1. Open Results...で、例えば`hinge.res.0.1`を選択します。
-2. 複数の出力ステップがある場合、**Selected frame**で選んだステップを、**Load full RES series**で全フレームを開きます。例えば`cavityflow.res.0.10000`を選んで**Selected frame**を押すと、全ランクのStep 10000を結合して表示します。
-3. 近くにある同名のMSH、または`hecmw_ctrl.dat`から解決したMSHが候補として提示されます。
-4. 内容を確認して進めます。
-
-**Selected frame**で開いた後でも、結果の情報欄の下にある**Load full RES series**を押すと、全フレームを読み込めます。`cavityflow.res.0.0`から読み込んだ場合、完了すると`Frame 1 / 101`になり、PlayやNextを使えます。処理中は`RES frames: 読み込み済み / 全フレーム`が表示されます。
+近くにある同名のMSH、または`hecmw_ctrl.dat`から解決したMSHが候補として提示されます。
 
 確認ダイアログの操作は次のとおりです。
 

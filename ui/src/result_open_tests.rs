@@ -238,9 +238,6 @@ fn finds_res_mesh_in_project_ancestor() {
 
 #[test]
 fn full_res_button_expands_step_zero_preview_and_enables_playback() {
-    use crate::playback_controls::{self, Action};
-    use bevy::ui::InteractionDisabled;
-
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cavityflow.res.0.0");
     let mesh = fem_core::FemMesh::demo_hex8();
@@ -252,6 +249,43 @@ fn full_res_button_expands_step_zero_preview_and_enables_playback() {
         }
         std::fs::write(directory.path().join(format!("cavityflow.res.0.{step}")), data).unwrap();
     }
+
+    let input = ResultInput::WithMesh {
+        path: path.clone(),
+        mesh: MeshInput::Current(mesh),
+        frames: FrameSelection::Selected,
+    };
+    check_preview_expands(path, input, 1, 0);
+}
+
+#[test]
+fn full_series_button_also_expands_multipart_pvtu_preview() {
+    let directory = tempfile::tempdir().unwrap();
+    let piece = concat!(
+        r#"<VTKFile><UnstructuredGrid><Piece NumberOfPoints="4" NumberOfCells="1">"#,
+        r#"<Points><DataArray NumberOfComponents="3">0 0 0 1 0 0 0 1 0 0 0 1</DataArray></Points>"#,
+        r#"<Cells><DataArray Name="connectivity">0 1 2 3</DataArray><DataArray Name="offsets">4</DataArray><DataArray Name="types">10</DataArray></Cells>"#,
+        r#"<PointData><DataArray Name="NodalMISES">0 0 0 0</DataArray><DataArray Name="PRESSURE">1 2 3 4</DataArray></PointData>"#,
+        r#"</Piece></UnstructuredGrid></VTKFile>"#
+    );
+    for name in ["a.vtu", "b.vtu"] {
+        std::fs::write(directory.path().join(name), piece).unwrap();
+    }
+    let wrapper = r#"<VTKFile><PUnstructuredGrid><Piece Source="a.vtu"/><Piece Source="b.vtu"/></PUnstructuredGrid></VTKFile>"#;
+    for step in (0..=10000).step_by(100) {
+        std::fs::write(directory.path().join(format!("cavity.{step:04}.pvtu")), wrapper).unwrap();
+    }
+    let path = directory.path().join("cavity.4000.pvtu");
+    let input = ResultInput::Vtk {
+        path: path.clone(),
+        frames: FrameSelection::Selected,
+    };
+    check_preview_expands(path, input, 2, 40);
+}
+
+fn check_preview_expands(path: PathBuf, input: ResultInput, pieces: usize, index: usize) {
+    use crate::playback_controls::{self, Action};
+    use bevy::ui::InteractionDisabled;
 
     let mut app = App::new();
     app.add_plugins(bevy::ui_widgets::ButtonPlugin)
@@ -273,7 +307,7 @@ fn full_res_button_expands_step_zero_preview_and_enables_playback() {
             Update,
             (
                 poll_result_open,
-                sync_load_full_res_series,
+                sync_load_full_series,
                 crate::results_ui::apply_slider_to_results,
                 playback_controls::sync,
             )
@@ -291,18 +325,13 @@ fn full_res_button_expands_step_zero_preview_and_enables_playback() {
     ));
     let button = app
         .world_mut()
-        .spawn((Node::default(), bevy::ui_widgets::Button, LoadFullResSeriesButton))
-        .observe(load_full_res_series)
+        .spawn((Node::default(), bevy::ui_widgets::Button, LoadFullSeriesButton))
+        .observe(load_full_series)
         .id();
     app.update();
     assert_eq!(app.world().get::<Node>(button).unwrap().display, Display::None);
 
-    let preview = ResultLoadTask::spawn(ResultInput::WithMesh {
-        path: path.clone(),
-        mesh: MeshInput::Current(mesh),
-        frames: FrameSelection::Selected,
-    })
-    .unwrap();
+    let preview = ResultLoadTask::spawn(input).unwrap();
     app.world_mut().resource_scope(|world, mut requests: Mut<ResultRequests>| {
         world.resource_mut::<ResultOpenState>().begin(
             path,
@@ -333,8 +362,9 @@ fn full_res_button_expands_step_zero_preview_and_enables_playback() {
     assert_eq!(app.world().get::<Node>(button).unwrap().display, Display::None);
     assert!(app.world().get::<InteractionDisabled>(play).is_none());
     let results = app.world().resource::<FemResultSet>();
-    assert_eq!(results.by_mesh[0].len(), 101);
-    assert_eq!(results.active.as_ref().unwrap().step_index, 0);
+    assert_eq!(results.by_mesh.len(), pieces);
+    assert!(results.by_mesh.iter().all(|frames| frames.len() == 101));
+    assert_eq!(results.active.as_ref().unwrap().step_index, index);
     assert_eq!(results.active.as_ref().unwrap().field_name, "PRESSURE");
     assert_eq!(app.world().resource::<crate::project_io::CameraFitRequest>().revision, fit);
     crate::widget_test_input::click(app.world_mut(), play);
@@ -345,7 +375,7 @@ fn finish_reading(app: &mut App) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while app.world().resource::<ResultOpenState>().pending.is_some() {
         app.update();
-        assert!(std::time::Instant::now() < deadline, "RES reader timed out");
+        assert!(std::time::Instant::now() < deadline, "Result reader timed out");
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(app.world().resource::<ResultLoadError>().0.is_none());

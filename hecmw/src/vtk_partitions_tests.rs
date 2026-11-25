@@ -127,7 +127,12 @@ fn partitions_preserve_local_values_and_share_ranges_across_sparse_frames() {
         "job.0010.pvtu",
         &wrapper(&["job.0010/job.0010.0.vtu", "job.0010/job.0010.1.vtu"], 2.0),
     );
-    let scene = load_scene(&path).unwrap();
+    let mut progress = Vec::new();
+    let scene = load_scene_frames(&path, FrameSelection::All, |done, total| {
+        progress.push((done, total));
+    })
+    .unwrap();
+    assert_eq!(progress, [(0, 2), (1, 2), (2, 2)]);
     assert_eq!(scene.model.meshes.len(), 2);
     assert_eq!(
         scene
@@ -166,6 +171,24 @@ fn partitions_preserve_local_values_and_share_ranges_across_sparse_frames() {
     let from_rank = load_scene(&f.0.join("job.0002/job.0002.1.vtu")).unwrap();
     assert_eq!(from_rank.model.meshes.len(), 2);
     assert_eq!(from_rank.steps[0].len(), 2);
+
+    for path in ["job.0010.pvtu", "job.0010/job.0010.1.vtu"] {
+        let mut progress = Vec::new();
+        let preview = load_scene_frames(&f.0.join(path), FrameSelection::Selected, |done, total| {
+            progress.push((done, total));
+        })
+        .unwrap();
+        assert_eq!(progress, [(0, 1), (1, 1)]);
+        assert_eq!(preview.model.meshes.len(), 2);
+        for (rank, frames) in preview.steps.iter().enumerate() {
+            assert_eq!(frames.len(), 1);
+            assert_eq!((frames[0].step, frames[0].time), (10, 2.));
+            assert_eq!(
+                scalar(&frames[0], "PRESSURE"),
+                scalar(&scene.steps[rank][1], "PRESSURE")
+            );
+        }
+    }
 }
 
 #[test]
