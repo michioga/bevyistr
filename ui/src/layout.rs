@@ -413,6 +413,34 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
                             TextColor(TEXT_MUTED),
                             ResultStatsText,
                         ));
+                        sec.spawn((
+                            InteractionButton,
+                            Node {
+                                display: Display::None,
+                                width: percent(100),
+                                height: px(28.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(px(1.0)),
+                                border_radius: BorderRadius::all(px(5.0)),
+                                ..default()
+                            },
+                            BackgroundColor(BUTTON_NORMAL),
+                            BorderColor::all(PANEL_BORDER),
+                            crate::result_open::LoadFullResSeriesButton,
+                            bevy::ui_widgets::Button,
+                            bevy::input_focus::tab_navigation::TabIndex(0),
+                        ))
+                        .observe(crate::result_open::load_full_res_series)
+                        .with_children(|button| {
+                            crate::ui_font::button_label(
+                                button,
+                                crate::ui_font::ButtonIcon::Open,
+                                crate::result_open::LOAD_FULL_RES_SERIES_LABEL,
+                                12.0,
+                                TEXT_MAIN,
+                            );
+                        });
                         crate::result_menu::spawn(sec);
                         sec.spawn((
                             Node {

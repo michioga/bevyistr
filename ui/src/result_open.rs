@@ -13,12 +13,16 @@ use fem_core::{FemModel, FemResultSet, ResultGeometry};
 use hecmw::result_series::{FrameSelection, detect_result_series, selected_step_number};
 use std::path::{Path, PathBuf};
 
+pub(crate) const LOAD_FULL_RES_SERIES_LABEL: &str = "Load full RES series";
+
 #[derive(Resource, Default)]
 pub(crate) struct ResultOpenState {
     pending: Option<ResultLoadTask>,
     request: Option<ResultRequestId>,
     path: PathBuf,
     frames: Option<FrameSelection>,
+    preview_path: Option<PathBuf>,
+    expanding_preview: bool,
     pub status: String,
 }
 
@@ -37,12 +41,74 @@ impl ResultOpenState {
         );
         self.path = path;
         self.frames = frames;
+        self.expanding_preview = false;
         self.pending = Some(task);
+    }
+
+    fn expandable_preview(&self, requests: &ResultRequests) -> Option<&Path> {
+        if self.pending.is_some() || !self.request.is_some_and(|id| requests.is_current(id)) {
+            return None;
+        }
+        self.preview_path.as_deref()
     }
 }
 
 #[derive(Component)]
 pub(crate) struct OpenResultRequested;
+
+#[derive(Component)]
+pub(crate) struct LoadFullResSeriesButton;
+
+pub(crate) fn sync_load_full_res_series(
+    state: Res<ResultOpenState>,
+    requests: Res<ResultRequests>,
+    mut buttons: Query<&mut Node, With<LoadFullResSeriesButton>>,
+) {
+    let display = if state.expandable_preview(&requests).is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut button in &mut buttons {
+        if button.display != display {
+            button.display = display;
+        }
+    }
+}
+
+pub(crate) fn load_full_res_series(
+    _: On<Activate>,
+    page: Res<SidebarPage>,
+    geometry: Res<ResultGeometry>,
+    mut state: ResMut<ResultOpenState>,
+    mut requests: ResMut<ResultRequests>,
+    mut playback: ResMut<PlaybackState>,
+    mut error: ResMut<ResultLoadError>,
+) {
+    if *page != SidebarPage::Results {
+        return;
+    }
+    let Some(path) = state.expandable_preview(&requests).map(Path::to_path_buf) else {
+        return;
+    };
+    let Some([mesh]) = geometry.model.as_ref().map(|model| model.meshes.as_slice()) else {
+        return;
+    };
+    let input = ResultInput::WithMesh {
+        path: path.clone(),
+        mesh: MeshInput::Current(mesh.clone()),
+        frames: FrameSelection::All,
+    };
+    match ResultLoadTask::spawn(input) {
+        Ok(task) => {
+            playback.playing = false;
+            error.0 = None;
+            state.begin(path, task, Some(FrameSelection::All), &mut requests);
+            state.expanding_preview = true;
+        }
+        Err(message) => error.0 = Some(message),
+    }
+}
 
 /// Completed click or keyboard activation opens the dialog.
 /// Menu items are separate from this button and must never open the dialog.
@@ -122,11 +188,11 @@ fn choose_native_frames(path: &Path) -> Option<FrameSelection> {
     }
 
     let selected = "Selected frame";
-    let all = "All frames";
+    let all = LOAD_FULL_RES_SERIES_LABEL;
     let choice = rfd::MessageDialog::new()
         .set_title("Open RES results")
         .set_description(format!(
-            "Selected frame: view Step {step} only.\nAll frames: load {count} frames to use Play and the seek bar."
+            "Selected frame: view Step {step} only.\n{all}: load {count} frames to use Play and the seek bar."
         ))
         .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
             selected.into(),
@@ -243,6 +309,7 @@ pub(crate) fn poll_result_open(
         state.pending = None;
         state.request = None;
         state.frames = None;
+        state.preview_path = None;
         // Discard the old request's status too, so an analysis handoff cannot
         // retain the previous manual filename in the result description.
         state.status.clear();
@@ -289,16 +356,22 @@ pub(crate) fn poll_result_open(
         active.step_index = index;
     }
     let step = &results.by_mesh[0][index];
-    let name = step
-        .fields
-        .iter()
-        .find(|f| f.name().eq_ignore_ascii_case("NodalMISES"))
-        .or_else(|| step.fields.first())
-        .map(|f| f.name().to_string());
+    let previous_contour = settings.contour.as_ref().filter(|contour| {
+        state.expanding_preview && step.field_by_name(&contour.field_name).is_some()
+    });
+    let name = previous_contour
+        .map(|contour| contour.field_name.clone())
+        .or_else(|| {
+            step.fields
+                .iter()
+                .find(|field| field.name().eq_ignore_ascii_case("NodalMISES"))
+                .or_else(|| step.fields.first())
+                .map(|field| field.name().to_string())
+        });
     let deformation = step.field_by_name("Displacement").is_some();
     if let (Some(name), Some(active)) = (name, &mut results.active) {
         active.field_name = name.clone();
-        settings.contour = Some(visualization::ContourSettings {
+        let mut contour = previous_contour.cloned().unwrap_or(visualization::ContourSettings {
             mesh_index: 0,
             step_index: index,
             field_name: name,
@@ -306,6 +379,8 @@ pub(crate) fn poll_result_open(
             displacement_field: "Displacement".into(),
             deformation_scale: 1.,
         });
+        contour.step_index = index;
+        settings.contour = Some(contour);
     }
     let piece_count = scene.model.meshes.len();
     geometry.model = Some(scene.model);
@@ -319,20 +394,22 @@ pub(crate) fn poll_result_open(
                 s.max = (count - 1) as f32;
                 s.value = index as f32;
             }
-            SliderId::DeformScale => s.value = 1.,
+            SliderId::DeformScale if !state.expanding_preview => s.value = 1.,
             _ => {}
         }
     }
     error.0 = None;
-    fit.request();
+    if !state.expanding_preview {
+        fit.request();
+    }
+    state.preview_path = (state.frames == Some(FrameSelection::Selected))
+        .then(|| state.path.clone());
     state.status = format!(
         "{} | {count} frames\nResult geometry only; Model returns to your editable model.",
         state.path.file_name().unwrap_or_default().to_string_lossy()
     );
-    if state.frames == Some(FrameSelection::Selected) {
-        state.status.push_str(
-            "\nSelected frame only. Use Open Results > All frames to play.",
-        );
+    if state.preview_path.is_some() {
+        state.status.push_str("\nSelected frame only.");
     }
     if piece_count > 1 {
         state.status.push_str(&format!("\n{piece_count} VTK pieces | local IDs; common color range.\nPartitions are not welded. Unmarked overlaps / internal boundaries remain."));

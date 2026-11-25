@@ -28,7 +28,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
             TextColor(Color::WHITE),
         )
     };
-    parent.spawn(text("COLOR RANGE | compare frames"));
+    parent.spawn(text("COLOR RANGE | loaded frames"));
     parent
         .spawn(Node {
             width: percent(100),
@@ -38,7 +38,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         .with_children(|row| {
             for (mode, label) in [
                 (ContourRangeMode::CurrentFrame, "Current frame"),
-                (ContourRangeMode::AllFrames, "All frames"),
+                (ContourRangeMode::AllFrames, "Shared scale"),
             ] {
                 row.spawn((
                     InteractionButton,
@@ -62,7 +62,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 .with_child(text(label));
             }
         });
-    parent.spawn(text("All frames: same color = same value during playback."));
+    parent.spawn(text("Shared scale keeps colors comparable during playback."));
 }
 
 fn choose(
