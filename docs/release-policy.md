@@ -1,7 +1,7 @@
 # リリース管理方針（0.3.0以降）
 
 2026-10-31更新。Windows配布用Actionsとローカル検証スクリプトを使用し、0.3.0を公開しました。
-実行手順は[Windows ZIP](windows-package.md)を参照してください。
+現行の作成手順は[Windows ZIP](windows-package.md)を参照してください。v0.6.0からのMSI配布は[開発計画](roadmap-0.6.0.md#windowsのmsi配布)で管理します。
 コミット、push、マージ、タグ作成、crates.io公開、GitHub Release公開はメンテナーが行います。
 
 0.3.0の具体的な残作業・検証記録は[リリース候補チェックリスト](release-0.3.0.md)で管理します。
