@@ -1057,6 +1057,7 @@ fn parse_element_type(raw_type: &str) -> ElementType {
         "CQUAD8" | "QUAD8" | "242" => ElementType::Quad8,
         "CROD" | "ROD2" | "TRUSS2" | "301" => ElementType::Truss2,
         "CTETR4" | "CTETRA4" | "C3D4" | "TET4" | "341" => ElementType::Tet4,
+        "3414" => ElementType::FluidTet4,
         "CTETR10" | "CTETRA10" | "C3D10" | "TET10" | "342" => ElementType::Tet10,
         "CPENTA6" | "CPRISM6" | "PENTA6" | "PRISM6" | "351" => ElementType::Prism6,
         "CPENTA15" | "CPRISM15" | "PENTA15" | "PRISM15" | "352" => ElementType::Prism15,

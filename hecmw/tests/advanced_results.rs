@@ -141,14 +141,33 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
 }
 
 #[test]
-#[ignore = "Requires BEVYISTR_TUTORIAL_DIR; eight-piece constant/nonconstant flow fields"]
+#[ignore = "Requires BEVYISTR_TUTORIAL_DIR; complete eight-rank cavity-flow RES and PVTU output"]
 fn tutorial_flow_components_and_constant_fields() {
-    let scene = load_scene(&root().join("18_cavity_flow/cavityflow_vis_psf.0000.pvtu")).unwrap();
+    let folder = root().join("18_cavity_flow");
+    let scene = load_scene(&folder.join("cavityflow_vis_psf.0000.pvtu")).unwrap();
     assert_eq!(scene.model.meshes.len(), 8);
+    assert_eq!(scene.steps.len(), 8);
+    let timeline: Vec<_> = (0..=100)
+        .map(|frame| (frame * 100, (frame * 1000) as f32))
+        .collect();
+    let field_names = ["VELOCITY[1]", "VELOCITY[2]", "VELOCITY[3]", "PRESSURE"];
     let mut first_local_values = std::collections::HashMap::new();
     let mut different_value_for_shared_id = None;
     for (part, (mesh, steps)) in scene.model.meshes.iter().zip(&scene.steps).enumerate() {
-        assert_eq!(steps.len(), 1);
+        assert_eq!(steps.len(), timeline.len());
+        for (step, &(number, time)) in steps.iter().zip(&timeline) {
+            assert_eq!((step.step, step.time), (number, time));
+            assert!(step.field_by_name("Displacement").is_none());
+            assert!(matches!(
+                step.field_by_name("VELOCITY"),
+                Some(ResultField::NodeVector { .. })
+            ));
+            assert!(
+                field_names
+                    .iter()
+                    .all(|name| step.field_by_name(name).is_some())
+            );
+        }
         let step = &steps[0];
         assert_eq!(step.step, 0);
         assert_eq!(step.time, 0.);
@@ -225,7 +244,63 @@ fn tutorial_flow_components_and_constant_fields() {
     println!(
         "Local node {id}: Part {a} VX={av}, Part {b} VX={bv}; values must not be merged by node ID"
     );
-    println!(
-        "18_cavity_flow: 8 parts, 1 frame, 13 fields; VX range=[0,0.001], VY/VZ/P=0; no displacement"
+    let final_ranges = field_names.map(|name| {
+        scene
+            .steps
+            .iter()
+            .map(|steps| scalar_range(steps.last().unwrap(), name))
+            .fold(
+                (f32::INFINITY, f32::NEG_INFINITY),
+                |(lowest, highest), (min, max)| (lowest.min(min), highest.max(max)),
+            )
+    });
+    drop(scene);
+
+    let mesh = hecmw::load_mesh_file(folder.join("cavityflow.msh")).unwrap();
+    assert!(
+        mesh.elements
+            .iter()
+            .all(|element| element.element_type == fem_core::ElementType::FluidTet4)
     );
+    assert!(!mesh.cached_boundary_faces().is_empty());
+    let native = load_mesh_result_series(&folder.join("cavityflow.res.0.10000"), &mesh).unwrap();
+    assert_eq!(native.len(), timeline.len());
+    for (step, &(number, time)) in native.iter().zip(&timeline) {
+        assert_eq!((step.step, step.time), (number, time));
+        assert!(matches!(
+            step.field_by_name("VELOCITY"),
+            Some(ResultField::NodeVector { .. })
+        ));
+        assert!(
+            field_names
+                .iter()
+                .all(|name| step.field_by_name(name).is_some())
+        );
+    }
+    let last = native.last().unwrap();
+    let (min_pressure, max_pressure) = scalar_range(last, "PRESSURE");
+    assert!(min_pressure < 0.0 && max_pressure > 0.0);
+    for (field, (vtk_min, vtk_max)) in field_names.into_iter().zip(final_ranges) {
+        let (res_min, res_max) = scalar_range(last, field);
+        for (vtk, res) in [(vtk_min, res_min), (vtk_max, res_max)] {
+            // VTK rounds the ASCII data relative to RES. Compare the two
+            // assembled ranges without treating piece-local IDs as global IDs.
+            assert!(
+                (vtk - res).abs() <= 2e-6 * vtk.abs().max(res.abs()).max(1e-4),
+                "{field}: PVTU {vtk:e}, RES {res:e}"
+            );
+        }
+    }
+    println!(
+        "18_cavity_flow: 8 pieces, {} frames; final PRESSURE=[{min_pressure:.5e},{max_pressure:.5e}] at time {}",
+        native.len(),
+        last.time
+    );
+}
+
+fn scalar_range(step: &StepResult, name: &str) -> (f32, f32) {
+    let Some(ResultField::NodeScalar { min, max, .. }) = step.field_by_name(name) else {
+        panic!("Expected nodal scalar {name}");
+    };
+    (*min, *max)
 }

@@ -702,6 +702,7 @@ pub(crate) fn element_type_code(et: &ElementType) -> Option<&'static str> {
         ElementType::Quad8 => Some("242"),
         ElementType::Truss2 => Some("301"),
         ElementType::Tet4 => Some("341"),
+        ElementType::FluidTet4 => Some("3414"),
         ElementType::Tet10 => Some("342"),
         ElementType::Prism6 => Some("351"),
         ElementType::Prism15 => Some("352"),
@@ -1097,6 +1098,33 @@ mod tests {
                 "missing HECMW element block {code}"
             );
         }
+    }
+
+    #[test]
+    fn fluid_tetrahedron_geometry_round_trips_without_changing_element_type() {
+        let source = "!NODE\n1,0,0,0\n2,1,0,0\n3,0,1,0\n4,0,0,1\n5,0,0,-1\n\
+                      !ELEMENT,TYPE=3414\n10,1,2,3,4\n\
+                      !ELEMENT,TYPE=341\n11,1,3,2,5\n\
+                      !NGROUP,NGRP=WALL\n1,2,3\n!END\n";
+        let mesh = crate::parse_mesh_str(source).unwrap();
+        assert_eq!(mesh.elements[0].element_type, ElementType::FluidTet4);
+        assert_eq!(mesh.elements[0].edge_node_ids().len(), 6);
+        assert_eq!(mesh.elements[0].face_node_ids().len(), 4);
+        assert_eq!(mesh.cached_boundary_faces().len(), 6);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("flow.msh");
+        assert_eq!(write_msh_geometry_file(&path, &mesh).unwrap(), (5, 2));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("!ELEMENT,TYPE=3414\n 10,1,2,3,4\n"));
+        let reloaded = crate::parse_mesh_str(&saved).unwrap();
+        assert_eq!(reloaded.elements, mesh.elements);
+        assert_eq!(reloaded.node_sets, mesh.node_sets);
+
+        let model = FemModel::single_mesh("Flow mesh", reloaded);
+        let report = crate::validate_frontistr_project(&model, &AnalysisSetup::default());
+        assert!(report.has_errors());
+        assert!(report.summary(4).contains("Flow setup for element type 3414"));
     }
 
     #[test]

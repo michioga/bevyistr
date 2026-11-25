@@ -1230,6 +1230,7 @@ fn element_type_label(element_type: &fem_core::ElementType) -> String {
         fem_core::ElementType::Quad8 => "Quad8/242".to_string(),
         fem_core::ElementType::Truss2 => "Truss2/301".to_string(),
         fem_core::ElementType::Tet4 => "Tet4/341".to_string(),
+        fem_core::ElementType::FluidTet4 => "FluidTet4/3414".to_string(),
         fem_core::ElementType::Tet10 => "Tet10/342".to_string(),
         fem_core::ElementType::Prism6 => "Prism6/351".to_string(),
         fem_core::ElementType::Prism15 => "Prism15/352".to_string(),

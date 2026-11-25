@@ -846,7 +846,7 @@ impl FemElement {
             | ElementType::ShellQuad4
             | ElementType::ShellQuad9
             | ElementType::ShellQuad4Mixed => self.corner_edges(&[(0, 1), (1, 2), (2, 3), (3, 0)]),
-            ElementType::Tet4 | ElementType::Tet10 => {
+            ElementType::Tet4 | ElementType::FluidTet4 | ElementType::Tet10 => {
                 self.corner_edges(&[(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)])
             }
             ElementType::Prism6 | ElementType::Prism15 => self.corner_edges(&[
@@ -935,7 +935,7 @@ impl FemElement {
             | ElementType::ShellQuad4
             | ElementType::ShellQuad9
             | ElementType::ShellQuad4Mixed => self.corner_faces(&[&[0, 1, 2, 3]]),
-            ElementType::Tet4 | ElementType::Tet10 => {
+            ElementType::Tet4 | ElementType::FluidTet4 | ElementType::Tet10 => {
                 self.corner_faces(&[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[2, 0, 3]])
             }
             ElementType::Prism6 | ElementType::Prism15 => self.corner_faces(&[
@@ -1231,6 +1231,8 @@ pub enum ElementType {
     Truss2,
 
     Tet4,
+    /// HECMW 3414: four-node tetrahedron for incompressible flow.
+    FluidTet4,
     Tet10,
     Prism6,
     Prism15,
@@ -1281,7 +1283,7 @@ impl ElementType {
         match self {
             Self::Rod2 | Self::Truss2 | Self::Connector2 | Self::Beam611 => Some(2),
             Self::Rod3 | Self::Tri3 | Self::ShellTri3 => Some(3),
-            Self::Quad4 | Self::Tet4 | Self::Beam641 | Self::ShellQuad4 => Some(4),
+            Self::Quad4 | Self::Tet4 | Self::FluidTet4 | Self::Beam641 | Self::ShellQuad4 => Some(4),
             Self::Tri6 | Self::Prism6 | Self::ShellTri6 | Self::ShellTri3Mixed => Some(6),
             Self::Quad8 | Self::Hex8 | Self::InterfaceQuad4 | Self::ShellQuad4Mixed => Some(8),
             Self::ShellQuad9 => Some(9),
@@ -1343,7 +1345,13 @@ impl ElementType {
     pub const fn is_solid(&self) -> bool {
         matches!(
             self,
-            Self::Tet4 | Self::Tet10 | Self::Prism6 | Self::Prism15 | Self::Hex8 | Self::Hex20
+            Self::Tet4
+                | Self::FluidTet4
+                | Self::Tet10
+                | Self::Prism6
+                | Self::Prism15
+                | Self::Hex8
+                | Self::Hex20
         )
     }
 

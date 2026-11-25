@@ -280,7 +280,7 @@ fn tutorial_multipart_flow_scene() {
         178142
     );
     for steps in &scene.steps {
-        assert_eq!(steps.len(), 1);
+        assert_eq!(steps.len(), scene.steps[0].len());
         assert!(steps[0].field_by_name("VELOCITY").is_some());
         assert!(steps[0].field_by_name("PRESSURE").is_some());
         let (_, lo, hi) = scalar(&steps[0], "PRESSURE");

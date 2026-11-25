@@ -9,7 +9,7 @@ use std::{collections::{BTreeSet, HashMap}, fmt, io, path::Path};
 
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactSlaveRef, DistributedLoad,
-    DistributedLoadKind, DistributedLoadTarget, ElementFaceRef, FemModel, NodalLoad,
+    DistributedLoadKind, DistributedLoadTarget, ElementFaceRef, ElementType, FemModel, NodalLoad,
     RotationCenter, SectionKind,
 };
 
@@ -185,6 +185,16 @@ pub fn validate_frontistr_project(
         }
         if mesh.elements.is_empty() {
             report.warning(&location, "contains no elements");
+        }
+        if mesh
+            .elements
+            .iter()
+            .any(|element| element.element_type == ElementType::FluidTet4)
+        {
+            report.error(
+                &location,
+                "Flow setup for element type 3414 is unavailable for project export and Run FrontISTR",
+            );
         }
 
         let mut node_ids = BTreeSet::new();
