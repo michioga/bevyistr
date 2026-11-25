@@ -41,7 +41,7 @@ FrontISTRチュートリアルの`18_cavity_flow`では、`cavityflow_vis_psf.00
 3. 近くにある同名のMSH、または`hecmw_ctrl.dat`から解決したMSHが候補として提示されます。
 4. 内容を確認して進めます。
 
-全フレームを開く場合、Resultsに`RES frames: 読み込み済み / 全フレーム`が表示され、完了後に結果が切り替わります。
+Playとコマ送りには複数フレームが必要です。**Selected frame**で開いた後に再生したい場合は、同じ`.res`を**Open Results...**で開き直し、ファイル選択後のダイアログで**All frames**を選びます。読み込み中はResultsに`RES frames: 読み込み済み / 全フレーム`が表示され、完了後に結果が切り替わります。
 
 確認ダイアログの操作は次のとおりです。
 

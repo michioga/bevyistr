@@ -18,6 +18,7 @@ pub(crate) struct ResultOpenState {
     pending: Option<ResultLoadTask>,
     request: Option<ResultRequestId>,
     path: PathBuf,
+    frames: Option<FrameSelection>,
     pub status: String,
 }
 
@@ -26,6 +27,7 @@ impl ResultOpenState {
         &mut self,
         path: PathBuf,
         task: ResultLoadTask,
+        frames: Option<FrameSelection>,
         requests: &mut ResultRequests,
     ) {
         self.request = Some(requests.begin());
@@ -34,6 +36,7 @@ impl ResultOpenState {
             path.file_name().unwrap_or_default().to_string_lossy()
         );
         self.path = path;
+        self.frames = frames;
         self.pending = Some(task);
     }
 }
@@ -123,7 +126,7 @@ fn choose_native_frames(path: &Path) -> Option<FrameSelection> {
     let choice = rfd::MessageDialog::new()
         .set_title("Open RES results")
         .set_description(format!(
-            "Open Step {step} for a quick view, or load all {count} frames for playback."
+            "Selected frame: view Step {step} only.\nAll frames: load {count} frames to use Play and the seek bar."
         ))
         .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
             selected.into(),
@@ -189,8 +192,8 @@ pub(crate) fn open_result_button_system(
         let vtk = path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("vtu") || e.eq_ignore_ascii_case("pvtu"));
-        let input = if vtk {
-            ResultInput::Vtk(path.clone())
+        let (input, frames) = if vtk {
+            (ResultInput::Vtk(path.clone()), None)
         } else {
             let Some(frames) = choose_native_frames(&path) else {
                 continue;
@@ -198,11 +201,14 @@ pub(crate) fn open_result_button_system(
             let Some(mesh) = choose_mesh(&path, model.as_deref()) else {
                 continue;
             };
-            ResultInput::WithMesh {
-                path: path.clone(),
-                mesh,
-                frames,
-            }
+            (
+                ResultInput::WithMesh {
+                    path: path.clone(),
+                    mesh,
+                    frames,
+                },
+                Some(frames),
+            )
         };
         let pending = match ResultLoadTask::spawn(input) {
             Ok(pending) => pending,
@@ -214,7 +220,7 @@ pub(crate) fn open_result_button_system(
         };
         playback.playing = false;
         error.0 = None;
-        state.begin(path, pending, &mut requests);
+        state.begin(path, pending, frames, &mut requests);
     }
 }
 
@@ -236,6 +242,7 @@ pub(crate) fn poll_result_open(
     {
         state.pending = None;
         state.request = None;
+        state.frames = None;
         // Discard the old request's status too, so an analysis handoff cannot
         // retain the previous manual filename in the result description.
         state.status.clear();
@@ -322,6 +329,11 @@ pub(crate) fn poll_result_open(
         "{} | {count} frames\nResult geometry only; Model returns to your editable model.",
         state.path.file_name().unwrap_or_default().to_string_lossy()
     );
+    if state.frames == Some(FrameSelection::Selected) {
+        state.status.push_str(
+            "\nSelected frame only. Use Open Results > All frames to play.",
+        );
+    }
     if piece_count > 1 {
         state.status.push_str(&format!("\n{piece_count} VTK pieces | local IDs; common color range.\nPartitions are not welded. Unmarked overlaps / internal boundaries remain."));
     }

@@ -15,6 +15,7 @@ fn manual_request(app: &mut App) -> mpsc::Sender<Loaded> {
             world.resource_mut::<ResultOpenState>().begin(
                 "manual.0007.pvtu".into(),
                 ResultLoadTask::from_receiver(rx),
+                None,
                 &mut requests,
             );
         });

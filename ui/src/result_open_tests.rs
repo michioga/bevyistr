@@ -10,6 +10,7 @@ fn queued_state(
     state.begin(
         path.into(),
         ResultLoadTask::from_receiver(receiver),
+        None,
         &mut requests,
     );
     (state, requests)
@@ -233,4 +234,93 @@ fn finds_res_mesh_in_project_ancestor() {
     let res = dir.path().join("fstrRES/STEP1/job.res.0.1");
     assert_eq!(candidate_mesh(&res), Some(dir.path().join("job.msh")));
     assert!(candidate_mesh(&dir.path().join("unknown.res.0.1")).is_none());
+}
+
+#[test]
+fn selected_res_frame_explains_playback_and_full_series_enables_the_controls() {
+    use crate::playback_controls::{self, Action};
+    use bevy::ui::InteractionDisabled;
+
+    let mut app = App::new();
+    app.add_plugins(bevy::ui_widgets::ButtonPlugin)
+        .init_resource::<ResultOpenState>()
+        .init_resource::<ResultRequests>()
+        .init_resource::<ResultLoadError>()
+        .init_resource::<ResultGeometry>()
+        .init_resource::<FemResultSet>()
+        .init_resource::<visualization::VisualizationSettings>()
+        .init_resource::<PlaybackState>()
+        .init_resource::<crate::project_io::CameraFitRequest>()
+        .insert_resource(SidebarPage::Results)
+        .add_systems(Startup, |mut commands: Commands| {
+            commands
+                .spawn(Node::default())
+                .with_children(playback_controls::spawn);
+        })
+        .add_systems(Update, (poll_result_open, playback_controls::sync).chain());
+    app.world_mut().spawn((
+        SliderTrack,
+        SliderState {
+            id: SliderId::ResultStep,
+            min: 0.,
+            max: 0.,
+            value: 0.,
+            dragging: false,
+        },
+    ));
+
+    for (selection, steps) in [
+        (FrameSelection::Selected, vec![10000]),
+        (FrameSelection::All, (0..=100).map(|frame| frame * 100).collect()),
+    ] {
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(hecmw::vtk_scene::ResultScene {
+            model: FemModel::demo_hex8(),
+            steps: vec![steps
+                .into_iter()
+                .map(|step| fem_core::StepResult {
+                    step,
+                    fields: vec![fem_core::ResultField::NodeScalar {
+                        name: "PRESSURE".into(),
+                        values: vec![1.; 8],
+                        min: 1.,
+                        max: 1.,
+                    }],
+                    ..default()
+                })
+                .collect()],
+        }))
+        .unwrap();
+        app.world_mut().resource_scope(|world, mut requests: Mut<ResultRequests>| {
+            world.resource_mut::<ResultOpenState>().begin(
+                "cavityflow.res.0.10000".into(),
+                ResultLoadTask::from_receiver(rx),
+                Some(selection),
+                &mut requests,
+            );
+        });
+        app.update();
+
+        let selected = selection == FrameSelection::Selected;
+        let world = app.world_mut();
+        let mut buttons = world.query::<(Entity, &Action, Has<InteractionDisabled>)>();
+        let (play, _, disabled) = buttons.iter(world)
+            .find(|(_, action, _)| **action == Action::PlayPause)
+            .unwrap();
+        assert_eq!(disabled, selected);
+        let (_, _, previous_disabled) = buttons.iter(world)
+            .find(|(_, action, _)| **action == Action::Previous)
+            .unwrap();
+        assert_eq!(previous_disabled, selected);
+        assert_eq!(
+            world.resource::<ResultOpenState>().status.contains("All frames to play"),
+            selected
+        );
+        assert_eq!(
+            world.resource::<FemResultSet>().active.as_ref().unwrap().step_index,
+            if selected { 0 } else { 100 }
+        );
+        crate::widget_test_input::click(world, play);
+        assert_eq!(world.resource::<PlaybackState>().playing, !selected);
+    }
 }
