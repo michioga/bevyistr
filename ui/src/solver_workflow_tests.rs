@@ -415,6 +415,34 @@ fn installed_frontistr_workflow_direct() {
     check_latest_results(installed_run(SolverLaunchMode::Direct), false);
 }
 
+#[test]
+#[ignore = "Requires installed FrontISTR"]
+fn installed_frontistr_bicgstab_scaling() {
+    let input = tempfile::tempdir().unwrap();
+    write_reference_project(input.path());
+    for (enabled, expected) in [(false, "NO"), (true, "YES")] {
+        let output = tempfile::tempdir().unwrap();
+        let run = installed_run(SolverLaunchMode::Direct);
+        let (mut app, button, _) = load_project(input.path(), output.path(), run);
+        {
+            let mut setup = app.world_mut().resource_mut::<AnalysisSetup>();
+            setup.solver.solver_method = fem_core::LinearSolverMethod::BiCgStab;
+            setup.solver.matrix_scaling = Some(enabled);
+        }
+        println!("BiCGSTAB with SCALING={expected}");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            solve_and_check(&mut app, button, NODAL_FORCE, 90);
+        }));
+        if let Err(panic) = result {
+            eprintln!("Solver input and diagnostics retained at {}", output.keep().display());
+            std::panic::resume_unwind(panic);
+        }
+        let cnt = std::fs::read_to_string(output.path().join("bar.cnt")).unwrap();
+        assert!(cnt.contains("METHOD=BiCGSTAB"));
+        assert!(cnt.contains(&format!("SCALING={expected}")));
+    }
+}
+
 fn check_matrix_dump_workflow(run: FrontistrRunState, native: bool) {
     let input = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

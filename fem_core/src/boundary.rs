@@ -450,6 +450,8 @@ pub struct SolverSettings {
     pub nonlinear_convergence_tol: f32,
     /// Linear solver method.
     pub solver_method: LinearSolverMethod,
+    /// FrontISTR SCALING for 3D iterative solves. None uses the solver default.
+    pub matrix_scaling: Option<bool>,
     /// FrontISTR ITERLOG. None leaves the solver's default in effect.
     pub iteration_log: Option<bool>,
     /// FrontISTR TIMELOG. None leaves the solver's default in effect.
@@ -478,6 +480,7 @@ impl Default for SolverSettings {
             nonlinear_max_iterations: 50,
             nonlinear_convergence_tol: 1.0e-3,
             solver_method: LinearSolverMethod::Cg,
+            matrix_scaling: None,
             iteration_log: Some(true),
             time_log: Some(SolverTimeLog::Summary),
             matrix_dump_format: MatrixDumpFormat::None,
@@ -638,6 +641,7 @@ impl AnalysisType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinearSolverMethod {
     Cg,
+    BiCgStab,
     Mumps,
     DirectMkl,
     Direct,
@@ -648,6 +652,7 @@ impl LinearSolverMethod {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Cg => "CG",
+            Self::BiCgStab => "BiCGSTAB",
             Self::Mumps => "MUMPS",
             Self::DirectMkl => "MKL (DIRECTmkl)",
             Self::Direct => "Direct",
@@ -657,6 +662,7 @@ impl LinearSolverMethod {
     pub const fn frontistr_method(self) -> &'static str {
         match self {
             Self::Cg => "CG",
+            Self::BiCgStab => "BiCGSTAB",
             Self::Mumps => "MUMPS",
             Self::DirectMkl => "DIRECTmkl",
             Self::Direct => "DIRECT",
@@ -664,8 +670,20 @@ impl LinearSolverMethod {
         }
     }
 
+    pub fn from_frontistr(value: &str) -> Option<Self> {
+        match value.to_ascii_uppercase().as_str() {
+            "CG" => Some(Self::Cg),
+            "BICGSTAB" => Some(Self::BiCgStab),
+            "GMRES" => Some(Self::Gmres),
+            "MUMPS" => Some(Self::Mumps),
+            "DIRECT" => Some(Self::Direct),
+            "DIRECTMKL" | "MKL" => Some(Self::DirectMkl),
+            _ => None,
+        }
+    }
+
     pub const fn is_iterative(self) -> bool {
-        matches!(self, Self::Cg | Self::Gmres)
+        matches!(self, Self::Cg | Self::BiCgStab | Self::Gmres)
     }
 }
 

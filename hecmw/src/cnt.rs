@@ -470,13 +470,8 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             "SOLVER" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
                 if let Some(method) = header.params.get("METHOD") {
-                    solver.solver_method = match method.to_ascii_uppercase().as_str() {
-                        "GMRES" => LinearSolverMethod::Gmres,
-                        "MUMPS" => LinearSolverMethod::Mumps,
-                        "DIRECT" => LinearSolverMethod::Direct,
-                        "DIRECTMKL" | "MKL" => LinearSolverMethod::DirectMkl,
-                        _ => LinearSolverMethod::Cg,
-                    };
+                    solver.solver_method =
+                        LinearSolverMethod::from_frontistr(method).unwrap_or(LinearSolverMethod::Cg);
                 }
                 solver.matrix_dump_format = header
                     .params
@@ -487,13 +482,15 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     .params
                     .get("DUMPEXIT")
                     .is_some_and(|value| value.eq_ignore_ascii_case("YES"));
-                solver.iteration_log = header.params.get("ITERLOG").and_then(|value| {
-                    match value.to_ascii_uppercase().as_str() {
+                let read_toggle = |key| {
+                    match header.params.get(key)?.to_ascii_uppercase().as_str() {
                         "YES" => Some(true),
                         "NO" => Some(false),
                         _ => None,
                     }
-                });
+                };
+                solver.iteration_log = read_toggle("ITERLOG");
+                solver.matrix_scaling = read_toggle("SCALING");
                 solver.time_log = header.params.get("TIMELOG")
                     .and_then(|value| SolverTimeLog::from_frontistr(value));
                 if let Some(value) = header.params.get("PRECOND").and_then(|v| v.parse().ok()) {

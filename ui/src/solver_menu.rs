@@ -25,6 +25,7 @@ enum Kind {
     Analysis,
     Method,
     Preconditioner,
+    Scaling,
     ResidualLog,
     TimingLog,
     MatrixDump,
@@ -45,6 +46,7 @@ enum Choice {
     Analysis(AnalysisType),
     Method(LinearSolverMethod),
     Preconditioner(u8),
+    Scaling(Option<bool>),
     ResidualLog(Option<bool>),
     TimingLog(Option<SolverTimeLog>),
     MatrixDump(MatrixDumpFormat),
@@ -57,6 +59,7 @@ impl Kind {
             Self::Analysis => "Analysis type",
             Self::Method => "Linear solver",
             Self::Preconditioner => "Preconditioner",
+            Self::Scaling => "Matrix scaling",
             Self::ResidualLog => "Residual log",
             Self::TimingLog => "Solver timing log",
             Self::MatrixDump => "Matrix dump",
@@ -64,13 +67,14 @@ impl Kind {
         }
     }
     fn available(self, settings: &SolverSettings) -> bool {
-        self != Self::Preconditioner || settings.solver_method.is_iterative()
+        !matches!(self, Self::Preconditioner | Self::Scaling) || settings.solver_method.is_iterative()
     }
     fn current(self, settings: &SolverSettings) -> Choice {
         match self {
             Self::Analysis => Choice::Analysis(settings.analysis_type),
             Self::Method => Choice::Method(settings.solver_method),
             Self::Preconditioner => Choice::Preconditioner(settings.preconditioner),
+            Self::Scaling => Choice::Scaling(settings.matrix_scaling),
             Self::ResidualLog => Choice::ResidualLog(settings.iteration_log),
             Self::TimingLog => Choice::TimingLog(settings.time_log),
             Self::MatrixDump => Choice::MatrixDump(settings.matrix_dump_format),
@@ -91,12 +95,14 @@ impl Kind {
                 LinearSolverMethod::Mumps,
                 LinearSolverMethod::DirectMkl,
                 LinearSolverMethod::Cg,
+                LinearSolverMethod::BiCgStab,
                 LinearSolverMethod::Gmres,
                 LinearSolverMethod::Direct,
             ]
             .map(Choice::Method)
             .to_vec(),
             Self::Preconditioner => [1, 2, 3].map(Choice::Preconditioner).to_vec(),
+            Self::Scaling => [None, Some(false), Some(true)].map(Choice::Scaling).to_vec(),
             Self::ResidualLog => [None, Some(false), Some(true)]
                 .map(Choice::ResidualLog)
                 .to_vec(),
@@ -129,9 +135,11 @@ impl Choice {
             Self::Preconditioner(2) => "SSOR (2)",
             Self::Preconditioner(3) => "Diagonal scaling (3)",
             Self::Preconditioner(_) => "Unsupported",
-            Self::ResidualLog(None) | Self::TimingLog(None) => "Default",
-            Self::ResidualLog(Some(false)) | Self::TimingLog(Some(SolverTimeLog::Off)) => "Off",
-            Self::ResidualLog(Some(true)) => "On",
+            Self::Scaling(None) | Self::ResidualLog(None) | Self::TimingLog(None) => "Default",
+            Self::Scaling(Some(false))
+            | Self::ResidualLog(Some(false))
+            | Self::TimingLog(Some(SolverTimeLog::Off)) => "Off",
+            Self::Scaling(Some(true)) | Self::ResidualLog(Some(true)) => "On",
             Self::TimingLog(Some(SolverTimeLog::Summary)) => "Summary",
             Self::TimingLog(Some(SolverTimeLog::Verbose)) => "Verbose",
             Self::MatrixDump(MatrixDumpFormat::None) => "Off",
@@ -147,6 +155,9 @@ impl Choice {
             Self::Analysis(a) => format!("!SOLUTION, TYPE={}", a.frontistr_type()),
             Self::Method(m) => format!("!SOLVER, METHOD={}", m.frontistr_method()),
             Self::Preconditioner(code) => format!("PRECOND={code}"),
+            Self::Scaling(None) => "!SOLVER without SCALING".into(),
+            Self::Scaling(Some(false)) => "SCALING=NO".into(),
+            Self::Scaling(Some(true)) => "SCALING=YES".into(),
             Self::ResidualLog(None) => "!SOLVER without ITERLOG".into(),
             Self::ResidualLog(Some(false)) => "ITERLOG=NO".into(),
             Self::ResidualLog(Some(true)) => "ITERLOG=YES".into(),
@@ -162,6 +173,7 @@ impl Choice {
             Self::Analysis(a) => settings.analysis_type == a,
             Self::Method(m) => settings.solver_method == m,
             Self::Preconditioner(code) => settings.preconditioner == code,
+            Self::Scaling(setting) => settings.matrix_scaling == setting,
             Self::ResidualLog(setting) => settings.iteration_log == setting,
             Self::TimingLog(setting) => settings.time_log == setting,
             Self::MatrixDump(format) => settings.matrix_dump_format == format,
@@ -186,6 +198,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         Kind::Analysis,
         Kind::Method,
         Kind::Preconditioner,
+        Kind::Scaling,
         Kind::ResidualLog,
         Kind::TimingLog,
         Kind::MatrixDump,
@@ -381,6 +394,7 @@ fn choose(
         Choice::Analysis(value) => setup.solver.analysis_type = value,
         Choice::Method(value) => setup.solver.solver_method = value,
         Choice::Preconditioner(code) => setup.solver.preconditioner = code,
+        Choice::Scaling(setting) => setup.solver.matrix_scaling = setting,
         Choice::ResidualLog(setting) => setup.solver.iteration_log = setting,
         Choice::TimingLog(setting) => setup.solver.time_log = setting,
         Choice::MatrixDump(format) => setup.solver.matrix_dump_format = format,

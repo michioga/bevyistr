@@ -242,6 +242,45 @@ fn solver_log_settings_preserve_explicit_values_and_omissions() {
 }
 
 #[test]
+fn cavity_solver_controls_round_trip_with_explicit_or_default_scaling() {
+    for (parameter, expected) in [
+        ("", None),
+        (", SCALING=NO", Some(false)),
+        (", SCALING=yes", Some(true)),
+    ] {
+        let input = format!(
+            "!SOLVER, METHOD=bicgstab, PRECOND=1, ITERLOG=NO, TIMELOG=YES{parameter}\n100000, 1\n1.0e-8, 1.0, 1.0\n!END"
+        );
+        let data = parsed(&input);
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        let mut setup = AnalysisSetup::default();
+        data.merge_into(&mut setup);
+        assert_eq!(setup.solver.solver_method, LinearSolverMethod::BiCgStab);
+        assert_eq!(setup.solver.matrix_scaling, expected);
+        assert_eq!(setup.solver.max_iterations, Some(100000));
+        assert_eq!(setup.solver.ssor_relaxation, Some(1.0));
+        let output = crate::cnt_writer::build_cnt(&setup, &[]);
+        assert!(output.contains("METHOD=BiCGSTAB, PRECOND=1"));
+        assert_eq!(output.contains("SCALING="), expected.is_some());
+        let reloaded = parsed(&output);
+        assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+        assert_eq!(reloaded.solver.unwrap(), setup.solver);
+    }
+
+    for (parameters, message) in [
+        ("METHOD=BiCGSTAB, PRECOND=1, SCALING=ON", "SCALING must be YES or NO"),
+        ("METHOD=BiCGSTAB, PRECOND=1, SCALING=", "SCALING must be YES or NO"),
+        ("METHOD=MUMPS, SCALING=YES", "only for iterative"),
+    ] {
+        let data = parsed(&format!("!SOLVER, {parameters}\n!END"));
+        assert!(
+            data.import_issues.iter().any(|issue| issue.message.contains(message)),
+            "{parameters}: {:?}", data.import_issues
+        );
+    }
+}
+
+#[test]
 fn matrix_dump_settings_round_trip_for_iterative_and_direct_solvers() {
     for (header, rows) in [
         (
@@ -294,7 +333,7 @@ fn unsupported_matrix_dump_parameters_still_block_export() {
         "DUMPEXIT=",
         "DUMPTYPE=NONE, DUMPTYPE=MM",
         "DUMPEXIT=YES, DUMPEXIT=NO",
-        "DUMPTYPE=MM, SCALING=YES",
+        "DUMPTYPE=MM, MATRIXFORMAT=BSR",
     ] {
         let data = parsed(&format!("!SOLVER, METHOD=MUMPS, {options}\n!END"));
         assert!(!data.import_issues.is_empty(), "{options}");

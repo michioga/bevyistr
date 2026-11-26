@@ -2,11 +2,11 @@
 
 ## 設定を確認する
 
-解析方式と連立方程式ソルバーはメニューから選択します。MUMPS、MKL (DIRECTmkl)、CG、GMRES、Directの選択と、実行方式のDirect／MPIは別の設定です。
+解析方式と連立方程式ソルバーはメニューから選択します。MUMPS、MKL (DIRECTmkl)、CG、BiCGSTAB、GMRES、Directの選択と、実行方式のDirect／MPIは別の設定です。
 
 0.3.0では、反復の種類を分けて表示します。
 
-- **LINEAR ITERATION | !SOLVER**：CG／GMRESの最大反復数と相対残差。MUMPS／MKL／Directでは非表示になり、直接法の案内を表示します。CG／GMRESへ戻すと入力値は保持されています。
+- **LINEAR ITERATION | !SOLVER**：CG／BiCGSTAB／GMRESの最大反復数と相対残差。MUMPS／MKL／Directでは非表示になり、直接法の案内を表示します。CG／BiCGSTAB／GMRESへ戻すと入力値は保持されています。
 - **NONLINEAR STEP | !STEP**：Nonlinearでのみ表示する固定増分のサブステップ数、Newton反復上限、非線形残差の許容値です。線形反復とは独立しており、MUMPSでも設定できます。
 - Enterで確定、Escで復元します。非線形の初期値は反復上限50・残差許容値`1e-3`です。変位増分など、ここで編集できない他の収束判定はFrontISTRの既定値を使用します。
 
@@ -16,12 +16,14 @@ MUMPSとMKLは別のMETHODとして読み込み・出力します。メニュー
 
 Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数・許容差・最大反復数・シフト量を編集できます。[固有値解析の設定](eigen.md)を参照してください。
 
-Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角スケーリング（`PRECOND=3`）を選べます。CG／GMRESの数値欄は次のとおりです。
+Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角スケーリング（`PRECOND=3`）を選べます。CG／BiCGSTAB／GMRESの数値欄は次のとおりです。
 
 - **Precond. iterations**（`iterPREmax`）は前処理の反復回数です。**GMRES subspaces**（`NREST`）はGMRESで表示します。
 - **Ordering colors**（`NCOLOR_IN`）は多色順序付けの色数で、FrontISTRではOpenMPが2スレッド以上のときに適用されます。**Precond. reuse**（`RECYCLEPRE`）は非線形静解析で表示し、`0` で再利用を無効にします。
 - **Diagonal scale**（`SIGMA_DIAG`）は対角スケーリング、**SSOR relaxation**（`OMEGA`）はSSORで表示します。FrontISTRは `0 < OMEGA < 2` の範囲を使い、従来の `0` は `1` として扱います。
 - 線形反復欄を空欄にしてEnterを押すと、FrontISTRの既定値を使います。`NITER`、`iterPREmax`、`RESID` の省略も、解析タイプや前処理を切り替えて表示されなくなった値も保持します。`RESID` は倍精度で扱います。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/en/keyword_reference/cnt/solver.html)
+
+反復法の **Matrix scaling** は3次元解析用の `!SOLVER, SCALING` に対応します。**Default** はパラメーターを省略し、**On** は `YES`、**Off** は `NO` を出力します。直接法を選ぶと欄が非表示になり、反復法に戻すと選択値が復元されます。 [FrontISTRの `!SOLVER` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/solver.html)
 
 ### ソルバーログを設定する
 
@@ -47,7 +49,7 @@ Solveの最下部には元ファイル名・行番号・
 | 項目 | 再出力できる代表例 | Export／Runが止まる代表例 |
 | --- | --- | --- |
 | 拘束・荷重の`GRPID` | `GRPID=1`。ヒンジ例題のような省略形は既定値1として扱います。 | `GRPID=2`など、グループ1以外の指定 |
-| `!SOLVER` | 対応METHOD、反復法の`PRECOND=1`／`2`／`3`。標準の2データ行の `NITER`、`iterPREmax`、`NREST`、`NCOLOR_IN`、`RECYCLEPRE`、`RESID`、`SIGMA_DIAG`、`OMEGA` を保持します。`ITERLOG`／`TIMELOG` と `DUMPTYPE`／`DUMPEXIT` にも対応します。 | その他の前処理、未知のMETHOD、追加のデータ行や列 |
+| `!SOLVER` | 対応METHOD、反復法の`PRECOND=1`／`2`／`3`。標準の2データ行の `NITER`、`iterPREmax`、`NREST`、`NCOLOR_IN`、`RECYCLEPRE`、`RESID`、`SIGMA_DIAG`、`OMEGA` を保持します。反復法の `SCALING`、`ITERLOG`／`TIMELOG`、`DUMPTYPE`／`DUMPEXIT` にも対応します。 | その他の前処理、未知のMETHOD、追加のデータ行や列 |
 | 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析の入力、複数ステップ・自動増分・個別の時間設定・部分グループの有効化 |
 | 材料 | 対応する書式の等方弾性・密度 | 異方弾性、温度依存テーブル、弾塑性、超弾性 |
 | 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |

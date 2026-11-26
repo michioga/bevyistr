@@ -216,6 +216,9 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     write!(o, "!SOLVER, METHOD={}", s.solver_method.frontistr_method()).unwrap();
     if s.solver_method.is_iterative() {
         write!(o, ", PRECOND={}", s.preconditioner).unwrap();
+        if let Some(enabled) = s.matrix_scaling {
+            write!(o, ", SCALING={}", if enabled { "YES" } else { "NO" }).unwrap();
+        }
     }
     if let Some(enabled) = s.iteration_log {
         write!(o, ", ITERLOG={}", if enabled { "YES" } else { "NO" }).unwrap();

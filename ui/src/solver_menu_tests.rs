@@ -141,6 +141,42 @@ fn preconditioner_menu_exports_the_selected_code_and_hides_for_direct_methods() 
 }
 
 #[test]
+fn bicgstab_and_matrix_scaling_menus_preserve_the_iterative_setting() {
+    let mut app = app();
+    let bicgstab = Choice::Method(LinearSolverMethod::BiCgStab);
+    open(&mut app, Kind::Method);
+    click_choice(&mut app, bicgstab);
+    assert_export(&app, bicgstab);
+
+    open(&mut app, Kind::Scaling);
+    click_choice(&mut app, Choice::Scaling(Some(false)));
+    assert_export(&app, Choice::Scaling(Some(false)));
+    open(&mut app, Kind::Scaling);
+    click_choice(&mut app, Choice::Scaling(Some(true)));
+    assert_export(&app, Choice::Scaling(Some(true)));
+
+    open(&mut app, Kind::Method);
+    click_choice(&mut app, Choice::Method(LinearSolverMethod::Mumps));
+    let selector = button(&mut app, Kind::Scaling);
+    let anchor = app.world().get::<ChildOf>(selector).unwrap().parent();
+    assert_eq!(app.world().get::<Node>(anchor).unwrap().display, Display::None);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("model.cnt");
+    hecmw::cnt_writer::write_cnt_file(&path, app.world().resource::<AnalysisSetup>()).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("SCALING="));
+
+    open(&mut app, Kind::Method);
+    click_choice(&mut app, bicgstab);
+    assert_export(&app, Choice::Scaling(Some(true)));
+    open(&mut app, Kind::Scaling);
+    click_choice(&mut app, Choice::Scaling(None));
+    let setup = app.world().resource::<AnalysisSetup>();
+    assert_eq!(setup.solver.matrix_scaling, None);
+    hecmw::cnt_writer::write_cnt_file(&path, setup).unwrap();
+    assert!(!std::fs::read_to_string(path).unwrap().contains("SCALING="));
+}
+
+#[test]
 fn solver_log_menus_keep_settings_across_method_changes_and_export() {
     let mut app = app();
     open(&mut app, Kind::ResidualLog);

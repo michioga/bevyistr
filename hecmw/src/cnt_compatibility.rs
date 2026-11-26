@@ -4,7 +4,8 @@
 
 use super::{CntData, KeywordHeader, parse_keyword_header, strip_comment};
 use fem_core::{
-    AnalysisType, MatrixDumpFormat, PsrVisualControl, SetupImportIssue, SolverSettings, SolverTimeLog,
+    AnalysisType, LinearSolverMethod, MatrixDumpFormat, PsrVisualControl, SetupImportIssue,
+    SolverSettings, SolverTimeLog,
 };
 use std::collections::HashSet;
 
@@ -144,7 +145,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
     let allowed: &[&str] = match name {
         "SOLUTION" => &["TYPE", "NONLINEAR"],
         "SOLVER" => &[
-            "METHOD", "PRECOND", "ITERLOG", "TIMELOG", "DUMPTYPE", "DUMPEXIT",
+            "METHOD", "PRECOND", "ITERLOG", "TIMELOG", "SCALING", "DUMPTYPE", "DUMPEXIT",
         ],
         "BOUNDARY" | "CLOAD" => &["GRPID", "ROT_CENTER"],
         "DLOAD" => &["GRPID"],
@@ -348,11 +349,17 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
 fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
     let defaults = SolverSettings::default();
     let solver = data.solver.as_ref().unwrap_or(&defaults);
-    if !matches!(
-        parameter_value(h, "METHOD").as_deref(),
-        Some("CG" | "GMRES" | "MUMPS" | "DIRECT" | "DIRECTMKL" | "MKL")
-    ) {
-        Some("Unsupported or missing solver METHOD; no automatic substitution is allowed")
+    let Some(method) = h
+        .params
+        .get("METHOD")
+        .and_then(|value| LinearSolverMethod::from_frontistr(value))
+    else {
+        return Some("Unsupported or missing solver METHOD; no automatic substitution is allowed");
+    };
+    if !matches!(parameter_value(h, "SCALING").as_deref(), None | Some("YES" | "NO")) {
+        Some("SCALING must be YES or NO")
+    } else if !method.is_iterative() && h.params.contains_key("SCALING") {
+        Some("SCALING is supported only for iterative solver methods")
     } else if h
         .params
         .get("DUMPTYPE")
@@ -368,7 +375,7 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
         Some("ITERLOG must be YES or NO")
     } else if h.params.get("TIMELOG").is_some_and(|value| SolverTimeLog::from_frontistr(value).is_none()) {
         Some("TIMELOG must be YES, NO or VERBOSE")
-    } else if !solver.solver_method.is_iterative() && body.is_empty() {
+    } else if !method.is_iterative() && body.is_empty() {
         h.params.contains_key("PRECOND")
             .then_some("PRECOND on a direct solver header without data rows cannot be preserved")
     } else if !matches!(
@@ -382,7 +389,7 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
             return Some(reason);
         }
         // Older direct-solver files may include the two standard placeholder rows.
-        if !solver.solver_method.is_iterative()
+        if !method.is_iterative()
             && (body.len() != 2
                 || body[0].split(',').count() != 2
                 || parameters.max_iterations.is_none()
@@ -527,6 +534,7 @@ mod tests {
     fn generated_basic_static_setup_remains_exportable() {
         for method in [
             LinearSolverMethod::Cg,
+            LinearSolverMethod::BiCgStab,
             LinearSolverMethod::Mumps,
             LinearSolverMethod::DirectMkl,
             LinearSolverMethod::Gmres,
