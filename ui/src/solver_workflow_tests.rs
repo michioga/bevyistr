@@ -56,6 +56,7 @@ fn write_reference_project(directory: &Path) {
         young_modulus: Some(YOUNG_MODULUS),
         poisson_ratio: Some(0.0),
         density: None,
+        ..Default::default()
     });
     setup.sections.push(Section {
         name: "BAR".into(),
@@ -592,6 +593,7 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
             young_modulus: Some(1000.0),
             poisson_ratio: Some(0.25),
             density: None,
+            ..Default::default()
         });
     let initial_view = Transform::from_xyz(4.0, 10.0, 20.0);
     let original_layers = RenderLayers::layer(0);
@@ -804,6 +806,7 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         young_modulus: Some(210_000.0),
         poisson_ratio: Some(0.3),
         density: None,
+        ..Default::default()
     });
     setup.sections.push(Section {
         name: "Solid".into(),

@@ -507,6 +507,9 @@ fn format_material_line(material: &fem_core::FemMaterial) -> String {
     if let Some(poisson) = material.poisson_ratio {
         parts.push(format!("nu={poisson:.3}"));
     }
+    if let Some(viscosity) = material.dynamic_viscosity {
+        parts.push(format!("mu={viscosity:.3e}"));
+    }
     if let Some(density) = material.density {
         parts.push(format!("rho={density:.3e}"));
     }

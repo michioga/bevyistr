@@ -2,7 +2,7 @@
 //! reader. Recognizing a card is not enough: ignored parameters/data must also
 //! be reported. Expand this allow-list only with round-trip regression tests.
 
-use super::{CntData, KeywordHeader, parse_keyword_header, strip_comment};
+use super::{CntData, KeywordHeader, parse_keyword_header, parse_material_real, strip_comment};
 use fem_core::{
     AnalysisType, LinearSolverMethod, MatrixDumpFormat, PsrVisualControl, SetupImportIssue,
     SolverSettings, SolverTimeLog,
@@ -17,6 +17,7 @@ pub(super) fn audit(
     let mut issues = Vec::new();
     let mut seen = HashSet::new();
     let mut material = false;
+    let mut fluid_seen = false;
     let mut contact_names = HashSet::new();
     let mut visual = None;
     let mut i = 0;
@@ -68,7 +69,7 @@ pub(super) fn audit(
         let name = header.name.as_str();
         let reason = if matches!(
             name,
-            "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP" | "SOLVER"
+            "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP" | "SOLVER" | "FLUID"
         ) && raw
             .split(',')
             .skip(1)
@@ -83,6 +84,8 @@ pub(super) fn audit(
         ) && !seen.insert(header.name.clone())
         {
             Some("Repeated control cards cannot be preserved".to_string())
+        } else if name == "FLUID" && material && fluid_seen {
+            Some("Repeated FLUID cards within a material cannot be preserved".into())
         } else if name == "CONTACT"
             && body.iter().any(|row| {
                 !contact_names.insert(
@@ -108,7 +111,12 @@ pub(super) fn audit(
         }
         // The reader only consumes material subcards immediately after MATERIAL.
         material = name == "MATERIAL"
-            || (material && (matches!(name, "ELASTIC" | "DENSITY") || name.starts_with("ITEM")));
+            || (material && (matches!(name, "ELASTIC" | "DENSITY" | "FLUID") || name.starts_with("ITEM")));
+        if !material || name == "MATERIAL" {
+            fluid_seen = false;
+        } else if name == "FLUID" {
+            fluid_seen = true;
+        }
     }
     if data
         .solver
@@ -155,6 +163,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "NGROUP" | "NGRP" => &["NGRP"],
         "WRITE" => &["RESULT", "VISUAL", "FREQUENCY"],
         "ELASTIC" => &["TYPE"],
+        "FLUID" => &["TYPE", "DEPENDENCIES"],
         "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "ITEM=1" | "ITEM=2" => &[],
         "STEP" => &["TYPE", "INC_TYPE", "SUBSTEPS", "MAXITER", "CONVERG"],
         "DYNAMIC" => return Some("Dynamic integration settings cannot yet be regenerated".into()),
@@ -310,11 +319,26 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         {
             Some("Only the default ALAGRANGE contact algorithm without extra options is preserved")
         }
+        "FLUID" => {
+            if !material
+                || h.params.get("TYPE").is_some_and(|_| !is("TYPE", "INCOMP_NEWTONIAN"))
+                || h.params.get("DEPENDENCIES").is_some_and(|n| n.parse::<u32>() != Ok(0))
+                || !matches!(body, [row] if parse_material_real(row).is_some_and(|mu| mu.is_finite() && mu > 0.0))
+            {
+                Some("FLUID requires one finite positive viscosity for an incompressible Newtonian material without dependencies")
+            } else {
+                None
+            }
+        }
         "ELASTIC" | "DENSITY" | "ITEM=1" | "ITEM=2" => {
             let elastic = matches!(name, "ELASTIC" | "ITEM=1");
             let values: Option<Vec<f32>> = body.first().and_then(|row| {
                 row.split(',')
-                    .map(|s| s.trim().parse::<f32>().ok())
+                    .map(|value| if name == "DENSITY" {
+                        parse_material_real(value)
+                    } else {
+                        value.trim().parse::<f32>().ok()
+                    })
                     .collect()
             });
             let count = if elastic { 2 } else { 1 };

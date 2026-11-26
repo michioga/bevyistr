@@ -9,6 +9,14 @@
 
 **Color: Material**では同名材料を同じ色で表示します。色が近い場合もあるため、材料名と割り当て情報で最終確認してください。
 
+## 非圧縮ニュートン流体
+
+`18_cavity_flow` を確認する場合は、**Model → Open Project** で例題の `hecmw_ctrl.dat` を開き、**Materials** のプロジェクト材料一覧で `FLUID` を選びます。**Viscosity mu** に `cavityflow.cnt` の `!FLUID`、**Density rho** に `!DENSITY` の値が表示されます。例題ではそれぞれ `0.001` と `1000` です。メッシュ側の同名材料にあるゼロの仮値は、CNTの定義で置き換わります。[`!FLUID` の仕様](https://source-docs.frontistr.com/keyword_reference/cnt/fluid.html) · [`!DENSITY` の仕様](https://source-docs.frontistr.com/keyword_reference/cnt/density.html)
+
+両方の値をモデルの単位系で入力します。Enterで確定し、Escで入力前の値に戻ります。対応範囲は、有限で正の一定の粘度と密度を持つ `INCOMP_NEWTONIAN` です。温度依存のテーブルや他の流体モデルが含まれる場合は、Solveの互換性表示で確認できます。
+
+この開発版では読み込んだ流体材料を確認・編集できます。流体プロジェクト全体の **Export** と **Run FrontISTR** には、時間積分、境界条件グループ、領域分割を含む入力への対応が必要です。
+
 ## materials.toml
 
 起動時に作業ディレクトリの`materials.toml`を読み込みます。なければ実行ファイルの隣を探します。Materialsに表示されるパスが実際の読み込み先です。

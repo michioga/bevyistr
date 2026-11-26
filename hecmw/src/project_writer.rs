@@ -453,6 +453,10 @@ fn validate_analysis_setup(
         } else if !material_names.insert(material.name.as_str()) {
             report.error(&location, "material name is duplicated");
         }
+        if material.dynamic_viscosity.is_some() {
+            // Fluid properties and the analysis type are checked by CNT export validation.
+            continue;
+        }
         match material.young_modulus {
             Some(value) if value.is_finite() && value > 0.0 => {}
             Some(_) => report.error(&location, "Young's modulus must be finite and positive"),

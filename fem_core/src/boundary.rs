@@ -339,9 +339,7 @@ pub enum DistributedLoadKind {
 
 // ─── materials ───────────────────────────────────────────────────────────────
 
-/// Linear-elastic material properties — FrontISTR's `!MATERIAL` +
-/// `!ELASTIC` + `!DENSITY` block, flattened into one struct since prepost
-/// only needs to display/validate these, not drive a solver.
+/// Constant material properties from the FrontISTR material cards.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FemMaterial {
     pub name: String,
@@ -353,6 +351,8 @@ pub struct FemMaterial {
     /// Mass density (solver units, typically t/mm³ or kg/m³ depending on
     /// the model's unit system — `fem_core` does not assume a system).
     pub density: Option<f32>,
+    /// Dynamic viscosity for `!FLUID, TYPE=INCOMP_NEWTONIAN` in model units.
+    pub dynamic_viscosity: Option<f32>,
 }
 
 impl FemMaterial {
@@ -917,6 +917,7 @@ impl AnalysisSetup {
             young_modulus,
             poisson_ratio,
             density,
+            ..Default::default()
         });
 
         self.materials.len() - 1

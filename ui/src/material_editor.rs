@@ -1,4 +1,4 @@
-//! Inline editing of the currently supported isotropic elastic constants.
+//! Inline editing of constant elastic and fluid material properties.
 //!
 //! Text is a draft until Enter; changing the material, model, or page abandons
 //! that draft. Values are in the model's unit system, never implicitly converted.
@@ -19,20 +19,30 @@ const INPUT_FOCUS: Color = Color::srgb(0.57, 0.86, 0.92);
 const INPUT_ERROR: Color = Color::srgb(0.98, 0.36, 0.30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MaterialField {
+pub(crate) enum MaterialField {
     Young,
     Poisson,
     Density,
+    Viscosity,
 }
 
 impl MaterialField {
-    const ALL: [Self; 3] = [Self::Young, Self::Poisson, Self::Density];
+    const ALL: [Self; 4] = [Self::Young, Self::Poisson, Self::Viscosity, Self::Density];
+
+    fn available(self, fluid: bool) -> bool {
+        match self {
+            Self::Young | Self::Poisson => !fluid,
+            Self::Viscosity => fluid,
+            Self::Density => true,
+        }
+    }
 
     fn label(self) -> &'static str {
         match self {
             Self::Young => "Young's modulus E",
             Self::Poisson => "Poisson ratio nu",
             Self::Density => "Density rho",
+            Self::Viscosity => "Viscosity mu",
         }
     }
 
@@ -41,6 +51,7 @@ impl MaterialField {
             Self::Young => material.young_modulus,
             Self::Poisson => material.poisson_ratio,
             Self::Density => material.density,
+            Self::Viscosity => material.dynamic_viscosity,
         }
     }
 
@@ -49,6 +60,7 @@ impl MaterialField {
             Self::Young => material.young_modulus = value,
             Self::Poisson => material.poisson_ratio = value,
             Self::Density => material.density = value,
+            Self::Viscosity => material.dynamic_viscosity = value,
         }
     }
 }
@@ -57,6 +69,11 @@ impl MaterialField {
 pub(crate) struct MaterialValueInput(MaterialField);
 #[derive(Component)]
 pub(crate) struct MaterialFields;
+#[derive(Component)]
+pub(crate) enum MaterialRow {
+    Field(MaterialField),
+    Units { fluid: bool },
+}
 #[derive(Component)]
 pub(crate) struct MaterialEditorStatus;
 #[derive(Component)]
@@ -67,7 +84,7 @@ pub(crate) struct MaterialEditorHeading;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MaterialFingerprint {
     name: String,
-    values: [Option<u32>; 3],
+    values: [Option<u32>; MaterialField::ALL.len()],
 }
 
 impl From<&FemMaterial> for MaterialFingerprint {
@@ -116,11 +133,17 @@ pub(crate) fn spawn_material_exact_editor(parent: &mut ChildSpawnerCommands) {
                     for field in MaterialField::ALL {
                         material_value_row(fields, field);
                     }
-                    fields.spawn((
-                        Text::new("Isotropic elastic | model units\nE: force/length^2; nu: dimensionless; rho: mass/length^3"),
-                        TextFont { font_size: FontSize::Px(9.0), ..default() },
-                        TextColor(TEXT_MUTED),
-                    ));
+                    for (fluid, label) in [
+                        (false, "Isotropic elastic | model units\nE: force/length^2; nu: dimensionless; rho: mass/length^3"),
+                        (true, "Incompressible Newtonian | model units\nmu: mass/(length*time); rho: mass/length^3"),
+                    ] {
+                        fields.spawn((
+                            MaterialRow::Units { fluid },
+                            Text::new(label),
+                            TextFont { font_size: FontSize::Px(9.0), ..default() },
+                            TextColor(TEXT_MUTED),
+                        ));
+                    }
                 });
             editor.spawn((
                 Text::new(""),
@@ -133,13 +156,16 @@ pub(crate) fn spawn_material_exact_editor(parent: &mut ChildSpawnerCommands) {
 
 fn material_value_row(parent: &mut ChildSpawnerCommands, field: MaterialField) {
     parent
-        .spawn(Node {
-            width: percent(100.0),
-            height: px(27.0),
-            align_items: AlignItems::Center,
-            column_gap: px(5.0),
-            ..default()
-        })
+        .spawn((
+            MaterialRow::Field(field),
+            Node {
+                width: percent(100.0),
+                height: px(27.0),
+                align_items: AlignItems::Center,
+                column_gap: px(5.0),
+                ..default()
+            },
+        ))
         .with_children(|row| {
             row.spawn((
                 Text::new(field.label()),
@@ -220,7 +246,7 @@ fn parse_material_value(field: MaterialField, text: &str) -> Result<Option<f32>,
         return Err("value is too small for the supported precision");
     }
     match field {
-        MaterialField::Young | MaterialField::Density if value <= 0.0 => {
+        MaterialField::Young | MaterialField::Density | MaterialField::Viscosity if value <= 0.0 => {
             Err("must be greater than zero")
         }
         MaterialField::Poisson if value <= -1.0 || value >= 0.5 => {
@@ -252,6 +278,7 @@ pub(crate) fn material_numeric_input_system(
         &mut BorderColor,
     )>,
     mut field_panels: Query<&mut Node, With<MaterialFields>>,
+    mut rows: Query<(&MaterialRow, &mut Node), Without<MaterialFields>>,
     mut headings: Query<&mut Text, With<MaterialEditorHeading>>,
     mut statuses: Query<
         (&mut Text, &mut TextColor),
@@ -280,6 +307,7 @@ pub(crate) fn material_numeric_input_system(
     let context = (version.value, fingerprint);
     let context_changed = state.context.as_ref() != Some(&context);
     let active = *page == SidebarPage::Materials && index.is_some();
+    let fluid = index.is_some_and(|i| setup.materials[i].dynamic_viscosity.is_some());
     if context_changed || !active {
         if focus.get().is_some_and(|entity| inputs.contains(entity)) {
             focus.clear();
@@ -292,14 +320,21 @@ pub(crate) fn material_numeric_input_system(
     let focused = focus.get();
     state.error = None;
     for (entity, field, mut input, mut border) in &mut inputs {
-        let is_focused = active && focused == Some(entity);
+        let is_focused = active && focused == Some(entity) && field.0.available(fluid);
         if is_focused && !context_changed {
             if keys.just_pressed(KeyCode::Escape) {
                 focus.clear();
                 keyboard.text_editing = true;
                 state.error = None;
             } else {
-                match parse_material_value(field.0, &editable_value(&input)) {
+                let value = parse_material_value(field.0, &editable_value(&input)).and_then(|value| {
+                    if fluid && value.is_none() {
+                        Err("fluid density is required")
+                    } else {
+                        Ok(value)
+                    }
+                });
+                match value {
                     Ok(value) => {
                         state.error = None;
                         if keys.just_pressed(KeyCode::Enter) && !input.is_composing() {
@@ -348,6 +383,16 @@ pub(crate) fn material_numeric_input_system(
             panel.display = display;
         }
     }
+    for (row, mut node) in &mut rows {
+        let visible = match *row {
+            MaterialRow::Field(field) => field.available(fluid),
+            MaterialRow::Units { fluid: fluid_units } => fluid == fluid_units,
+        };
+        let display = if visible { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+    }
     let heading = index
         .map(|index| {
             let name = &setup.materials[index].name;
@@ -368,6 +413,8 @@ pub(crate) fn material_numeric_input_system(
         "Duplicate material names; resolve before editing".to_string()
     } else if index.is_none() {
         "Choose a project material to edit, or select a library material and confirm the assignment".to_string()
+    } else if fluid {
+        "Enter applies; Esc restores. Viscosity and density must be positive.".to_string()
     } else {
         "Enter applies; Esc restores. Blank rho = unspecified. Editing affects all sections using this material.".to_string()
     };

@@ -51,7 +51,7 @@ Solveの最下部には元ファイル名・行番号・
 | 拘束・荷重の`GRPID` | `GRPID=1`。ヒンジ例題のような省略形は既定値1として扱います。 | `GRPID=2`など、グループ1以外の指定 |
 | `!SOLVER` | 対応METHOD、反復法の`PRECOND=1`／`2`／`3`。標準の2データ行の `NITER`、`iterPREmax`、`NREST`、`NCOLOR_IN`、`RECYCLEPRE`、`RESID`、`SIGMA_DIAG`、`OMEGA` を保持します。反復法の `SCALING`、`ITERLOG`／`TIMELOG`、`DUMPTYPE`／`DUMPEXIT` にも対応します。 | その他の前処理、未知のMETHOD、追加のデータ行や列 |
 | 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析の入力、複数ステップ・自動増分・個別の時間設定・部分グループの有効化 |
-| 材料 | 対応する書式の等方弾性・密度 | 異方弾性、温度依存テーブル、弾塑性、超弾性 |
+| 材料 | 等方弾性・密度。[非圧縮ニュートン流体の一定粘度・密度](../materials.md#非圧縮ニュートン流体)は読込・編集に対応。 | 流体プロジェクト全体のExport／Run、温度依存テーブル、異方弾性、弾塑性、超弾性 |
 | 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |
 | 保存間隔・出力項目 | 基本の`!WRITE`。`!OUTPUT_RES`／`!OUTPUT_VIS`のGROUP／ACTIONなどの拡張カードは単体出力で内容を保持します。 | `!WRITE`の追加オプション、名前付き出力GROUPを含む複数部品の統合出力 |
 

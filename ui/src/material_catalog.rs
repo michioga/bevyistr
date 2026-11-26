@@ -224,6 +224,7 @@ impl LibraryUnits {
             young_modulus: Some((entry.young_pa * e_scale) as f32),
             poisson_ratio: Some(entry.poisson as f32),
             density: entry.density_kg_m3.map(|v| (v * rho_scale) as f32),
+            ..Default::default()
         }
     }
 }

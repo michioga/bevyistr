@@ -48,6 +48,22 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect();
+    for material in &setup.materials {
+        if let Some(mu) = material.dynamic_viscosity {
+            if !mu.is_finite() || mu <= 0.0 {
+                blockers.push(format!("Material {}: fluid viscosity must be finite and positive", material.name));
+            }
+            if material.density.is_none_or(|rho| !rho.is_finite() || rho <= 0.0) {
+                blockers.push(format!("Material {}: fluid density must be finite and positive", material.name));
+            }
+            if material.young_modulus.is_some() || material.poisson_ratio.is_some() {
+                blockers.push(format!("Material {}: mixed fluid and elastic properties cannot be exported", material.name));
+            }
+            if setup.solver.analysis_type != AnalysisType::Dynamic {
+                blockers.push(format!("Material {}: fluid materials require a flow analysis setup", material.name));
+            }
+        }
+    }
     if setup.solver.analysis_type == AnalysisType::Dynamic {
         blockers.push("Dynamic setup is incomplete: integration/time settings are not supported for export or Run. Existing results can still be viewed.".into());
     }
@@ -347,7 +363,9 @@ fn write_material(o: &mut String, mat: &FemMaterial) {
     // Nine significant decimal digits round-trip every finite f32. In
     // particular, fixed-point six-decimal nu formatting can turn 5e-8 into 0.
     writeln!(o, "!MATERIAL, NAME={}", mat.name).unwrap();
-    if mat.young_modulus.is_some() || mat.poisson_ratio.is_some() {
+    if let Some(mu) = mat.dynamic_viscosity {
+        writeln!(o, "!FLUID, TYPE=INCOMP_NEWTONIAN\n {mu:.8e}").unwrap();
+    } else if mat.young_modulus.is_some() || mat.poisson_ratio.is_some() {
         writeln!(o, "!ELASTIC").unwrap();
         writeln!(
             o,
@@ -363,7 +381,11 @@ fn write_material(o: &mut String, mat: &FemMaterial) {
     }
     if let Some(rho) = mat.density {
         writeln!(o, "!DENSITY").unwrap();
-        writeln!(o, " {rho:.8e}, 0.0").unwrap();
+        if mat.dynamic_viscosity.is_some() {
+            writeln!(o, " {rho:.8e}").unwrap();
+        } else {
+            writeln!(o, " {rho:.8e}, 0.0").unwrap();
+        }
     }
     writeln!(o).unwrap();
 }
@@ -486,6 +508,65 @@ mod tests {
         let loaded = crate::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(loaded.unwrap().materials, setup.materials);
+    }
+
+    #[test]
+    fn fluid_material_overrides_mesh_placeholders_and_round_trips_as_fluid() {
+        let mesh = fem_core::FemMesh::demo_hex8();
+        let cnt = "!MATERIAL, NAME=FLUID\n!FLUID, TYPE=INCOMP_NEWTONIAN\n1.2345679D-3\n!DENSITY\n1.0D3\n!END\n";
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("material.cnt");
+        std::fs::write(&path, cnt).unwrap();
+        let imported = crate::load_cnt_file(&path, &mesh, 0).unwrap();
+        assert!(imported.import_issues.is_empty(), "{:?}", imported.import_issues);
+        let mut setup = AnalysisSetup::default();
+        setup.add_material("FLUID", Some(0.0), Some(0.0), Some(0.0));
+        imported.merge_into(&mut setup);
+        let [fluid] = setup.materials.as_slice() else {
+            panic!("expected one material overriding the mesh placeholders");
+        };
+        assert_eq!(fluid.dynamic_viscosity, Some(1.2345679e-3));
+        assert_eq!(fluid.density, Some(1000.0));
+        assert_eq!((fluid.young_modulus, fluid.poisson_ratio), (None, None));
+
+        let mut exported = String::new();
+        write_material(&mut exported, fluid);
+        assert!(exported.contains("!FLUID, TYPE=INCOMP_NEWTONIAN"));
+        assert!(!exported.contains("!ELASTIC"));
+        std::fs::write(&path, exported).unwrap();
+        let reloaded = crate::load_cnt_file(&path, &mesh, 0).unwrap();
+        assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+        assert_eq!(reloaded.materials, setup.materials);
+
+        let path = directory.path().join("unsupported-flow.cnt");
+        for analysis_type in [AnalysisType::Static, AnalysisType::Dynamic] {
+            setup.solver.analysis_type = analysis_type;
+            assert!(write_cnt_file(&path, &setup).is_err());
+            assert!(!path.exists());
+        }
+    }
+
+    #[test]
+    fn invalid_or_temperature_dependent_fluid_cards_are_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unsupported-material.cnt");
+        let mesh = fem_core::FemMesh::demo_hex8();
+        for block in [
+            "!FLUID, TYPE=OTHER\n0.001",
+            "!FLUID, TYPE=INCOMP_NEWTONIAN, TYPE=INCOMP_NEWTONIAN\n0.001",
+            "!FLUID, DEPENDENCIES=1\n0.001,20",
+            "!FLUID\n0",
+            "!FLUID\nNaN",
+            "!FLUID\n1e-3\n2e-3",
+            "!FLUID\n1e-3\n!FLUID\n2e-3",
+            "!FLUID",
+        ] {
+            let text = format!("!MATERIAL, NAME=FLUID\n{block}\n!DENSITY\n1000\n!END");
+            std::fs::write(&path, text).unwrap();
+            let parsed = crate::load_cnt_file(&path, &mesh, 0).unwrap();
+            assert!(parsed.import_issues.iter().any(|issue| issue.keyword.starts_with("!FLUID")), "{block}");
+            assert_eq!(parsed.materials[0].density, Some(1000.0));
+        }
     }
 
     #[test]

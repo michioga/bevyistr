@@ -53,6 +53,38 @@ fn editor_app() -> App {
     app
 }
 
+#[test]
+fn fluid_editor_shows_viscosity_and_requires_positive_density() {
+    let mut app = editor_app();
+    let fluid = FemMaterial {
+        name: "FLUID".into(),
+        density: Some(1000.0),
+        dynamic_viscosity: Some(0.001),
+        ..Default::default()
+    };
+    app.world_mut().resource_mut::<AnalysisSetup>().materials.push(fluid);
+    app.world_mut().resource_mut::<SelectedMaterialForSection>().0 = Some("FLUID".into());
+    app.update();
+    for (field, display) in [
+        (MaterialField::Young, Display::None),
+        (MaterialField::Viscosity, Display::Flex),
+        (MaterialField::Density, Display::Flex),
+    ] {
+        let input = input_entity(&mut app, field);
+        let row = app.world().get::<ChildOf>(input).unwrap().parent();
+        assert_eq!(app.world().get::<Node>(row).unwrap().display, display);
+    }
+    assert_eq!(text(&mut app, MaterialField::Viscosity), "0.001");
+    type_value(&mut app, MaterialField::Viscosity, "2.3e-3");
+    key(&mut app, KeyCode::Enter);
+    type_value(&mut app, MaterialField::Density, "");
+    key(&mut app, KeyCode::Enter);
+    let setup = app.world().resource::<AnalysisSetup>();
+    let fluid = setup.material_by_name("FLUID").unwrap();
+    assert_eq!(fluid.dynamic_viscosity, Some(2.3e-3));
+    assert_eq!(fluid.density, Some(1000.0));
+}
+
 fn input_entity(app: &mut App, field: MaterialField) -> Entity {
     app.world_mut()
         .query::<(Entity, &MaterialValueInput)>()

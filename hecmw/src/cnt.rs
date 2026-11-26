@@ -96,6 +96,15 @@ pub struct CntData {
     pub import_issues: Vec<fem_core::SetupImportIssue>,
 }
 
+fn parse_material_real(text: &str) -> Option<f32> {
+    let text = text.trim();
+    if text.contains(['d', 'D']) {
+        text.replace(['d', 'D'], "e").parse().ok()
+    } else {
+        text.parse().ok()
+    }
+}
+
 impl Default for CntData {
     fn default() -> Self {
         Self {
@@ -807,6 +816,19 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                         }
 
                         i += 1;
+                    } else if sub_trimmed.split(',').next().map(str::trim) == Some("!FLUID") {
+                        let fluid = parse_keyword_header(sub_trimmed);
+                        i += 1;
+                        skip_comment_lines(&lines, &mut i);
+                        if let Some(row) = lines.get(i).map(|line| strip_comment(line)) {
+                            if !is_keyword(row) {
+                                if fluid.params.get("TYPE").is_none_or(|kind| kind == "INCOMP_NEWTONIAN") {
+                                    material.dynamic_viscosity =
+                                        parse_material_real(row);
+                                }
+                                i += 1;
+                            }
+                        }
                     } else if sub_trimmed.starts_with("!DENSITY") {
                         // Older/simpler files use a standalone !DENSITY
                         // block instead of !MATERIAL's !ITEM=2.
@@ -816,7 +838,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                             .get(i)
                             .map(|l| strip_comment(l))
                             .and_then(|l| l.split(',').next())
-                            .and_then(|v| v.trim().parse::<f32>().ok())
+                            .and_then(parse_material_real)
                             .as_ref()
                         {
                             material.density = Some(density);
@@ -1107,6 +1129,7 @@ mod tests {
             young_modulus: Some(1.0),
             poisson_ratio: Some(0.1),
             density: None,
+            ..Default::default()
         });
         CntData {
             materials: vec![FemMaterial {
@@ -1114,6 +1137,7 @@ mod tests {
                 young_modulus: Some(210_000.0),
                 poisson_ratio: Some(0.3),
                 density: Some(7.85e-9),
+                ..Default::default()
             }],
             ..Default::default()
         }

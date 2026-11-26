@@ -144,6 +144,31 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
 }
 
 #[test]
+#[ignore = "Requires BEVYISTR_TUTORIAL_DIR; checks the original cavity-flow MSH and CNT"]
+fn tutorial_cavity_flow_material_overrides_mesh_placeholders() {
+    use fem_core::{AnalysisSetup, FemModel};
+
+    let folder = root().join("18_cavity_flow");
+    let project = hecmw::load_mesh_project(folder.join("cavityflow.msh")).unwrap();
+    let mut setup = AnalysisSetup {
+        materials: project.materials,
+        sections: project.sections,
+        import_issues: project.import_issues,
+        ..Default::default()
+    };
+    assert_eq!(setup.material_by_name("FLUID").unwrap().density, Some(0.0));
+    let data = hecmw::load_cnt_file(folder.join("cavityflow.cnt"), &project.mesh, 0).unwrap();
+    assert!(!data.import_issues.iter().any(|issue| issue.keyword.starts_with("!FLUID")));
+    data.merge_into(&mut setup);
+    let fluid = setup.material_by_name("FLUID").unwrap();
+    assert_eq!(fluid.dynamic_viscosity, Some(0.001));
+    assert_eq!(fluid.density, Some(1000.0));
+    assert_eq!((fluid.young_modulus, fluid.poisson_ratio), (None, None));
+    let model = FemModel::single_mesh("Cavity flow", project.mesh);
+    assert!(hecmw::validate_frontistr_project(&model, &setup).has_errors());
+}
+
+#[test]
 #[ignore = "Requires BEVYISTR_TUTORIAL_DIR; complete eight-rank cavity-flow RES and PVTU output"]
 fn tutorial_flow_components_and_constant_fields() {
     let folder = root().join("18_cavity_flow");
