@@ -92,19 +92,21 @@ fn parse(text: &str) -> io::Result<Settings> {
     Ok(settings)
 }
 
+pub fn rcb_split_count(ranks: u16) -> Option<usize> {
+    ranks.is_power_of_two().then(|| ranks.ilog2() as usize)
+}
+
 pub fn validate(settings: &Settings, ranks: u16, has_contact: bool) -> io::Result<()> {
     if ranks == 0 {
         return Err(invalid("Partition DOMAIN must be positive"));
     }
-    if let Method::Rcb(axes) = &settings.method {
-        if !ranks.is_power_of_two()
-            || axes.len() != ranks.ilog2() as usize
-            || !axes.iter().all(|axis| matches!(axis, 'x' | 'y' | 'z'))
-        {
-            return Err(invalid(
-                "RCB requires a power-of-two DOMAIN and one axis per split",
-            ));
-        }
+    if let Method::Rcb(axes) = &settings.method
+        && (rcb_split_count(ranks) != Some(axes.len())
+            || !axes.iter().all(|axis| matches!(axis, 'x' | 'y' | 'z')))
+    {
+        return Err(invalid(
+            "RCB requires a power-of-two DOMAIN and one axis per split",
+        ));
     }
     if settings.element_based
         && (settings.depth.is_some() || settings.contact_owner.is_some() || has_contact)
@@ -137,11 +139,8 @@ pub fn validate(settings: &Settings, ranks: u16, has_contact: bool) -> io::Resul
 }
 
 pub(crate) fn format(settings: Option<&Settings>, ranks: u16) -> io::Result<String> {
-    let Some(settings) = settings else {
-        return Ok(format!(
-            "!PARTITION, TYPE=NODE-BASED, METHOD=PMETIS, DOMAIN={ranks}\n"
-        ));
-    };
+    let defaults = Settings::default();
+    let settings = settings.unwrap_or(&defaults);
     validate(settings, ranks, false)?;
     let kind = if settings.element_based {
         "ELEMENT-BASED"

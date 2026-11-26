@@ -100,7 +100,9 @@ MPIでは`hecmw_part_ctrl.dat`を生成して`hecmw_part1`で領域分割し、`
 **Solve → FRONTISTR EXECUTION → MPI** に実行ファイルの選択欄が表示されます。
 **Choose hecmw_part1...** と **Choose mpiexec / mpirun...** で指定し、**Auto** で自動検索に戻せます。
 分割ツールは`fistr1`と同じフォルダを先に調べ、その後PATHを検索します。ランチャーはPATHを検索します。
-MPI ranksは新しい`hecmw_part_ctrl.dat`の`DOMAIN`に反映されます。新規作成時は`NODE-BASED / PMETIS`を使い、既存プロジェクトでは対応する分割方式・`DEPTH`・`UCD`・`CONTACT`・`CONTACT_OWNER`を保持します。
+**Partition method** で **PMETIS**、**KMETIS**、**RCB** を選びます。新規プロジェクトの既定値は`NODE-BASED / PMETIS`です。既存プロジェクトでは、読み込んだ分割タイプ・方式・`DEPTH`・`UCD`・`CONTACT`・`CONTACT_OWNER`を引き継ぎます。例えば `18_cavity_flow` は8ランクの **KMETIS** です。
+
+**MPI ranks** が `DOMAIN` になります。PMETISとKMETISにはMETISが有効な `hecmw_part1` が必要です。RCBのランク数は1、2、4、8などの2の累乗です。例えば8ランクでは3個の軸を指定します。番号付きの軸ボタンを押すと **X → Y → Z** の順で切り替わり、選んだ順に `hecmw_part_ctrl.dat` の2行目に書き出します。初めて設定する軸は X、Y、Z の順に割り当てます。 [FrontISTRの領域分割](https://source-docs.frontistr.com/functions_reference/10_partition.html#分割手法)
 出力先フォルダに、分割と実行に必要な制御ファイルを生成します。
 
 FrontISTRでは、`hecmw_ctrl.dat`の`part_in`／`part_out`で分割対象と出力先を指定し、`hecmw_part_ctrl.dat`の`!PARTITION`で分割数や手法を指定します。 [全体制御データと並列処理手順](https://source-docs.frontistr.com/execution_guide/procedure/02_parallel.html) · [領域分割 `!PARTITION`](https://source-docs.frontistr.com/keyword_reference/part/partition.html) · [4領域に分割するヒンジ例題](https://source-docs.frontistr.com/examples/tutorial_02.html)

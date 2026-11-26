@@ -796,6 +796,20 @@ pub struct FrontistrPartitionSettings {
     pub contact_owner: Option<String>,
 }
 
+impl Default for FrontistrPartitionSettings {
+    fn default() -> Self {
+        Self {
+            element_based: false,
+            method: FrontistrPartitionMethod::Pmetis,
+            domains: std::num::NonZeroU16::MIN,
+            depth: None,
+            ucd: None,
+            contact: None,
+            contact_owner: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrontistrPartitionMethod {
     Rcb(Vec<char>),

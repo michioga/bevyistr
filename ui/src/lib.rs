@@ -162,7 +162,7 @@ use solver_runner::{
     openmp_thread_adjust_button_system,
     run_frontistr_button_system, select_frontistr_executable_system,
     solver_launch_mode_button_system, stop_frontistr_button_system, update_frontistr_run_ui_system,
-    update_mpi_rank_controls_system, update_mpi_tools,
+    update_mpi_partition, update_mpi_rank_controls_system, update_mpi_tools,
     update_openmp_thread_controls_system,
 };
 
@@ -565,10 +565,12 @@ impl Plugin for UiPlugin {
                 solver_launch_mode_button_system,
                 update_mpi_tools.after(solver_launch_mode_button_system),
                 mpi_rank_adjust_button_system.after(solver_launch_mode_button_system),
+                update_mpi_partition.after(mpi_rank_adjust_button_system),
                 openmp_thread_adjust_button_system,
                 run_frontistr_button_system
                     .after(solver_launch_mode_button_system)
                     .after(update_mpi_tools)
+                    .after(update_mpi_partition)
                     .after(mpi_rank_adjust_button_system)
                     .after(openmp_thread_adjust_button_system)
                     .after(select_frontistr_executable_system)
@@ -632,6 +634,7 @@ impl Plugin for UiPlugin {
                     .after(solver_numeric_input_system)
                     .after(material_numeric_input_system)
                     .after(output_interval::update)
+                    .after(update_mpi_partition)
                     .after(add_section_button_system)
                     .after(measurement_box_input_system),
                 undo_redo_system

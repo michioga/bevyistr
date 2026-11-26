@@ -125,9 +125,9 @@ The in-application Selection guide shows the active controls and can be collapse
 Choose the `fistr1` executable once in Solve: its path, Direct/MPI mode, MPI rank count, and last output folder are saved automatically to **bevyistr.toml** and restored on the next launch. Alternatively, put `fistr1` on `PATH`. Explicit paths for `hecmw_part1` and the MPI launcher can also be configured in TOML.
 
 - **Direct** runs one `fistr1` process with `HECMW-ENTIRE` input.
-- **MPI** follows FrontISTR's [partition-then-solve workflow](https://source-docs.frontistr.com/execution_guide/overview/01_flow.html). It writes `hecmw_part_ctrl.dat` (`TYPE=NODE-BASED, METHOD=PMETIS, DOMAIN=N`) and `hecmw_ctrl.dat` (`part_in`: entire mesh; `part_out` and `fstrMSH`: distributed mesh), runs `hecmw_part1`, checks all N partition files, and only then runs `mpiexec -n N fistr1` (or `mpirun`). Failed or cancelled partitioning never proceeds to the solver. `hecmw_part1` is found beside the selected `fistr1`, then on the effective runtime `PATH`.
+- **MPI** follows FrontISTR's [partition-then-solve workflow](https://source-docs.frontistr.com/execution_guide/overview/01_flow.html). In Solve, choose **PMETIS**, **KMETIS**, or **RCB** under **Partition method**. RCB requires a power-of-two rank count and an axis for each split. A new project defaults to node-based PMETIS. bevyistr writes `hecmw_part_ctrl.dat` with the chosen method and rank count and writes `hecmw_ctrl.dat` (`part_in`: entire mesh; `part_out` and `fstrMSH`: distributed mesh), runs `hecmw_part1`, checks all N partition files, and only then runs `mpiexec -n N fistr1` (or `mpirun`). Failed or cancelled partitioning never proceeds to the solver. `hecmw_part1` is found beside the selected `fistr1`, then on the effective runtime `PATH`.
 
-Each MPI run uses a fresh `bevyistr_part_*` mesh prefix so old partition files cannot mask missing output. These files remain in the export folder; rerunning Direct or Export restores the entire-mesh control file. **Open Project** uses the original entire mesh (`part_in`) when reopening such a parallel project. The installed partitioner must support PMETIS, and the MPI launcher must match the MPI implementation used to build FrontISTR.
+Each MPI run uses a fresh `bevyistr_part_*` mesh prefix so old partition files cannot mask missing output. These files remain in the export folder; rerunning Direct or Export restores the entire-mesh control file. **Open Project** uses the original entire mesh (`part_in`) when reopening such a parallel project. PMETIS and KMETIS require a METIS-enabled partitioner. The MPI launcher must match the MPI implementation used to build FrontISTR.
 
 On Windows, an installed Intel oneAPI `setvars.bat` is detected and applied to child processes when Intel MPI is not already configured. Set `FRONTISTR_RUNTIME=inherit` to keep an environment you prepared yourself. Linux inherits the launching environment without invoking this Windows adapter. Process cancellation targets the local run's child processes, not unrelated FrontISTR jobs.
 
@@ -373,7 +373,7 @@ Prerequisites:
 - A graphics adapter/backend supported by Bevy/wgpu
 - Optional: `gmsh` on `PATH` for `.geo` meshing
 - FrontISTR installed separately to solve exported projects (`fistr1` on `PATH`, selected in Solve, or named by `FRONTISTR_EXECUTABLE`)
-- For parallel execution: `hecmw_part1` with PMETIS support and an MPI launcher compatible with the installed FrontISTR
+- Parallel execution requires `hecmw_part1` and an MPI launcher compatible with the installed FrontISTR. PMETIS and KMETIS require METIS support.
 
 The Ubuntu 24.04 CI installs these build dependencies:
 
