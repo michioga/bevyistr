@@ -50,19 +50,20 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         .map(ToString::to_string)
         .collect();
     for material in &setup.materials {
-        if let Some(mu) = material.dynamic_viscosity {
-            if !mu.is_finite() || mu <= 0.0 {
-                blockers.push(format!("Material {}: fluid viscosity must be finite and positive", material.name));
-            }
-            if material.density.is_none_or(|rho| !rho.is_finite() || rho <= 0.0) {
-                blockers.push(format!("Material {}: fluid density must be finite and positive", material.name));
-            }
-            if material.young_modulus.is_some() || material.poisson_ratio.is_some() {
-                blockers.push(format!("Material {}: mixed fluid and elastic properties cannot be exported", material.name));
-            }
-            if setup.solver.analysis_type != AnalysisType::Dynamic {
-                blockers.push(format!("Material {}: fluid materials require a flow analysis setup", material.name));
-            }
+        if !material.is_fluid() {
+            continue;
+        }
+        if material.dynamic_viscosity.is_none_or(|mu| !mu.is_finite() || mu <= 0.0) {
+            blockers.push(format!("Material {}: fluid viscosity must be finite and positive", material.name));
+        }
+        if material.density.is_none_or(|rho| !rho.is_finite() || rho <= 0.0) {
+            blockers.push(format!("Material {}: fluid density must be finite and positive", material.name));
+        }
+        if material.young_modulus.is_some() || material.poisson_ratio.is_some() {
+            blockers.push(format!("Material {}: mixed fluid and elastic properties cannot be exported", material.name));
+        }
+        if setup.solver.analysis_type != AnalysisType::Dynamic {
+            blockers.push(format!("Material {}: fluid materials require a flow analysis setup", material.name));
         }
     }
     if setup.solver.analysis_type == AnalysisType::Dynamic {

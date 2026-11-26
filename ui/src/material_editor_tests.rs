@@ -57,10 +57,8 @@ fn editor_app() -> App {
 fn fluid_editor_shows_viscosity_and_requires_positive_density() {
     let mut app = editor_app();
     let fluid = FemMaterial {
-        name: "FLUID".into(),
-        density: Some(1000.0),
-        dynamic_viscosity: Some(0.001),
-        ..Default::default()
+        mesh_fluid_placeholder: true,
+        ..FemMaterial::new("FLUID")
     };
     app.world_mut().resource_mut::<AnalysisSetup>().materials.push(fluid);
     app.world_mut().resource_mut::<SelectedMaterialForSection>().0 = Some("FLUID".into());
@@ -74,7 +72,10 @@ fn fluid_editor_shows_viscosity_and_requires_positive_density() {
         let row = app.world().get::<ChildOf>(input).unwrap().parent();
         assert_eq!(app.world().get::<Node>(row).unwrap().display, display);
     }
-    assert_eq!(text(&mut app, MaterialField::Viscosity), "0.001");
+    assert_eq!(text(&mut app, MaterialField::Viscosity), "");
+    assert_eq!(text(&mut app, MaterialField::Density), "");
+    type_value(&mut app, MaterialField::Density, "1000");
+    key(&mut app, KeyCode::Enter);
     type_value(&mut app, MaterialField::Viscosity, "2.3e-3");
     key(&mut app, KeyCode::Enter);
     type_value(&mut app, MaterialField::Density, "");

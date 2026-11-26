@@ -156,7 +156,24 @@ fn tutorial_cavity_flow_material_and_time_integration() {
         import_issues: project.import_issues,
         ..Default::default()
     };
-    assert_eq!(setup.material_by_name("FLUID").unwrap().density, Some(0.0));
+    assert!(setup.import_issues.is_empty(), "{:?}", setup.import_issues);
+    let placeholder = setup.material_by_name("FLUID").unwrap().clone();
+    assert!(placeholder.mesh_fluid_placeholder);
+    assert_eq!(
+        (
+            placeholder.young_modulus,
+            placeholder.poisson_ratio,
+            placeholder.density,
+            placeholder.dynamic_viscosity,
+        ),
+        (None, None, None, None)
+    );
+    let [section] = setup.sections.as_slice() else {
+        panic!("Expected one fluid section");
+    };
+    assert_eq!(section.element_set_name.as_deref(), Some("ELEMENT_ALL"));
+    assert_eq!(section.material_name, "FLUID");
+    assert_eq!(section.kind, fem_core::SectionKind::Solid);
     let data = hecmw::load_cnt_file(folder.join("cavityflow.cnt"), &project.mesh, 0).unwrap();
     assert!(
         !data.import_issues.iter().any(|issue| {
@@ -195,8 +212,23 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     assert_eq!(fluid.dynamic_viscosity, Some(0.001));
     assert_eq!(fluid.density, Some(1000.0));
     assert_eq!((fluid.young_modulus, fluid.poisson_ratio), (None, None));
+    assert!(fluid.mesh_fluid_placeholder);
     let model = FemModel::single_mesh("Cavity flow", project.mesh);
     assert!(hecmw::validate_frontistr_project(&model, &setup).has_errors());
+
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("roundtrip.msh");
+    hecmw::write_msh_file_with_setup(&destination, &model, 0, &setup).unwrap();
+    let reloaded = hecmw::load_mesh_project(destination).unwrap();
+    assert!(
+        reloaded.import_issues.is_empty(),
+        "{:?}",
+        reloaded.import_issues
+    );
+    assert_eq!(reloaded.materials, [placeholder]);
+    assert_eq!(reloaded.sections, setup.sections);
+    assert_eq!(reloaded.mesh.elements, model.meshes[0].elements);
+    assert_eq!(reloaded.mesh.node_sets, model.meshes[0].node_sets);
 }
 
 #[test]

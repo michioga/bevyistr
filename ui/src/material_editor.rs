@@ -84,6 +84,7 @@ pub(crate) struct MaterialEditorHeading;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MaterialFingerprint {
     name: String,
+    fluid: bool,
     values: [Option<u32>; MaterialField::ALL.len()],
 }
 
@@ -91,6 +92,7 @@ impl From<&FemMaterial> for MaterialFingerprint {
     fn from(material: &FemMaterial) -> Self {
         Self {
             name: material.name.clone(),
+            fluid: material.is_fluid(),
             values: MaterialField::ALL.map(|field| field.value(material).map(f32::to_bits)),
         }
     }
@@ -307,7 +309,7 @@ pub(crate) fn material_numeric_input_system(
     let context = (version.value, fingerprint);
     let context_changed = state.context.as_ref() != Some(&context);
     let active = *page == SidebarPage::Materials && index.is_some();
-    let fluid = index.is_some_and(|i| setup.materials[i].dynamic_viscosity.is_some());
+    let fluid = index.is_some_and(|i| setup.materials[i].is_fluid());
     if context_changed || !active {
         if focus.get().is_some_and(|entity| inputs.contains(entity)) {
             focus.clear();

@@ -359,9 +359,17 @@ pub struct FemMaterial {
     pub density: Option<f32>,
     /// Dynamic viscosity for `!FLUID, TYPE=INCOMP_NEWTONIAN` in model units.
     pub dynamic_viscosity: Option<f32>,
+
+    /// The MSH declares three zero-valued items for a fluid section. The
+    /// physical density and viscosity, when present, come from the CNT.
+    pub mesh_fluid_placeholder: bool,
 }
 
 impl FemMaterial {
+    pub fn is_fluid(&self) -> bool {
+        self.mesh_fluid_placeholder || self.dynamic_viscosity.is_some()
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),

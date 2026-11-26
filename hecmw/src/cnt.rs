@@ -148,12 +148,13 @@ impl CntData {
         setup.nodal_loads.extend(self.nodal_loads);
         setup.distributed_loads.extend(self.distributed_loads);
 
-        for material in self.materials {
+        for mut material in self.materials {
             if let Some(existing) = setup
                 .materials
                 .iter_mut()
                 .find(|existing| existing.name == material.name)
             {
+                material.mesh_fluid_placeholder = existing.mesh_fluid_placeholder;
                 *existing = material;
             } else {
                 setup.materials.push(material);

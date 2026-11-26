@@ -627,6 +627,16 @@ fn generate_ranges(ids: &[u32]) -> Vec<GenerateRange> {
 /// elastic properties here also keeps a standalone `.msh` useful.
 fn write_mesh_materials(out: &mut String, materials: &[FemMaterial]) {
     for material in materials {
+        if material.mesh_fluid_placeholder {
+            writeln!(out, "!MATERIAL,NAME={},ITEM=3", material.name).unwrap();
+            writeln!(
+                out,
+                "!ITEM=1,SUBITEM=2\n 0,0\n!ITEM=2,SUBITEM=1\n 0\n!ITEM=3,SUBITEM=1\n 0",
+            )
+            .unwrap();
+            continue;
+        }
+
         let item_count = if material.density.is_some() { 2 } else { 1 };
         writeln!(out, "!MATERIAL,NAME={},ITEM={item_count}", material.name,).unwrap();
         writeln!(out, "!ITEM=1,SUBITEM=2").unwrap();

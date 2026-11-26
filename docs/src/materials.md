@@ -11,11 +11,11 @@
 
 ## 非圧縮ニュートン流体
 
-`18_cavity_flow` を確認する場合は、**Model → Open Project** で例題の `hecmw_ctrl.dat` を開き、**Materials** のプロジェクト材料一覧で `FLUID` を選びます。**Viscosity mu** に `cavityflow.cnt` の `!FLUID`、**Density rho** に `!DENSITY` の値が表示されます。例題ではそれぞれ `0.001` と `1000` です。メッシュ側の同名材料にあるゼロの仮値は、CNTの定義で置き換わります。[`!FLUID` の仕様](https://source-docs.frontistr.com/keyword_reference/cnt/fluid.html) · [`!DENSITY` の仕様](https://source-docs.frontistr.com/keyword_reference/cnt/density.html)
+`18_cavity_flow` を確認する場合は、**Model → Open Project** で例題の `hecmw_ctrl.dat` を開き、**Materials** のプロジェクト材料一覧で `FLUID` を選びます。**Viscosity mu** に `cavityflow.cnt` の `!FLUID`、**Density rho** に `!DENSITY` の値が表示されます。例題ではそれぞれ `0.001` と `1000` です。メッシュ側のゼロ値は節点4自由度の流体要素 `3414` 用の材料定義として保持し、粘度・密度にはCNT側の値を使います。[`!FLUID` の仕様](https://source-docs.frontistr.com/keyword_reference/cnt/fluid.html) · [`!DENSITY` の仕様](https://source-docs.frontistr.com/keyword_reference/cnt/density.html)
 
 両方の値をモデルの単位系で入力します。Enterで確定し、Escで入力前の値に戻ります。対応範囲は、有限で正の一定の粘度と密度を持つ `INCOMP_NEWTONIAN` です。温度依存のテーブルや他の流体モデルが含まれる場合は、Solveの互換性表示で確認できます。
 
-この開発版では読み込んだ流体材料を確認・編集できます。流体プロジェクト全体の **Export** と **Run FrontISTR** には、境界条件グループを参照する `!STEP`、領域分割など、解析全体の入力への対応が必要です。
+例題の `.msh` だけを開いた場合は、粘度と密度が未定義なので両欄を空欄で表示します。MSHの再出力では元の `!SECTION, TYPE=SOLID` の割り当てと、同名の `!MATERIAL, ITEM=3` のゼロ3項目を保持します。流体プロジェクト全体の **Export** と **Run FrontISTR** は対応準備中です。 [FrontISTRの `!MATERIAL` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/material.html) · [`!SECTION` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/section.html)
 
 ## materials.toml
 
