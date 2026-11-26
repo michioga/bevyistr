@@ -61,6 +61,35 @@ fn key(app: &mut App, code: KeyCode) {
 }
 
 #[test]
+fn imported_time_integration_can_be_edited_without_changing_step_controls() {
+    let mut app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("time.cnt");
+    std::fs::write(&path, concat!(
+        "!SOLUTION, TYPE=DYNAMIC\n!DYNAMIC, TYPE=NONLINEAR\n",
+        "1,1\n0,1e5,10000,10\n0.5,0.25\n1,1,0,0\n50,1,50\n1,0,0,0,0,0\n!END\n"
+    )).unwrap();
+    hecmw::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0)
+        .unwrap().merge_into(&mut app.world_mut().resource_mut::<AnalysisSetup>());
+    app.update();
+
+    type_value(&mut app, SolverField::DynamicIncrement, "0");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.world().resource::<AnalysisSetup>().solver.dynamic.as_ref().unwrap().fallback_increment, 10.);
+    key(&mut app, KeyCode::Escape);
+    type_value(&mut app, SolverField::DynamicIncrement, "1.2345678901234567");
+    key(&mut app, KeyCode::Enter);
+    type_value(&mut app, SolverField::DynamicSubsteps, "1234");
+    key(&mut app, KeyCode::Enter);
+    let settings = &app.world().resource::<AnalysisSetup>().solver;
+    let dynamic = settings.dynamic.as_ref().unwrap();
+    assert_eq!(dynamic.fallback_increment, 1.2345678901234567);
+    assert_eq!(dynamic.fallback_substeps, 1234);
+    assert_eq!(dynamic.gamma, 0.5);
+    assert_eq!(settings.substeps, 1);
+}
+
+#[test]
 fn eigen_values_commit_restore_and_undo_at_f64_precision() {
     let mut app = app();
     let before = app.world().resource::<AnalysisSetup>().solver.clone();

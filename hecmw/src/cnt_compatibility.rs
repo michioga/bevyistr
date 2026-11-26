@@ -69,7 +69,7 @@ pub(super) fn audit(
         let name = header.name.as_str();
         let reason = if matches!(
             name,
-            "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP" | "SOLVER" | "FLUID"
+            "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP" | "SOLVER" | "FLUID" | "DYNAMIC"
         ) && raw
             .split(',')
             .skip(1)
@@ -80,7 +80,7 @@ pub(super) fn audit(
             Some("Repeated or empty parameters cannot be preserved unambiguously".to_string())
         } else if matches!(
             name,
-            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP" | "CONTACT_ALGO"
+            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP" | "CONTACT_ALGO" | "DYNAMIC"
         ) && !seen.insert(header.name.clone())
         {
             Some("Repeated control cards cannot be preserved".to_string())
@@ -166,7 +166,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "FLUID" => &["TYPE", "DEPENDENCIES"],
         "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "ITEM=1" | "ITEM=2" => &[],
         "STEP" => &["TYPE", "INC_TYPE", "SUBSTEPS", "MAXITER", "CONVERG"],
-        "DYNAMIC" => return Some("Dynamic integration settings cannot yet be regenerated".into()),
+        "DYNAMIC" => &["TYPE"],
         "SECTION" => {
             return Some(
                 "CNT section formulation/orientation is not preserved by the editor".into(),
@@ -203,8 +203,6 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 Some(
                     "Unsupported or missing analysis TYPE; displayed solver defaults are not the imported analysis",
                 )
-            } else if is("TYPE", "DYNAMIC") {
-                Some("Dynamic setup authoring is incomplete; inspection only")
             } else if h.params.contains_key("NONLINEAR")
                 && (!matches!(value("TYPE").as_deref(), Some("STATIC" | "NLSTATIC"))
                     || !is("NONLINEAR", ""))
@@ -214,6 +212,13 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 Some("Unexpected SOLUTION data")
             } else {
                 None
+            }
+        }
+        "DYNAMIC" => {
+            if data.solver.as_ref().is_none_or(|solver| solver.analysis_type != AnalysisType::Dynamic) {
+                Some("DYNAMIC controls require SOLUTION, TYPE=DYNAMIC")
+            } else {
+                super::dynamic_settings::parse(h, body).err()
             }
         }
         "SOLVER" => check_solver(h, body, data),
@@ -851,6 +856,48 @@ mod tests {
         }
         std::fs::remove_file(source).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn newmark_dynamic_settings_round_trip_without_enabling_incomplete_project_export() {
+        let source = concat!(
+            "!SOLUTION, TYPE=DYNAMIC\n",
+            "!DYNAMIC, TYPE=NONLINEAR\n",
+            "1,1\n0,1d5,10000,10\n0.5,0.25\n1,1,0,0\n",
+            "50,MONITOR,50\n1,0,0,0,2,3\n!END\n",
+        );
+        let data = read(source);
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        let mut setup = AnalysisSetup::default();
+        data.merge_into(&mut setup);
+        let settings = setup.solver.dynamic.as_ref().unwrap();
+        assert!(settings.nonlinear);
+        assert_eq!(settings.fallback_substeps, 10000);
+        assert_eq!(settings.fallback_increment, 10.);
+        assert_eq!(settings.monitor_node_or_group, "MONITOR");
+        assert_eq!(settings.output_flags, [1, 0, 0, 0, 2, 3]);
+        let generated = crate::cnt_writer::build_cnt(&setup, &[]);
+        let reloaded = read(&generated);
+        assert_eq!(reloaded.solver.unwrap().dynamic, setup.solver.dynamic);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dynamic.cnt");
+        let error = crate::write_cnt_file(&path, &setup).unwrap_err().to_string();
+        assert!(error.contains("Full STEP and boundary/load group controls"));
+        assert!(!path.exists());
+
+        for (before, after) in [
+            ("1,1\n0,1d5", "2,1\n0,1d5"),
+            ("1,1\n0,1d5", "11,1\n0,1d5"),
+            ("1,1\n0,1d5", "1,2\n0,1d5"),
+            ("10000,10", "10000,0"),
+            ("0.5,0.25", "0.5,NaN"),
+            ("50,MONITOR,50", "50,,50"),
+            ("0,2,3\n", "0,2,4\n"),
+        ] {
+            let data = read(&source.replace(before, after));
+            assert!(data.import_issues.iter().any(|issue| issue.keyword.starts_with("!DYNAMIC")), "{after}");
+            assert!(data.solver.unwrap().dynamic.is_none());
+        }
     }
 
     #[test]

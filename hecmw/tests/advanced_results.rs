@@ -145,7 +145,7 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
 
 #[test]
 #[ignore = "Requires BEVYISTR_TUTORIAL_DIR; checks the original cavity-flow MSH and CNT"]
-fn tutorial_cavity_flow_material_overrides_mesh_placeholders() {
+fn tutorial_cavity_flow_material_and_time_integration() {
     use fem_core::{AnalysisSetup, FemModel};
 
     let folder = root().join("18_cavity_flow");
@@ -158,8 +158,17 @@ fn tutorial_cavity_flow_material_overrides_mesh_placeholders() {
     };
     assert_eq!(setup.material_by_name("FLUID").unwrap().density, Some(0.0));
     let data = hecmw::load_cnt_file(folder.join("cavityflow.cnt"), &project.mesh, 0).unwrap();
-    assert!(!data.import_issues.iter().any(|issue| issue.keyword.starts_with("!FLUID")));
+    assert!(!data.import_issues.iter().any(|issue| {
+        issue.keyword.starts_with("!FLUID") || issue.keyword.starts_with("!DYNAMIC")
+    }));
     data.merge_into(&mut setup);
+    let dynamic = setup.solver.dynamic.as_ref().unwrap();
+    assert_eq!((dynamic.start_time, dynamic.end_time), (0., 1e5));
+    assert_eq!((dynamic.fallback_substeps, dynamic.fallback_increment), (10000, 10.));
+    assert_eq!((dynamic.gamma, dynamic.beta), (0.5, 0.25));
+    assert_eq!(dynamic.monitor_node_or_group, "1");
+    assert_eq!(dynamic.monitor_interval, 50);
+    assert_eq!(dynamic.output_flags, [1, 0, 0, 0, 0, 0]);
     let fluid = setup.material_by_name("FLUID").unwrap();
     assert_eq!(fluid.dynamic_viscosity, Some(0.001));
     assert_eq!(fluid.density, Some(1000.0));

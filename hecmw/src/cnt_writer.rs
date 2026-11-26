@@ -65,7 +65,12 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         }
     }
     if setup.solver.analysis_type == AnalysisType::Dynamic {
-        blockers.push("Dynamic setup is incomplete: integration/time settings are not supported for export or Run. Existing results can still be viewed.".into());
+        let details = if setup.solver.dynamic.is_some() {
+            "Full STEP and boundary/load group controls are required before Export or Run."
+        } else {
+            "A supported DYNAMIC time-history card and STEP controls are required."
+        };
+        blockers.push(format!("Dynamic setup is incomplete: {details}"));
     }
     if setup.solver.analysis_type == AnalysisType::Eigen {
         if let Err(reason) = setup.solver.eigen.validate() {
@@ -145,7 +150,9 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
             .unwrap();
         }
         AnalysisType::Dynamic => {
-            writeln!(o, "!DYNAMIC").unwrap();
+            if let Some(dynamic) = &s.dynamic {
+                write_dynamic(&mut o, dynamic);
+            }
         }
     }
 
@@ -357,6 +364,32 @@ fn write_contact(out: &mut String, contact: &ContactPair, group_id: usize) {
         }
     }
     writeln!(out).unwrap();
+}
+
+fn write_dynamic(output: &mut String, settings: &fem_core::DynamicSettings) {
+    let kind = if settings.nonlinear { "NONLINEAR" } else { "LINEAR" };
+    writeln!(output, "!DYNAMIC, TYPE={kind}\n 1, 1").unwrap();
+    writeln!(
+        output,
+        " {:e}, {:e}, {}, {:e}",
+        settings.start_time, settings.end_time, settings.fallback_substeps, settings.fallback_increment
+    )
+    .unwrap();
+    writeln!(output, " {:e}, {:e}", settings.gamma, settings.beta).unwrap();
+    writeln!(
+        output,
+        " {}, 1, {:e}, {:e}",
+        settings.mass_matrix, settings.rayleigh_mass, settings.rayleigh_stiffness
+    )
+    .unwrap();
+    writeln!(
+        output,
+        " {}, {}, {}",
+        settings.legacy_output_interval, settings.monitor_node_or_group, settings.monitor_interval
+    )
+    .unwrap();
+    let [u, v, a, force, strain, stress] = settings.output_flags;
+    writeln!(output, " {u}, {v}, {a}, {force}, {strain}, {stress}").unwrap();
 }
 
 fn write_material(o: &mut String, mat: &FemMaterial) {

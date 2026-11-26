@@ -32,6 +32,8 @@ use std::path::Path;
 use bevy::prelude::Vec3;
 #[path = "cnt_compatibility.rs"]
 mod compatibility;
+#[path = "dynamic_settings.rs"]
+mod dynamic_settings;
 #[path = "eigen_settings.rs"]
 mod eigen_settings;
 #[cfg(test)]
@@ -449,6 +451,19 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 // Compatibility audit reports malformed/unsupported cards.
                 i += 1;
             }
+            "DYNAMIC" => {
+                let rows: Vec<_> = lines[i + 1..]
+                    .iter()
+                    .take_while(|line| !is_keyword(line))
+                    .map(|line| strip_comment(line))
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                if let Ok(settings) = dynamic_settings::parse(&header, &rows) {
+                    data.solver.get_or_insert_with(SolverSettings::default).dynamic = Some(settings);
+                }
+                i += 1;
+            }
+
             "STEP" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
                 if let Some(value) = header

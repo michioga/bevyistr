@@ -39,6 +39,10 @@ pub(crate) enum SolverField {
     EigenTolerance,
     EigenMaxIterations,
     EigenShift,
+    DynamicSubsteps,
+    DynamicIncrement,
+    NewmarkGamma,
+    NewmarkBeta,
 }
 
 impl SolverField {
@@ -59,6 +63,10 @@ impl SolverField {
             Self::EigenTolerance => "Eigen tolerance",
             Self::EigenMaxIterations => "Eigen maximum iterations",
             Self::EigenShift => "Eigen shift",
+            Self::DynamicSubsteps => "Fallback substeps",
+            Self::DynamicIncrement => "Fallback time increment",
+            Self::NewmarkGamma => "Newmark gamma",
+            Self::NewmarkBeta => "Newmark beta",
         }
     }
 
@@ -79,6 +87,9 @@ impl SolverField {
             | Self::EigenTolerance
             | Self::EigenMaxIterations
             | Self::EigenShift => settings.analysis_type == AnalysisType::Eigen,
+            Self::DynamicSubsteps | Self::DynamicIncrement | Self::NewmarkGamma | Self::NewmarkBeta => {
+                settings.analysis_type == AnalysisType::Dynamic && settings.dynamic.is_some()
+            }
             Self::Substeps | Self::NonlinearMaxIterations | Self::NonlinearConvergenceTolerance => {
                 settings.analysis_type == AnalysisType::NlStatic
             }
@@ -100,6 +111,7 @@ impl SolverField {
             Self::Substeps | Self::MaxIterations | Self::PreconditionerIterations
                 | Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
                 | Self::NonlinearMaxIterations | Self::EigenModes | Self::EigenMaxIterations
+                | Self::DynamicSubsteps
         )
     }
 }
@@ -111,6 +123,7 @@ pub(crate) enum SolverControlGroup {
     Nonlinear,
     DirectHint,
     Eigen,
+    Dynamic,
 }
 
 #[derive(Component)]
@@ -215,6 +228,22 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
             ] { solver_value_row(group, label, field, name); }
             solver_hint(group, "Max iterations must exceed modes; allow ample margin. Shift is a solver parameter, not Hz. Independent of linear iterations.");
         });
+    parent.spawn((
+        Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), ..default() },
+        SolverControlGroup::Dynamic,
+    ))
+    .with_children(|group| {
+        solver_hint(group, "TIME INTEGRATION | !DYNAMIC (Newmark)");
+        for (label, field, name) in [
+            ("Fallback substeps", SolverField::DynamicSubsteps, "DynamicSubstepsInput"),
+            ("Fallback increment", SolverField::DynamicIncrement, "DynamicIncrementInput"),
+            ("Newmark gamma", SolverField::NewmarkGamma, "DynamicGammaInput"),
+            ("Newmark beta", SolverField::NewmarkBeta, "DynamicBetaInput"),
+        ] {
+            solver_value_row(group, label, field, name);
+        }
+        solver_hint(group, "Explicit STEP timing takes precedence over the fallback values.");
+    });
     parent.spawn((
         Text::new("Enter applies an exact value; Esc restores"),
         TextFont {
@@ -339,6 +368,7 @@ pub(crate) fn solver_numeric_input_system(
             SolverControlGroup::Eigen => {
                 setup.solver.analysis_type == AnalysisType::Eigen
             }
+            SolverControlGroup::Dynamic => SolverField::DynamicSubsteps.active(&setup.solver),
         };
         let display = if visible { Display::Flex } else { Display::None };
         if node.display != display {
@@ -429,6 +459,10 @@ fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
         SolverField::EigenMaxIterations => settings.eigen.max_iterations.to_string(),
         SolverField::EigenTolerance => format!("{:.16e}", settings.eigen.tolerance),
         SolverField::EigenShift => format!("{:.16e}", settings.eigen.shift),
+        SolverField::DynamicSubsteps => format_optional_count(settings.dynamic.as_ref().map(|d| d.fallback_substeps)),
+        SolverField::DynamicIncrement => format_optional_real(settings.dynamic.as_ref().map(|d| d.fallback_increment)),
+        SolverField::NewmarkGamma => format_optional_real(settings.dynamic.as_ref().map(|d| d.gamma)),
+        SolverField::NewmarkBeta => format_optional_real(settings.dynamic.as_ref().map(|d| d.beta)),
     }
 }
 
@@ -475,6 +509,9 @@ fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValu
         && value <= 0.0
     {
         return Err("tolerance must be finite and positive".into());
+    }
+    if matches!(field, SolverField::DynamicIncrement | SolverField::NewmarkBeta) && value <= 0.0 {
+        return Err("enter a finite positive number".into());
     }
     Ok(if optional {
         ParsedSolverValue::OptionalDouble(Some(value))
@@ -530,6 +567,18 @@ fn apply_solver_value(
             settings.eigen.tolerance = value
         }
         (SolverField::EigenShift, ParsedSolverValue::Double(value)) => settings.eigen.shift = value,
+        (SolverField::DynamicSubsteps, ParsedSolverValue::Integer(value)) => {
+            settings.dynamic.as_mut().unwrap().fallback_substeps = value;
+        }
+        (SolverField::DynamicIncrement, ParsedSolverValue::Double(value)) => {
+            settings.dynamic.as_mut().unwrap().fallback_increment = value;
+        }
+        (SolverField::NewmarkGamma, ParsedSolverValue::Double(value)) => {
+            settings.dynamic.as_mut().unwrap().gamma = value;
+        }
+        (SolverField::NewmarkBeta, ParsedSolverValue::Double(value)) => {
+            settings.dynamic.as_mut().unwrap().beta = value;
+        }
         _ => unreachable!("parsed solver value must match its field"),
     }
 }

@@ -39,6 +39,14 @@ Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角ス�
 
 ## 実行する
 
+### 時刻歴解析の時間積分を確認・編集する
+
+`18_cavity_flow` の `hecmw_ctrl.dat` を **Open Project** で開くと、**Solve → TIME INTEGRATION | !DYNAMIC (Newmark)** に時間積分設定が表示されます。**Fallback substeps**（`n_step`）、**Fallback increment**（`t_delta`）、**Newmark gamma**、**Newmark beta** をEnterで確定できます。例題で読み込む値は順に `10000`、`10`、`0.5`、`0.25` です。[`!DYNAMIC` の公式仕様](https://source-docs.frontistr.com/keyword_reference/cnt/dynamic.html)
+
+`n_step` と `t_delta` は `!STEP` を省略した場合などの既定値です。明示的な `!STEP` の固定増分は、その `SUBSTEPS` と `DTIME, ETIME` で決まります。 [FrontISTRの `!STEP` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/step.html)
+
+対応範囲は `TYPE=LINEAR`／`NONLINEAR`、先頭データ行が `1, 1` の陰解法Newmark時刻歴解析です。6行を読み込み、質量行列、Rayleigh減衰、監視対象と間隔、出力フラグも保持します。HHT、陽解法、周波数応答は互換性の指摘として表示します。動解析のプロジェクト全体の **Export／Run FrontISTR** は、`!STEP` と境界条件・荷重グループの対応後に有効になります。
+
 ### 読み込んだ設定に未対応項目がある場合
 
 読み込んだCNT・MSH・DATで、保持できない設定や解決できない参照を検出すると、画面上部に **Input re-export blocked** と表示します。件数は再出力を止めた入力上の指摘数です。
@@ -66,7 +74,7 @@ FrontISTRの仕様を確認する際は、設定項目ごとのページを参�
 - 新しいモデルをOpen Model／Open Projectで開き直すと、そのモデルの設定として再評価します。
   警告を消す目的で原本から必要な設定を削除しないでください。
 
-新規作成でもDynamicは時間積分等の設定が未完成のためExport／Runを制限します。
+新規作成でDynamicを選んだ場合も、動解析のプロジェクト全体のExport／Runは制限されます。
 互換性検査は、対応する入力設定と参照を保持できるかを確認します。解析モデルの妥当性は別途確認してください。
 
 `hecmw_ctrl.dat` の `fstrDYNA`、`result-in`、`fstrTEMP` は、既存プロジェクトを開いたときに再出力制限の理由として表示されます。 [結果ファイルの指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html)

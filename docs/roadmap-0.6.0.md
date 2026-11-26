@@ -4,7 +4,7 @@
 
 - FrontISTR 6.0の接触設定、複数の`!STEP`と`GRPID`参照、弾塑性材料、STEPから接触解析へ進むワークフローを進める。`.cnt`、`.msh`、`hecmw_ctrl.dat`、`hecmw_part_ctrl.dat`は[公式仕様](https://source-docs.frontistr.com/)と対象版の例題で照合し、保存と再読込を確認する。
 - 流体の基準例題は`18_cavity_flow`とする。WindowsのIntel oneAPI MPIで計算済みの8ランク・101フレームを使い、PVTUとMPI RESの全フレームを自動テストで確認し、利用者からも結果表示の確認を得た。流体用四面体`3414`はメッシュ単体の書き出しで要素番号を保持する。[検証記録](advanced-results-verification.md)
-- 流体の入力側は`!SOLVER`の`BiCGSTAB`と`SCALING`の読み込み・編集・再出力に対応した。[非圧縮ニュートン流体の粘度・密度](src/materials.md#非圧縮ニュートン流体)の読込・編集と材料カード単体の往復も確認した。続いて`!DYNAMIC`、複数の境界条件グループを参照する`!STEP`、領域分割の順で対応する。例題を別の出力先に書き出し、Windows MPIで分割・実行・結果表示まで確認する。
+- 流体の入力側は`!SOLVER`の`BiCGSTAB`と`SCALING`の読み込み・編集・再出力に対応した。[非圧縮ニュートン流体の粘度・密度](src/materials.md#非圧縮ニュートン流体)の読込・編集と材料カード単体の往復も確認した。`!DYNAMIC`は陰解法Newmark時刻歴の6行を保持し、時間積分の4項目をSolveで編集できる。続いて`GRPID`と複数グループを参照する固定増分の`!STEP`、領域分割に対応する。例題を別の出力先に書き出し、Windows MPIで分割・実行・結果表示まで確認する。
 - 次版へ回す候補はAMG／DIRECTmfの詳細設定、複数ソリッドSTEPの一括メッシュ化、高度な材料・連成・周波数応答。
 
 ## Resultsの任意断面

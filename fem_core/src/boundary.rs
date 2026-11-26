@@ -426,6 +426,8 @@ pub enum SectionKind {
 pub struct SolverSettings {
     /// Lanczos eigenvalue controls, independent of linear/nonlinear iterations.
     pub eigen: EigenSettings,
+    /// Complete supported time-history `!DYNAMIC` card, when imported.
+    pub dynamic: Option<DynamicSettings>,
     /// Analysis type: static, dynamic, or eigenvalue.
     pub analysis_type: AnalysisType,
     /// Number of substeps (for nonlinear or time-dependent analyses).
@@ -466,6 +468,7 @@ impl Default for SolverSettings {
     fn default() -> Self {
         Self {
             eigen: EigenSettings::default(),
+            dynamic: None,
             analysis_type: AnalysisType::Static,
             substeps: 1,
             max_iterations: Some(100),
@@ -518,6 +521,25 @@ impl SolverSettings {
         }
         Ok(())
     }
+}
+
+/// Six-row implicit Newmark time-history card. The first row is always 1, 1.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DynamicSettings {
+    pub nonlinear: bool,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub fallback_substeps: u32,
+    pub fallback_increment: f64,
+    pub gamma: f64,
+    pub beta: f64,
+    pub mass_matrix: u8,
+    pub rayleigh_mass: f64,
+    pub rayleigh_stiffness: f64,
+    pub legacy_output_interval: u32,
+    pub monitor_node_or_group: String,
+    pub monitor_interval: u32,
+    pub output_flags: [u8; 6],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
