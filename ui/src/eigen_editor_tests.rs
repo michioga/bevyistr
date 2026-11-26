@@ -65,10 +65,16 @@ fn imported_time_integration_can_be_edited_without_changing_step_controls() {
     let mut app = app();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("time.cnt");
-    std::fs::write(&path, concat!(
-        "!SOLUTION, TYPE=DYNAMIC\n!DYNAMIC, TYPE=NONLINEAR\n",
-        "1,1\n0,1e5,10000,10\n0.5,0.25\n1,1,0,0\n50,1,50\n1,0,0,0,0,0\n!END\n"
-    )).unwrap();
+    std::fs::write(
+        &path,
+        concat!(
+            "!SOLUTION, TYPE=DYNAMIC\n!DYNAMIC, TYPE=NONLINEAR\n",
+            "1,1\n0,1e5,10000,10\n0.5,0.25\n1,1,0,0\n50,1,50\n1,0,0,0,0,0\n",
+            "!BOUNDARY, GRPID=2\n1,1,3,0\n",
+            "!STEP, INC_TYPE=FIXED, SUBSTEPS=500\n20,1e5\nBOUNDARY,2\n!END\n",
+        ),
+    )
+    .unwrap();
     hecmw::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0)
         .unwrap().merge_into(&mut app.world_mut().resource_mut::<AnalysisSetup>());
     app.update();
@@ -86,7 +92,20 @@ fn imported_time_integration_can_be_edited_without_changing_step_controls() {
     assert_eq!(dynamic.fallback_increment, 1.2345678901234567);
     assert_eq!(dynamic.fallback_substeps, 1234);
     assert_eq!(dynamic.gamma, 0.5);
-    assert_eq!(settings.substeps, 1);
+    let step = settings.dynamic_step.as_ref().unwrap();
+    assert_eq!(
+        (step.increment, step.duration, step.substeps),
+        (20.0, 1e5, Some(500))
+    );
+    let (_, node, text) = app
+        .world_mut()
+        .query::<(&SolverControlGroup, &Node, &Text)>()
+        .iter(app.world())
+        .find(|(group, _, _)| matches!(group, SolverControlGroup::DynamicStep))
+        .unwrap();
+    assert_eq!(node.display, Display::Flex);
+    assert!(text.0.contains("DTIME 2e1"));
+    assert!(text.0.contains("BOUNDARY groups: 2"));
 }
 
 #[test]

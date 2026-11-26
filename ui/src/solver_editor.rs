@@ -9,7 +9,9 @@ use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use bevy::ui_widgets::SelectAllOnFocus;
-use fem_core::{AnalysisType, LinearSolverMethod, SolverSettings, UiKeyboardState};
+use fem_core::{
+    AnalysisType, DynamicStep, LinearSolverMethod, SolverSettings, StepGroup, UiKeyboardState,
+};
 
 const INPUT_BG: Color = Color::srgba(0.075, 0.09, 0.10, 0.98);
 const INPUT_BORDER: Color = Color::srgba(0.34, 0.40, 0.44, 0.72);
@@ -64,7 +66,7 @@ impl SolverField {
             Self::EigenMaxIterations => "Eigen maximum iterations",
             Self::EigenShift => "Eigen shift",
             Self::DynamicSubsteps => "Fallback substeps",
-            Self::DynamicIncrement => "Fallback time increment",
+            Self::DynamicIncrement => "Time increment (t_delta)",
             Self::NewmarkGamma => "Newmark gamma",
             Self::NewmarkBeta => "Newmark beta",
         }
@@ -124,6 +126,7 @@ pub(crate) enum SolverControlGroup {
     DirectHint,
     Eigen,
     Dynamic,
+    DynamicStep,
 }
 
 #[derive(Component)]
@@ -228,22 +231,47 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
             ] { solver_value_row(group, label, field, name); }
             solver_hint(group, "Max iterations must exceed modes; allow ample margin. Shift is a solver parameter, not Hz. Independent of linear iterations.");
         });
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                ..default()
+            },
+            SolverControlGroup::Dynamic,
+        ))
+        .with_children(|group| {
+            solver_hint(group, "TIME INTEGRATION | !DYNAMIC (Newmark)");
+            for (label, field, name) in [
+                (
+                    "Fallback substeps",
+                    SolverField::DynamicSubsteps,
+                    "DynamicSubstepsInput",
+                ),
+                (
+                    "Increment (t_delta)",
+                    SolverField::DynamicIncrement,
+                    "DynamicIncrementInput",
+                ),
+                (
+                    "Newmark gamma",
+                    SolverField::NewmarkGamma,
+                    "DynamicGammaInput",
+                ),
+                ("Newmark beta", SolverField::NewmarkBeta, "DynamicBetaInput"),
+            ] {
+                solver_value_row(group, label, field, name);
+            }
+        });
     parent.spawn((
-        Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), ..default() },
-        SolverControlGroup::Dynamic,
-    ))
-    .with_children(|group| {
-        solver_hint(group, "TIME INTEGRATION | !DYNAMIC (Newmark)");
-        for (label, field, name) in [
-            ("Fallback substeps", SolverField::DynamicSubsteps, "DynamicSubstepsInput"),
-            ("Fallback increment", SolverField::DynamicIncrement, "DynamicIncrementInput"),
-            ("Newmark gamma", SolverField::NewmarkGamma, "DynamicGammaInput"),
-            ("Newmark beta", SolverField::NewmarkBeta, "DynamicBetaInput"),
-        ] {
-            solver_value_row(group, label, field, name);
-        }
-        solver_hint(group, "Explicit STEP timing takes precedence over the fallback values.");
-    });
+        Text::default(),
+        TextFont {
+            font_size: FontSize::Px(9.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        SolverControlGroup::DynamicStep,
+    ));
     parent.spawn((
         Text::new("Enter applies an exact value; Esc restores"),
         TextFont {
@@ -354,10 +382,10 @@ pub(crate) fn solver_numeric_input_system(
         &mut EditableText,
         &mut BorderColor,
     )>,
-    mut statuses: Query<&mut Text, With<SolverInputStatus>>,
-    mut groups: Query<(&SolverControlGroup, &mut Node)>,
+    mut statuses: Query<&mut Text, (With<SolverInputStatus>, Without<SolverControlGroup>)>,
+    mut groups: Query<(&SolverControlGroup, &mut Node, Option<&mut Text>)>,
 ) {
-    for (group, mut node) in &mut groups {
+    for (group, mut node, summary) in &mut groups {
         let visible = match group {
             SolverControlGroup::Linear => setup.solver.solver_method.is_iterative(),
             SolverControlGroup::Field(field) => field.active(&setup.solver),
@@ -369,6 +397,23 @@ pub(crate) fn solver_numeric_input_system(
                 setup.solver.analysis_type == AnalysisType::Eigen
             }
             SolverControlGroup::Dynamic => SolverField::DynamicSubsteps.active(&setup.solver),
+            SolverControlGroup::DynamicStep => {
+                if let Some(step) = setup.solver.dynamic_step.as_ref()
+                    && setup.solver.analysis_type == AnalysisType::Dynamic
+                {
+                    if let Some(mut text) = summary
+                        && (setup.is_changed() || text.0.is_empty())
+                    {
+                        let value = dynamic_step_summary(step);
+                        if text.0 != value {
+                            text.0 = value;
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
         };
         let display = if visible { Display::Flex } else { Display::None };
         if node.display != display {
@@ -464,6 +509,52 @@ fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
         SolverField::NewmarkGamma => format_optional_real(settings.dynamic.as_ref().map(|d| d.gamma)),
         SolverField::NewmarkBeta => format_optional_real(settings.dynamic.as_ref().map(|d| d.beta)),
     }
+}
+
+fn dynamic_step_summary(step: &DynamicStep) -> String {
+    let substeps = format_optional_count(step.substeps);
+    let iterations = format_optional_count(step.max_iterations);
+    let convergence = format_optional_real(step.convergence);
+    let default = |value: String| {
+        if value.is_empty() {
+            "solver default".to_owned()
+        } else {
+            value
+        }
+    };
+    let boundary = step
+        .groups
+        .iter()
+        .filter_map(|group| match group {
+            StepGroup::Boundary(id) => Some(id.to_string()),
+            StepGroup::Load(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let load = step
+        .groups
+        .iter()
+        .filter_map(|group| match group {
+            StepGroup::Boundary(_) => None,
+            StepGroup::Load(id) => Some(id.to_string()),
+        })
+        .collect::<Vec<_>>();
+    let group_list = |ids: Vec<String>| {
+        if ids.is_empty() {
+            "none listed".to_owned()
+        } else {
+            ids.join(", ")
+        }
+    };
+    format!(
+        "IMPORTED !STEP | fixed increment\nDTIME {:e} | ETIME {:e}\nSUBSTEPS {} | MAXITER {}\nCONVERG {}\nBOUNDARY groups: {}\nLOAD groups: {}",
+        step.increment,
+        step.duration,
+        default(substeps),
+        default(iterations),
+        default(convergence),
+        group_list(boundary),
+        group_list(load),
+    )
 }
 
 fn format_optional_count(value: Option<u32>) -> String {

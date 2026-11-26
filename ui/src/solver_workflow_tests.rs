@@ -66,6 +66,7 @@ fn write_reference_project(directory: &Path) {
         kind: SectionKind::Solid,
     });
     setup.boundary_conditions.push(BoundaryCondition {
+        group_id: 1,
         name: "Fixed end".into(),
         mesh_index: 0,
         nodes: nodes
@@ -84,6 +85,7 @@ fn write_reference_project(directory: &Path) {
             .iter()
             .filter(|node| node.position.x == LENGTH as f32)
             .map(|node| NodalLoad {
+                group_id: 1,
                 name: "End traction".into(),
                 mesh_index: 0,
                 node: node.id,
@@ -816,6 +818,7 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
         kind: SectionKind::Solid,
     });
     setup.boundary_conditions.push(BoundaryCondition {
+        group_id: 1,
         name: "Fixed end".into(),
         mesh_index: 0,
         nodes: fixed.nodes.clone(),
@@ -828,6 +831,7 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
     setup
         .nodal_loads
         .extend(loaded.nodes.iter().map(|&node| NodalLoad {
+            group_id: 1,
             name: "Axial force".into(),
             mesh_index: 0,
             node,

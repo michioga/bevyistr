@@ -498,6 +498,15 @@ fn hint_text(parent: &mut ChildSpawnerCommands, text: &'static str) {
         TextColor(TEXT_MUTED),
     ));
 }
+
+fn group_suffix(id: u32) -> String {
+    if id == 1 {
+        String::new()
+    } else {
+        format!("  GRPID={id}")
+    }
+}
+
 pub(crate) fn rebuild_boundary_loads_list(
     mut commands: Commands,
     setup: Res<fem_core::AnalysisSetup>,
@@ -533,12 +542,13 @@ pub(crate) fn rebuild_boundary_loads_list(
                 })
                 .unwrap_or_default();
             let label = format!(
-                "[BC] {}  {}{}  ({} nodes)  val={:.4}",
+                "[BC] {}  {}{}  ({} nodes)  val={:.4}{}",
                 bc.name,
                 bc.dof_label(),
                 center_label,
                 bc.nodes.len(),
-                bc.value
+                bc.value,
+                group_suffix(bc.group_id)
             );
             setup_entry_row(
                 list,
@@ -548,17 +558,16 @@ pub(crate) fn rebuild_boundary_loads_list(
             );
         }
 
-        // Group nodal loads by name for display (one entry per unique name).
-        let mut seen_load_names: Vec<&str> = Vec::new();
+        // A target name can occur in separate FrontISTR load groups.
+        let mut seen_load_groups = BTreeSet::new();
         for (index, load) in setup.nodal_loads.iter().enumerate() {
-            if seen_load_names.contains(&load.name.as_str()) {
+            if !seen_load_groups.insert((load.name.as_str(), load.group_id)) {
                 continue;
             }
-            seen_load_names.push(&load.name);
             let group: Vec<_> = setup
                 .nodal_loads
                 .iter()
-                .filter(|l| l.name == load.name)
+                .filter(|l| l.name == load.name && l.group_id == load.group_id)
                 .collect();
             let components: BTreeSet<_> = group.iter().map(|load| load.dof_label()).collect();
             let nodes: BTreeSet<_> = group
@@ -578,11 +587,12 @@ pub(crate) fn rebuild_boundary_loads_list(
                 })
                 .unwrap_or_default();
             let label = format!(
-                "[Load] {}  {}{}  ({} nodes)",
+                "[Load] {}  {}{}  ({} nodes){}",
                 load.name,
                 components.into_iter().collect::<Vec<_>>().join("/"),
                 center_label,
-                nodes.len()
+                nodes.len(),
+                group_suffix(load.group_id)
             );
             setup_entry_row(
                 list,
@@ -602,10 +612,11 @@ pub(crate) fn rebuild_boundary_loads_list(
                 fem_core::DistributedLoadKind::Gravity => "elems",
             };
             let label = format!(
-                "[DLoad] {}  {kind_label}={:.3}  ({} {unit})",
+                "[DLoad] {}  {kind_label}={:.3}  ({} {unit}){}",
                 dload.name,
                 dload.value,
-                dload.target.len()
+                dload.target.len(),
+                group_suffix(dload.group_id)
             );
             setup_entry_row(
                 list,
@@ -902,6 +913,7 @@ pub(crate) fn apply_load_button_system(
                     };
                     for &node in &nodes {
                         setup.nodal_loads.push(fem_core::NodalLoad {
+                            group_id: 1,
                             name: name.clone(),
                             mesh_index,
                             node,
@@ -1372,6 +1384,7 @@ pub(crate) fn apply_dload_button_system(
 
                         let name = setup.next_auto_name_pub("DLOAD");
                         setup.distributed_loads.push(fem_core::DistributedLoad {
+                            group_id: 1,
                             name,
                             mesh_index,
                             target: fem_core::DistributedLoadTarget::Faces(faces),
@@ -1395,6 +1408,7 @@ pub(crate) fn apply_dload_button_system(
 
                         let name = setup.next_auto_name_pub("DLOAD");
                         setup.distributed_loads.push(fem_core::DistributedLoad {
+                            group_id: 1,
                             name,
                             mesh_index,
                             target: fem_core::DistributedLoadTarget::Elements(elements),

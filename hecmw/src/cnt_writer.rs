@@ -2,7 +2,8 @@
 //! Uses !ELASTIC / !DENSITY as confirmed from tutorial files.
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
-    DistributedLoadKind, DistributedLoadTarget, FemMaterial, NodalLoad, RotationCenter,
+    DistributedLoadKind, DistributedLoadTarget, DynamicStep, FemMaterial, NodalLoad,
+    RotationCenter, StepGroup,
 };
 use std::{collections::HashMap, fmt::Write as FmtWrite, io, path::Path};
 
@@ -65,12 +66,21 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         }
     }
     if setup.solver.analysis_type == AnalysisType::Dynamic {
-        let details = if setup.solver.dynamic.is_some() {
-            "Full STEP and boundary/load group controls are required before Export or Run."
-        } else {
-            "A supported DYNAMIC time-history card and STEP controls are required."
+        let details = match (&setup.solver.dynamic, &setup.solver.dynamic_step) {
+            (None, _) => "A supported DYNAMIC time-history card is required.",
+            (_, None) => "A supported explicit fixed-increment STEP is required.",
+            _ => "End-to-end dynamic project Export and Run are not supported yet.",
         };
         blockers.push(format!("Dynamic setup is incomplete: {details}"));
+    } else if setup.boundary_conditions.iter().any(|bc| bc.group_id != 1)
+        || setup.nodal_loads.iter().any(|load| load.group_id != 1)
+        || setup
+            .distributed_loads
+            .iter()
+            .any(|load| load.group_id != 1)
+    {
+        blockers
+            .push("Boundary/load groups above 1 require a supported explicit dynamic STEP".into());
     }
     if setup.solver.analysis_type == AnalysisType::Eigen {
         if let Err(reason) = setup.solver.eigen.validate() {
@@ -115,7 +125,7 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
 
     // ── STEP ──
-    if s.analysis_type == AnalysisType::NlStatic || s.analysis_type == AnalysisType::Dynamic {
+    if s.analysis_type == AnalysisType::NlStatic {
         writeln!(
             o,
             "!STEP, SUBSTEPS={}, MAXITER={}, CONVERG={:.8e}",
@@ -153,6 +163,9 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
             if let Some(dynamic) = &s.dynamic {
                 write_dynamic(&mut o, dynamic);
             }
+            if let Some(step) = &s.dynamic_step {
+                write_dynamic_step(&mut o, step);
+            }
         }
     }
 
@@ -162,15 +175,15 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
         write_material(&mut o, mat);
     }
 
-    // BOUNDARY — group by name
-    let mut last: Option<(&str, Option<&RotationCenter>)> = None;
+    // BOUNDARY — retain each condition's analysis group and rotation center.
+    let mut last = None;
     for bc in &setup.boundary_conditions {
-        let key = (bc.name.as_str(), bc.rotation_center.as_ref());
+        let key = (bc.name.as_str(), bc.group_id, bc.rotation_center.as_ref());
         if last != Some(key) {
             if last.is_some() {
                 writeln!(o).unwrap();
             }
-            write_condition_header(&mut o, "BOUNDARY", bc.rotation_center.as_ref());
+            write_condition_header(&mut o, "BOUNDARY", bc.group_id, bc.rotation_center.as_ref());
             last = Some(key);
         }
         write_bc(&mut o, bc);
@@ -179,8 +192,8 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
         writeln!(o).unwrap();
     }
 
-    // CLOAD — group by name
-    let mut last: Option<(&str, Option<&RotationCenter>)> = None;
+    // CLOAD — retain each load's analysis group and rotation center.
+    let mut last = None;
     let mut compact_loads = HashMap::new();
     for load in &setup.nodal_loads {
         if let Some(compact_key) = grouped_load_key(load) {
@@ -195,12 +208,21 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
             }
             *written = *count;
         }
-        let key = (load.name.as_str(), load.rotation_center.as_ref());
+        let key = (
+            load.name.as_str(),
+            load.group_id,
+            load.rotation_center.as_ref(),
+        );
         if last != Some(key) {
             if last.is_some() {
                 writeln!(o).unwrap();
             }
-            write_condition_header(&mut o, "CLOAD", load.rotation_center.as_ref());
+            write_condition_header(
+                &mut o,
+                "CLOAD",
+                load.group_id,
+                load.rotation_center.as_ref(),
+            );
             last = Some(key);
         }
         write_cload(&mut o, load);
@@ -210,14 +232,15 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
 
     // DLOAD
-    let mut last: Option<&str> = None;
+    let mut last = None;
     for dl in &setup.distributed_loads {
-        if last != Some(dl.name.as_str()) {
+        let key = (dl.name.as_str(), dl.group_id);
+        if last != Some(key) {
             if last.is_some() {
                 writeln!(o).unwrap();
             }
-            writeln!(o, "!DLOAD, GRPID=1").unwrap();
-            last = Some(&dl.name);
+            write_condition_header(&mut o, "DLOAD", dl.group_id, None);
+            last = Some(key);
         }
         write_dload(&mut o, dl);
     }
@@ -321,8 +344,34 @@ fn write_solver_row(output: &mut String, columns: &[Option<String>]) -> bool {
     true
 }
 
-fn write_condition_header(out: &mut String, keyword: &str, center: Option<&RotationCenter>) {
-    write!(out, "!{keyword}, GRPID=1").unwrap();
+fn write_dynamic_step(out: &mut String, step: &DynamicStep) {
+    write!(out, "!STEP, INC_TYPE=FIXED").unwrap();
+    if let Some(substeps) = step.substeps {
+        write!(out, ", SUBSTEPS={substeps}").unwrap();
+    }
+    if let Some(max_iterations) = step.max_iterations {
+        write!(out, ", MAXITER={max_iterations}").unwrap();
+    }
+    if let Some(convergence) = step.convergence {
+        write!(out, ", CONVERG={convergence:e}").unwrap();
+    }
+    writeln!(out, "\n {:e}, {:e}", step.increment, step.duration).unwrap();
+    for group in &step.groups {
+        match group {
+            StepGroup::Boundary(id) => writeln!(out, " BOUNDARY, {id}"),
+            StepGroup::Load(id) => writeln!(out, " LOAD, {id}"),
+        }
+        .unwrap();
+    }
+}
+
+fn write_condition_header(
+    out: &mut String,
+    keyword: &str,
+    group_id: u32,
+    center: Option<&RotationCenter>,
+) {
+    write!(out, "!{keyword}, GRPID={group_id}").unwrap();
     if let Some(token) = center.and_then(rotation_center_token) {
         write!(out, ", ROT_CENTER={token}").unwrap();
     }
@@ -453,6 +502,7 @@ fn write_bc(o: &mut String, bc: &BoundaryCondition) {
 pub(crate) struct GroupedLoadKey<'a> {
     pub mesh_index: usize,
     pub group: &'a str,
+    group_id: u32,
     name: &'a str,
     dof: u8,
     value: u32,
@@ -463,6 +513,7 @@ pub(crate) fn grouped_load_key(load: &NodalLoad) -> Option<GroupedLoadKey<'_>> {
     Some(GroupedLoadKey {
         mesh_index: load.mesh_index,
         group: load.ngrp_name.as_deref()?,
+        group_id: load.group_id,
         name: &load.name,
         dof: load.dof,
         value: load.value.to_bits(),
@@ -684,6 +735,7 @@ mod tests {
     fn writes_all_required_gravity_parameters() {
         let mut setup = AnalysisSetup::default();
         setup.distributed_loads.push(DistributedLoad {
+            group_id: 1,
             name: "GRAVITY".into(),
             mesh_index: 0,
             target: DistributedLoadTarget::Elements(vec![ElementId(7)]),
@@ -704,6 +756,7 @@ mod tests {
     fn writes_exact_prescribed_rotation_and_nodal_moment() {
         let mut setup = AnalysisSetup::default();
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "BC_EXACT".into(),
             mesh_index: 0,
             nodes: vec![NodeId(42)],
@@ -714,6 +767,7 @@ mod tests {
             value: 0.125,
         });
         setup.nodal_loads.push(NodalLoad {
+            group_id: 1,
             name: "MOMENT_EXACT".into(),
             mesh_index: 0,
             node: NodeId(42),
@@ -734,6 +788,7 @@ mod tests {
         let center = RotationCenter::from_node(0, NodeId(7));
         let mut setup = AnalysisSetup::default();
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "BC_ROT_CENTER".into(),
             mesh_index: 0,
             nodes: vec![NodeId(42)],
@@ -744,6 +799,7 @@ mod tests {
             value: 0.125,
         });
         setup.nodal_loads.push(NodalLoad {
+            group_id: 1,
             name: "TORQUE_CENTER".into(),
             mesh_index: 0,
             node: NodeId(42),
@@ -764,6 +820,7 @@ mod tests {
         let mut setup = AnalysisSetup::default();
         for node in [NodeId(1), NodeId(2)] {
             setup.nodal_loads.push(NodalLoad {
+                group_id: 1,
                 name: "GROUP_LOAD".into(),
                 mesh_index: 0,
                 node,

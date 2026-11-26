@@ -131,6 +131,8 @@ impl RotationCenter {
 /// dof_end`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoundaryCondition {
+    /// FrontISTR GRPID, independent of the target mesh group name.
+    pub group_id: u32,
     pub name: String,
 
     /// Index into [`crate::FemModel::meshes`] the constrained nodes belong to.
@@ -205,6 +207,8 @@ impl BoundaryCondition {
 /// A concentrated nodal load — FrontISTR's `!CLOAD` / Abaqus's `*CLOAD`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodalLoad {
+    /// FrontISTR GRPID, independent of the target mesh group name.
+    pub group_id: u32,
     pub name: String,
 
     pub mesh_index: usize,
@@ -254,6 +258,8 @@ impl NodalLoad {
 /// `*DLOAD`, most commonly surface pressure.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DistributedLoad {
+    /// FrontISTR GRPID, independent of the target mesh group name.
+    pub group_id: u32,
     pub name: String,
 
     pub mesh_index: usize,
@@ -419,6 +425,24 @@ pub enum SectionKind {
 /// mesh can be loaded (and re-loaded) without this data, and replacing it
 /// shouldn't require rebuilding topology caches.
 
+/// Group selected by a dynamic STEP on a separate BOUNDARY or LOAD row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StepGroup {
+    Boundary(u32),
+    Load(u32),
+}
+
+/// One imported fixed-increment dynamic STEP with an explicit DTIME/ETIME row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DynamicStep {
+    pub increment: f64,
+    pub duration: f64,
+    pub substeps: Option<u32>,
+    pub max_iterations: Option<u32>,
+    pub convergence: Option<f64>,
+    pub groups: Vec<StepGroup>,
+}
+
 /// Solver settings that control how FrontISTR runs the analysis.
 /// Corresponds to the `!SOLUTION`, `!STEP`, `!STATIC`, `!DYNAMIC`, and
 /// `!SOLVER` / `!EIGEN` keywords in the `.cnt` file.
@@ -428,6 +452,7 @@ pub struct SolverSettings {
     pub eigen: EigenSettings,
     /// Complete supported time-history `!DYNAMIC` card, when imported.
     pub dynamic: Option<DynamicSettings>,
+    pub dynamic_step: Option<DynamicStep>,
     /// Analysis type: static, dynamic, or eigenvalue.
     pub analysis_type: AnalysisType,
     /// Number of substeps (for nonlinear or time-dependent analyses).
@@ -469,6 +494,7 @@ impl Default for SolverSettings {
         Self {
             eigen: EigenSettings::default(),
             dynamic: None,
+            dynamic_step: None,
             analysis_type: AnalysisType::Static,
             substeps: 1,
             max_iterations: Some(100),
@@ -877,6 +903,7 @@ impl AnalysisSetup {
         let name = self.next_auto_name("BC");
 
         self.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name,
             mesh_index,
             nodes,
@@ -905,6 +932,7 @@ impl AnalysisSetup {
 
         for &node in nodes {
             self.nodal_loads.push(NodalLoad {
+                group_id: 1,
                 name: name.clone(),
                 mesh_index,
                 node,
@@ -983,11 +1011,13 @@ impl AnalysisSetup {
     /// load" means removing all of them together, not just the one at
     /// `index`.
     pub fn remove_load_group(&mut self, index: usize) {
-        let Some(name) = self.nodal_loads.get(index).map(|l| l.name.clone()) else {
+        let Some(load) = self.nodal_loads.get(index) else {
             return;
         };
+        let (name, group_id) = (load.name.clone(), load.group_id);
 
-        self.nodal_loads.retain(|l| l.name != name);
+        self.nodal_loads
+            .retain(|load| load.name != name || load.group_id != group_id);
     }
 
     /// Removes the distributed load at `index`, if present.

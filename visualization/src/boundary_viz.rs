@@ -1120,6 +1120,7 @@ mod tests {
         let model = FemModel::single_mesh("test", mesh);
         let mut setup = AnalysisSetup::default();
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "FIX".to_string(),
             mesh_index: 0,
             nodes: vec![NodeId(1), NodeId(2)],
@@ -1178,6 +1179,7 @@ mod tests {
         let model = FemModel::single_mesh("test", mesh);
         let mut setup = AnalysisSetup::default();
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "FIX_ROT".to_string(),
             mesh_index: 0,
             nodes: vec![NodeId(1)],
@@ -1207,6 +1209,7 @@ mod tests {
         let model = FemModel::single_mesh("test", mesh);
         let mut setup = AnalysisSetup::default();
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "CENTER_ROT".to_string(),
             mesh_index: 0,
             nodes: vec![NodeId(1), NodeId(2)],

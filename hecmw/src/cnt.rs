@@ -34,6 +34,8 @@ use bevy::prelude::Vec3;
 mod compatibility;
 #[path = "dynamic_settings.rs"]
 mod dynamic_settings;
+#[path = "dynamic_step.rs"]
+mod dynamic_step;
 #[path = "eigen_settings.rs"]
 mod eigen_settings;
 #[cfg(test)]
@@ -327,6 +329,32 @@ fn skip_comment_lines(lines: &[&str], i: &mut usize) {
     }
 }
 
+/// FrontISTR group IDs use positive kint values.
+fn positive_group_id(text: &str) -> Option<u32> {
+    text.parse::<i32>()
+        .ok()
+        .filter(|&id| id > 0)
+        .map(|id| id as u32)
+}
+
+fn condition_group_id(header: &KeywordHeader) -> u32 {
+    // Invalid explicit IDs are reported by the compatibility audit.
+    header
+        .params
+        .get("GRPID")
+        .and_then(|id| positive_group_id(id))
+        .unwrap_or(1)
+}
+
+fn card_rows<'a>(lines: &[&'a str]) -> Vec<&'a str> {
+    lines
+        .iter()
+        .take_while(|line| !is_keyword(line))
+        .map(|line| strip_comment(line))
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
     let mut ngroups: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut data = CntData::default();
@@ -452,12 +480,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 i += 1;
             }
             "DYNAMIC" => {
-                let rows: Vec<_> = lines[i + 1..]
-                    .iter()
-                    .take_while(|line| !is_keyword(line))
-                    .map(|line| strip_comment(line))
-                    .filter(|line| !line.is_empty())
-                    .collect();
+                let rows = card_rows(&lines[i + 1..]);
                 if let Ok(settings) = dynamic_settings::parse(&header, &rows) {
                     data.solver.get_or_insert_with(SolverSettings::default).dynamic = Some(settings);
                 }
@@ -466,6 +489,8 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
 
             "STEP" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
+                solver.dynamic_step =
+                    dynamic_step::parse(&header, &card_rows(&lines[i + 1..])).ok();
                 if let Some(value) = header
                     .params
                     .get("SUBSTEPS")
@@ -577,6 +602,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
 
             "BOUNDARY" => {
+                let group_id = condition_group_id(&header);
                 let rotation_center = header
                     .params
                     .get("ROT_CENTER")
@@ -618,6 +644,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                     }
 
                     data.boundary_conditions.push(BoundaryCondition {
+                        group_id,
                         name: parts[0].to_string(),
                         mesh_index,
                         nodes,
@@ -631,6 +658,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
 
             "CLOAD" => {
+                let group_id = condition_group_id(&header);
                 let rotation_center = header
                     .params
                     .get("ROT_CENTER")
@@ -668,6 +696,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
 
                     for node in nodes {
                         data.nodal_loads.push(NodalLoad {
+                            group_id,
                             name: parts[0].to_string(),
                             mesh_index,
                             node,
@@ -681,6 +710,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
 
             "DLOAD" => {
+                let group_id = condition_group_id(&header);
                 i += 1;
 
                 while i < lines.len() && !is_keyword(lines[i]) {
@@ -721,6 +751,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
 
                         if !faces.is_empty() {
                             data.distributed_loads.push(DistributedLoad {
+                                group_id,
                                 name: parts[0].to_string(),
                                 mesh_index,
                                 target: fem_core::DistributedLoadTarget::Faces(faces),
@@ -753,6 +784,7 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                             _ => Some(Vec3::NEG_Y),
                         };
                         data.distributed_loads.push(DistributedLoad {
+                            group_id,
                             name: parts[0].to_string(),
                             mesh_index,
                             target: fem_core::DistributedLoadTarget::Elements(elements),
@@ -941,6 +973,15 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
     }
 
     (data.import_issues, data.output.visual) = compatibility::audit(text, &data);
+    if let Some(solver) = &mut data.solver
+        && (solver.analysis_type != AnalysisType::Dynamic
+            || data
+                .import_issues
+                .iter()
+                .any(|issue| parse_keyword_header(&issue.keyword).name == "STEP"))
+    {
+        solver.dynamic_step = None;
+    }
     data
 }
 

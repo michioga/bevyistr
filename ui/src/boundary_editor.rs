@@ -925,6 +925,7 @@ pub(crate) fn apply_constraint_button_system(
                         continue;
                     };
                     setup.boundary_conditions.push(fem_core::BoundaryCondition {
+                        group_id: 1,
                         name: name.clone(),
                         mesh_index,
                         nodes: nodes.clone(),

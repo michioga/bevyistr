@@ -2,10 +2,13 @@
 //! reader. Recognizing a card is not enough: ignored parameters/data must also
 //! be reported. Expand this allow-list only with round-trip regression tests.
 
-use super::{CntData, KeywordHeader, parse_keyword_header, parse_material_real, strip_comment};
+use super::{
+    CntData, KeywordHeader, condition_group_id, parse_keyword_header, parse_material_real,
+    positive_group_id, strip_comment,
+};
 use fem_core::{
     AnalysisType, LinearSolverMethod, MatrixDumpFormat, PsrVisualControl, SetupImportIssue,
-    SolverSettings, SolverTimeLog,
+    SolverSettings, SolverTimeLog, StepGroup,
 };
 use std::collections::HashSet;
 
@@ -69,7 +72,16 @@ pub(super) fn audit(
         let name = header.name.as_str();
         let reason = if matches!(
             name,
-            "WRITE" | "CONTACT" | "CONTACT_ALGO" | "STEP" | "SOLVER" | "FLUID" | "DYNAMIC"
+            "WRITE"
+                | "CONTACT"
+                | "CONTACT_ALGO"
+                | "STEP"
+                | "SOLVER"
+                | "FLUID"
+                | "DYNAMIC"
+                | "BOUNDARY"
+                | "CLOAD"
+                | "DLOAD"
         ) && raw
             .split(',')
             .skip(1)
@@ -194,6 +206,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
     }
     let value = |key: &str| parameter_value(h, key);
     let is = |key: &str, expected: &str| parameter_is(h, key, expected);
+    let group_id = condition_group_id(h);
     let reason = match name {
         "SOLUTION" => {
             if !matches!(
@@ -240,9 +253,21 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "VERSION" if body.len() != 1 || !numbers(body[0], &[3.0]) => {
             Some("Only VERSION 3 is emitted")
         }
-        "BOUNDARY" | "CLOAD" | "DLOAD" if value("GRPID").is_some_and(|group| group != "1") => Some(
-            "Only GRPID=1 (including the FrontISTR default) is preserved for boundary/load groups",
-        ),
+        "BOUNDARY" | "CLOAD" | "DLOAD"
+            if h.params
+                .get("GRPID")
+                .is_some_and(|id| positive_group_id(id).is_none()) =>
+        {
+            Some("GRPID must be a positive FrontISTR integer")
+        }
+        "BOUNDARY" | "CLOAD" | "DLOAD"
+            if group_id != 1
+                && data.solver.as_ref().is_none_or(|solver| {
+                    solver.analysis_type != AnalysisType::Dynamic || solver.dynamic_step.is_none()
+                }) =>
+        {
+            Some("Boundary/load groups above 1 require a supported explicit dynamic STEP")
+        }
         "BOUNDARY" | "CLOAD"
             if body.is_empty()
                 || body.iter().any(|row| {
@@ -270,9 +295,12 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                     !data
                         .boundary_conditions
                         .iter()
-                        .any(|condition| condition.name == target)
+                        .any(|condition| condition.name == target && condition.group_id == group_id)
                 } else {
-                    !data.nodal_loads.iter().any(|load| load.name == target)
+                    !data
+                        .nodal_loads
+                        .iter()
+                        .any(|load| load.name == target && load.group_id == group_id)
                 }
             }) =>
         {
@@ -313,7 +341,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                         || !data
                             .distributed_loads
                             .iter()
-                            .any(|load| load.name == fields[0])
+                            .any(|load| load.name == fields[0] && load.group_id == group_id)
                 }) =>
         {
             Some("Distributed load row is incomplete or its target cannot be resolved")
@@ -435,6 +463,31 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
 
 fn check_step(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
     let analysis = data.solver.as_ref().map(|solver| solver.analysis_type);
+    if analysis == Some(AnalysisType::Dynamic) {
+        let step = match super::dynamic_step::parse(h, body) {
+            Ok(step) => step,
+            Err(reason) => return Some(reason),
+        };
+        let groups: HashSet<_> = data
+            .boundary_conditions
+            .iter()
+            .map(|bc| StepGroup::Boundary(bc.group_id))
+            .chain(
+                data.nodal_loads
+                    .iter()
+                    .map(|load| StepGroup::Load(load.group_id)),
+            )
+            .chain(
+                data.distributed_loads
+                    .iter()
+                    .map(|load| StepGroup::Load(load.group_id)),
+            )
+            .collect();
+        if step.groups.iter().any(|group| !groups.contains(group)) {
+            return Some("Dynamic STEP refers to an undefined boundary/load group");
+        }
+        return None;
+    }
     let valid_integer = |key: &str| {
         h.params.get(key).is_none_or(|s| {
             s.parse::<u32>()
@@ -859,6 +912,126 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_fixed_step_round_trips_group_ids_for_the_same_targets() {
+        let mut mesh = fem_core::FemMesh::demo_hex8();
+        mesh.node_sets.push(fem_core::FemNodeSet {
+            name: "LOADED".into(),
+            nodes: vec![fem_core::NodeId(1), fem_core::NodeId(2)],
+        });
+        let read = |text: &str| super::super::parse_cnt(text, &mesh, 0);
+        let source = concat!(
+            "!SOLUTION, TYPE=DYNAMIC\n",
+            "!DYNAMIC, TYPE=NONLINEAR\n",
+            "1,1\n0,1e5,10000,10\n0.5,0.25\n1,1,0,0\n50,1,50\n1,0,0,0,0,0\n",
+            "!BOUNDARY\nALL,1,1,0\n",
+            "!BOUNDARY, GRPID=2\nALL,2,3,0\n",
+            "!CLOAD, GRPID=2\nLOADED,1,5\n",
+            "!CLOAD, GRPID=5\nLOADED,1,5\n",
+            "!DLOAD, GRPID=4\n1,GRAV,2,1,0,0\n",
+            "!DLOAD, GRPID=5\n1,GRAV,2,1,0,0\n",
+            "!STEP, TYPE=STATIC, INC_TYPE=FIXED, SUBSTEPS=10000, MAXITER=100, CONVERG=1d-20\n",
+            " 0.12345678901234567d0, 1d5\n",
+            " BOUNDARY, 2\n LOAD, 5\n BOUNDARY, 1\n LOAD, 4\n",
+            "!END\n",
+        );
+        let data = read(source);
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        let mut setup = AnalysisSetup::default();
+        data.merge_into(&mut setup);
+        let step = setup.solver.dynamic_step.as_ref().unwrap();
+        assert_eq!((step.increment, step.duration), (0.12345678901234567, 1e5));
+        assert_eq!(
+            (step.substeps, step.max_iterations, step.convergence),
+            (Some(10000), Some(100), Some(1e-20))
+        );
+        assert_eq!(
+            step.groups,
+            [
+                StepGroup::Boundary(2),
+                StepGroup::Load(5),
+                StepGroup::Boundary(1),
+                StepGroup::Load(4)
+            ]
+        );
+        assert_eq!(
+            setup.solver.dynamic.as_ref().unwrap().fallback_increment,
+            10.0
+        );
+        let generated = crate::cnt_writer::build_cnt(&setup, &[]);
+        let reloaded = read(&generated);
+        assert!(
+            reloaded.import_issues.is_empty(),
+            "{:?}",
+            reloaded.import_issues
+        );
+        assert_eq!(
+            reloaded.solver.unwrap().dynamic_step.as_ref().unwrap(),
+            step
+        );
+        let boundary_groups: HashSet<_> = reloaded
+            .boundary_conditions
+            .iter()
+            .map(|bc| bc.group_id)
+            .collect();
+        assert_eq!(boundary_groups, HashSet::from([1, 2]));
+        assert_eq!(reloaded.nodal_loads.len(), 4);
+        assert_eq!(generated.matches("  LOADED,1,").count(), 2);
+        for group in [2, 5] {
+            assert_eq!(
+                reloaded
+                    .nodal_loads
+                    .iter()
+                    .filter(|load| load.group_id == group)
+                    .count(),
+                setup.nodal_loads.len() / 2
+            );
+        }
+        assert_eq!(
+            reloaded
+                .distributed_loads
+                .iter()
+                .map(|load| load.group_id)
+                .collect::<Vec<_>>(),
+            [4, 5]
+        );
+        let before = setup.nodal_loads.len();
+        setup.remove_load_group(0);
+        assert_eq!(setup.nodal_loads.len(), before / 2);
+        assert!(setup.nodal_loads.iter().all(|load| load.group_id == 5));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dynamic.cnt");
+        let error = crate::write_cnt_file(&path, &setup)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("End-to-end dynamic project"));
+        assert!(!path.exists());
+
+        for (before, after, keyword) in [
+            ("INC_TYPE=FIXED", "INC_TYPE=AUTO", "!STEP"),
+            (" 0.12345678901234567d0, 1d5", " NaN, 1d5", "!STEP"),
+            (" 0.12345678901234567d0, 1d5", " 1,0", "!STEP"),
+            (" LOAD, 5", " CONTACT, 5", "!STEP"),
+            (" LOAD, 5", " LOAD, 99", "!STEP"),
+            (" LOAD, 5", " LOAD, 4", "!STEP"),
+            ("!END", "!step\n1,1\n!END", "!step"),
+            ("!CLOAD, GRPID=2", "!CLOAD, GRPID=2, GRPID=5", "!CLOAD"),
+            ("!CLOAD, GRPID=2", "!CLOAD, GRPID=2147483648", "!CLOAD"),
+        ] {
+            let data = read(&source.replace(before, after));
+            assert!(
+                data.import_issues
+                    .iter()
+                    .any(|issue| issue.keyword.starts_with(keyword)),
+                "{after}: {:?}",
+                data.import_issues
+            );
+            if keyword.eq_ignore_ascii_case("!STEP") {
+                assert!(data.solver.unwrap().dynamic_step.is_none(), "{after}");
+            }
+        }
+    }
+
+    #[test]
     fn newmark_dynamic_settings_round_trip_without_enabling_incomplete_project_export() {
         let source = concat!(
             "!SOLUTION, TYPE=DYNAMIC\n",
@@ -882,7 +1055,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("dynamic.cnt");
         let error = crate::write_cnt_file(&path, &setup).unwrap_err().to_string();
-        assert!(error.contains("Full STEP and boundary/load group controls"));
+        assert!(error.contains("A supported explicit fixed-increment STEP is required"));
         assert!(!path.exists());
 
         for (before, after) in [

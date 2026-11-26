@@ -999,6 +999,7 @@ mod tests {
         let mut setup = AnalysisSetup::default();
         for node in nodes {
             setup.nodal_loads.push(NodalLoad {
+                group_id: 1,
                 name: "LOADED".into(),
                 mesh_index: 0,
                 node,
@@ -1073,6 +1074,7 @@ mod tests {
     fn remaps_every_mesh_scoped_analysis_target() {
         let setup = AnalysisSetup {
             boundary_conditions: vec![BoundaryCondition {
+                group_id: 1,
                 name: "fixed".into(),
                 mesh_index: 1,
                 nodes: vec![NodeId(2)],
@@ -1083,6 +1085,7 @@ mod tests {
                 value: 0.0,
             }],
             nodal_loads: vec![NodalLoad {
+                group_id: 1,
                 name: "force".into(),
                 mesh_index: 1,
                 node: NodeId(3),
@@ -1092,6 +1095,7 @@ mod tests {
                 value: 10.0,
             }],
             distributed_loads: vec![DistributedLoad {
+                group_id: 1,
                 name: "pressure".into(),
                 mesh_index: 1,
                 target: DistributedLoadTarget::Faces(vec![ElementFaceRef::new(
@@ -1138,6 +1142,7 @@ mod tests {
         model.add_mesh("SECOND", second_mesh);
         let mut setup = AnalysisSetup {
             boundary_conditions: vec![BoundaryCondition {
+                group_id: 1,
                 name: "fixed".into(),
                 mesh_index: 1,
                 nodes: vec![NodeId(0)],
@@ -1148,6 +1153,7 @@ mod tests {
                 value: 0.0,
             }],
             nodal_loads: vec![NodalLoad {
+                group_id: 1,
                 name: "force".into(),
                 mesh_index: 1,
                 node: NodeId(0),
@@ -1232,6 +1238,7 @@ mod tests {
         let model = FemModel::demo_hex8();
         let mut setup = AnalysisSetup::default();
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "BAD_BC".into(),
             mesh_index: 0,
             nodes: vec![NodeId(999)],
@@ -1320,6 +1327,7 @@ mod tests {
         let mut setup = AnalysisSetup::default();
         setup.solver.analysis_type = AnalysisType::NlStatic;
         setup.boundary_conditions.push(BoundaryCondition {
+            group_id: 1,
             name: "fixed".into(),
             mesh_index: 1,
             nodes: vec![NodeId(1)],

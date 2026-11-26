@@ -146,7 +146,7 @@ fn tutorial_all_eigen_modes_and_heat_match_native_and_standalone_vtk() {
 #[test]
 #[ignore = "Requires BEVYISTR_TUTORIAL_DIR; checks the original cavity-flow MSH and CNT"]
 fn tutorial_cavity_flow_material_and_time_integration() {
-    use fem_core::{AnalysisSetup, FemModel};
+    use fem_core::{AnalysisSetup, FemModel, StepGroup};
 
     let folder = root().join("18_cavity_flow");
     let project = hecmw::load_mesh_project(folder.join("cavityflow.msh")).unwrap();
@@ -158,9 +158,15 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     };
     assert_eq!(setup.material_by_name("FLUID").unwrap().density, Some(0.0));
     let data = hecmw::load_cnt_file(folder.join("cavityflow.cnt"), &project.mesh, 0).unwrap();
-    assert!(!data.import_issues.iter().any(|issue| {
-        issue.keyword.starts_with("!FLUID") || issue.keyword.starts_with("!DYNAMIC")
-    }));
+    assert!(
+        !data.import_issues.iter().any(|issue| {
+            ["!FLUID", "!DYNAMIC", "!STEP", "!BOUNDARY"]
+                .iter()
+                .any(|keyword| issue.keyword.starts_with(keyword))
+        }),
+        "{:?}",
+        data.import_issues
+    );
     data.merge_into(&mut setup);
     let dynamic = setup.solver.dynamic.as_ref().unwrap();
     assert_eq!((dynamic.start_time, dynamic.end_time), (0., 1e5));
@@ -169,6 +175,22 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     assert_eq!(dynamic.monitor_node_or_group, "1");
     assert_eq!(dynamic.monitor_interval, 50);
     assert_eq!(dynamic.output_flags, [1, 0, 0, 0, 0, 0]);
+    let step = setup.solver.dynamic_step.as_ref().unwrap();
+    assert_eq!((step.increment, step.duration), (10., 1e5));
+    assert_eq!(
+        (step.substeps, step.max_iterations, step.convergence),
+        (Some(10000), Some(100), Some(1e-20))
+    );
+    assert_eq!(
+        step.groups,
+        [StepGroup::Boundary(1), StepGroup::Boundary(2)]
+    );
+    let boundaries: Vec<_> = setup
+        .boundary_conditions
+        .iter()
+        .map(|bc| (bc.name.as_str(), bc.group_id))
+        .collect();
+    assert_eq!(boundaries, [("N_VELO", 1), ("N_VELO", 1), ("N_FIX", 2)]);
     let fluid = setup.material_by_name("FLUID").unwrap();
     assert_eq!(fluid.dynamic_viscosity, Some(0.001));
     assert_eq!(fluid.density, Some(1000.0));
