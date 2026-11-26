@@ -149,8 +149,19 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     use fem_core::{AnalysisSetup, FemModel, StepGroup};
 
     let folder = root().join("18_cavity_flow");
-    let project = hecmw::load_mesh_project(folder.join("cavityflow.msh")).unwrap();
+    let control_path = folder.join("hecmw_ctrl.dat");
+    let control = hecmw::load_hecmw_ctrl(&control_path).unwrap();
+    assert!(
+        control.import_issues.is_empty(),
+        "{:?}",
+        control.import_issues
+    );
+    let (mesh_path, cnt_path) = hecmw::resolve_paths(&control_path, &control);
+    let project = hecmw::load_mesh_project(mesh_path.unwrap()).unwrap();
+    let partition = hecmw::partition_control::load(folder.join("hecmw_part_ctrl.dat")).unwrap();
     let mut setup = AnalysisSetup {
+        frontistr_control: control.settings,
+        frontistr_partition: Some(partition.clone()),
         materials: project.materials,
         sections: project.sections,
         import_issues: project.import_issues,
@@ -174,7 +185,7 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     assert_eq!(section.element_set_name.as_deref(), Some("ELEMENT_ALL"));
     assert_eq!(section.material_name, "FLUID");
     assert_eq!(section.kind, fem_core::SectionKind::Solid);
-    let data = hecmw::load_cnt_file(folder.join("cavityflow.cnt"), &project.mesh, 0).unwrap();
+    let data = hecmw::load_cnt_file(cnt_path.unwrap(), &project.mesh, 0).unwrap();
     assert!(
         !data.import_issues.iter().any(|issue| {
             ["!FLUID", "!DYNAMIC", "!STEP", "!BOUNDARY"]
@@ -214,12 +225,59 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     assert_eq!((fluid.young_modulus, fluid.poisson_ratio), (None, None));
     assert!(fluid.mesh_fluid_placeholder);
     let model = FemModel::single_mesh("Cavity flow", project.mesh);
-    assert!(hecmw::validate_frontistr_project(&model, &setup).has_errors());
+    let report = hecmw::validate_frontistr_project(&model, &setup);
+    assert!(!report.has_errors(), "{}", report.summary(20));
+
+    let mut invalid = setup.clone();
+    invalid.solver.dynamic.as_mut().unwrap().fallback_increment *= 2.0;
+    assert!(
+        hecmw::validate_frontistr_project(&model, &invalid)
+            .summary(20)
+            .contains("STEP DTIME")
+    );
+    invalid = setup.clone();
+    invalid.boundary_conditions.retain(|bc| bc.group_id != 2);
+    assert!(
+        hecmw::validate_frontistr_project(&model, &invalid)
+            .summary(20)
+            .contains("distinct BOUNDARY groups")
+    );
+    invalid = setup.clone();
+    invalid.sections.clear();
+    assert!(
+        hecmw::validate_frontistr_project(&model, &invalid)
+            .summary(20)
+            .contains("Every fluid element needs a SOLID section")
+    );
 
     let dir = tempfile::tempdir().unwrap();
-    let destination = dir.path().join("roundtrip.msh");
-    hecmw::write_msh_file_with_setup(&destination, &model, 0, &setup).unwrap();
-    let reloaded = hecmw::load_mesh_project(destination).unwrap();
+    hecmw::write_parallel_frontistr_project(
+        dir.path(),
+        "roundtrip",
+        &model,
+        &setup,
+        "new_rank_mesh",
+        partition.domains.get(),
+    )
+    .unwrap();
+    let control_path = dir.path().join("hecmw_ctrl.dat");
+    let reloaded_ctrl = hecmw::load_hecmw_ctrl(&control_path).unwrap();
+    assert!(
+        reloaded_ctrl.import_issues.is_empty(),
+        "{:?}",
+        reloaded_ctrl.import_issues
+    );
+    assert_eq!(
+        reloaded_ctrl.distributed_mesh_path.as_deref(),
+        Some("new_rank_mesh")
+    );
+    assert_eq!(reloaded_ctrl.settings, setup.frontistr_control);
+    assert_eq!(
+        hecmw::partition_control::load(dir.path().join("hecmw_part_ctrl.dat")).unwrap(),
+        partition
+    );
+    let (mesh_path, cnt_path) = hecmw::resolve_paths(&control_path, &reloaded_ctrl);
+    let reloaded = hecmw::load_mesh_project(mesh_path.unwrap()).unwrap();
     assert!(
         reloaded.import_issues.is_empty(),
         "{:?}",
@@ -229,6 +287,46 @@ fn tutorial_cavity_flow_material_and_time_integration() {
     assert_eq!(reloaded.sections, setup.sections);
     assert_eq!(reloaded.mesh.elements, model.meshes[0].elements);
     assert_eq!(reloaded.mesh.node_sets, model.meshes[0].node_sets);
+    let cnt = hecmw::load_cnt_file(cnt_path.unwrap(), &reloaded.mesh, 0).unwrap();
+    assert!(cnt.import_issues.is_empty(), "{:?}", cnt.import_issues);
+    let mut roundtrip = AnalysisSetup {
+        materials: reloaded.materials,
+        sections: reloaded.sections,
+        ..Default::default()
+    };
+    cnt.merge_into(&mut roundtrip);
+    assert_eq!(roundtrip.solver, setup.solver);
+    assert_eq!(roundtrip.materials, setup.materials);
+    for (before, after) in setup
+        .boundary_conditions
+        .iter()
+        .zip(&roundtrip.boundary_conditions)
+    {
+        assert_eq!(
+            (
+                &before.name,
+                before.group_id,
+                before.dof_start,
+                before.dof_end,
+                before.value
+            ),
+            (
+                &after.name,
+                after.group_id,
+                after.dof_start,
+                after.dof_end,
+                after.value
+            )
+        );
+        assert_eq!(before.nodes, after.nodes);
+    }
+    assert_eq!(
+        setup.boundary_conditions.len(),
+        roundtrip.boundary_conditions.len()
+    );
+    for target in [fem_core::OutputTarget::Res, fem_core::OutputTarget::Vis] {
+        assert_eq!(setup.output.write(target), roundtrip.output.write(target));
+    }
 }
 
 #[test]

@@ -100,7 +100,12 @@ fn write_reference_project(directory: &Path) {
     hecmw::write_frontistr_project(directory, "bar", &model, &setup).unwrap();
 }
 
-fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App, Entity, Entity) {
+fn load_workflow_project(
+    input: &Path,
+    output: &Path,
+    stem: &str,
+    mut run: FrontistrRunState,
+) -> (App, Entity, Entity) {
     let control = input.join("hecmw_ctrl.dat");
     let files = hecmw::load_hecmw_ctrl(&control).unwrap();
     let (mesh, cnt) = hecmw::resolve_paths(&control, &files);
@@ -108,12 +113,18 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
     request.request(mesh.unwrap());
     let mut pending_cnt = PendingCntLoad::default();
     pending_cnt.request(cnt.unwrap(), 0, 0);
+    let partition = files
+        .has_partition_input
+        .then(|| hecmw::partition_control::load(input.join("hecmw_part_ctrl.dat")).unwrap());
+    if let Some(partition) = &partition {
+        run.use_imported_ranks(partition.domains.get());
+    }
     pending_cnt.project_control = Some(fem_core::FrontistrControlImport {
         control: files.settings,
-        partition: None,
+        partition,
         issues: files.import_issues,
     });
-    run.register_export(output.into(), "bar".into());
+    run.register_export(output.into(), stem.into());
 
     let mut app = App::new();
     app.insert_resource(request)
@@ -167,6 +178,12 @@ fn load_project(input: &Path, output: &Path, mut run: FrontistrRunState) -> (App
     let world = app.world();
     let mesh_status = world.resource::<MeshLoadStatus>();
     assert!(mesh_status.error.is_none(), "{mesh_status:?}");
+    (app, button, stop_button)
+}
+
+fn load_project(input: &Path, output: &Path, run: FrontistrRunState) -> (App, Entity, Entity) {
+    let (app, button, stop_button) = load_workflow_project(input, output, "bar", run);
+    let world = app.world();
     let mesh = &world.resource::<FemModel>().meshes[0];
     assert_eq!(mesh.elements.len(), LENGTH as usize);
     let setup = world.resource::<AnalysisSetup>();
@@ -515,6 +532,58 @@ fn installed_frontistr_matrix_dump_then_normal_result_load() {
 #[ignore = "Requires installed FrontISTR, a matching MPI launcher and hecmw_part1"]
 fn installed_frontistr_workflow_mpi() {
     check_latest_results(installed_run(SolverLaunchMode::Mpi), false);
+}
+
+#[test]
+#[ignore = "Requires the FrontISTR cavity tutorial, installed solver, partitioner and matching MPI launcher"]
+fn installed_frontistr_cavity_flow_mpi() {
+    let tutorial = std::env::var_os("BEVYISTR_TUTORIAL_DIR")
+        .map(PathBuf::from)
+        .expect("Set BEVYISTR_TUTORIAL_DIR to the FrontISTR tutorial directory");
+    let input = tutorial.join("18_cavity_flow");
+    let output = tempfile::tempdir().unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (mut app, button, _) = load_workflow_project(
+            &input,
+            output.path(),
+            "cavityflow",
+            installed_run(SolverLaunchMode::Mpi),
+        );
+        click(&mut app, button);
+        wait_until(&mut app, 1800, |world| {
+            let run = world.resource::<FrontistrRunState>();
+            let state = &world.resource::<SolveResultsState>().status;
+            assert!(
+                run.is_running()
+                    || (run.completed_results().is_some() && !state.starts_with("Could not")),
+                "{}\n{state}\n{}",
+                run.status_label(),
+                run.log_label()
+            );
+            *world.resource::<SidebarPage>() == SidebarPage::Results
+        });
+        let results = app.world().resource::<FemResultSet>();
+        let frames = &results.by_mesh[0];
+        assert_eq!(frames.len(), 101);
+        let last = frames.last().unwrap();
+        assert_eq!((last.step, last.time), (10000, 100000.0));
+        assert!(matches!(
+            last.field_by_name("VELOCITY"),
+            Some(ResultField::NodeVector { .. })
+        ));
+        assert!(last.field_by_name("PRESSURE").is_some());
+        println!(
+            "Cavity flow: {} frames with velocity and pressure",
+            frames.len()
+        );
+    }));
+    if let Err(panic) = result {
+        eprintln!(
+            "Cavity-flow inputs and logs retained at {}",
+            output.keep().display()
+        );
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]

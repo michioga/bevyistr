@@ -1003,7 +1003,7 @@ mod tests {
         let error = crate::write_cnt_file(&path, &setup)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("End-to-end dynamic project"));
+        assert!(error.contains("Dynamic project output supports only flow"));
         assert!(!path.exists());
 
         for (before, after, keyword) in [

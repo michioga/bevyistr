@@ -25,7 +25,10 @@ pub fn write_cnt_file_with_contacts(
     setup: &AnalysisSetup,
     contacts: &[ContactPair],
 ) -> io::Result<(usize, usize, usize, usize, usize)> {
-    let blockers = export_blockers(setup);
+    let mut blockers = export_blockers(setup);
+    if setup.solver.analysis_type == AnalysisType::Dynamic && !contacts.is_empty() {
+        blockers.push("Flow setup does not support contact pairs".into());
+    }
     if !blockers.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -67,12 +70,9 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         }
     }
     if setup.solver.analysis_type == AnalysisType::Dynamic {
-        let details = match (&setup.solver.dynamic, &setup.solver.dynamic_step) {
-            (None, _) => "A supported DYNAMIC time-history card is required.",
-            (_, None) => "A supported explicit fixed-increment STEP is required.",
-            _ => "End-to-end dynamic project Export and Run are not supported yet.",
-        };
-        blockers.push(format!("Dynamic setup is incomplete: {details}"));
+        if let Err(details) = validate_flow_controls(setup) {
+            blockers.push(format!("Dynamic setup is incomplete: {details}"));
+        }
     } else if setup.boundary_conditions.iter().any(|bc| bc.group_id != 1)
         || setup.nodal_loads.iter().any(|load| load.group_id != 1)
         || setup
@@ -106,6 +106,71 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         }
     }
     blockers
+}
+
+fn validate_flow_controls(setup: &AnalysisSetup) -> Result<(), &'static str> {
+    let dynamic = setup
+        .solver
+        .dynamic
+        .as_ref()
+        .ok_or("A supported DYNAMIC time-history card is required.")?;
+    let step = setup
+        .solver
+        .dynamic_step
+        .as_ref()
+        .ok_or("A supported explicit fixed-increment STEP is required.")?;
+    if !setup
+        .materials
+        .iter()
+        .any(|material| material.mesh_fluid_placeholder)
+    {
+        return Err("Dynamic project output supports only flow with a mesh-side fluid material.");
+    }
+    if !dynamic.nonlinear {
+        return Err("Flow requires nonlinear implicit Newmark time integration.");
+    }
+    // FrontISTR versions differ on which card supplies the fixed increment.
+    // Require agreement so the result does not depend on that precedence.
+    let same_time = |a: f64, b: f64| {
+        a.is_finite()
+            && b.is_finite()
+            && (a - b).abs() <= 16.0 * f64::EPSILON * a.abs().max(b.abs())
+    };
+    if !(step.increment > 0.0 && same_time(step.increment, dynamic.fallback_increment)) {
+        return Err("Fixed flow requires STEP DTIME to match DYNAMIC t_delta.");
+    }
+    if !(step.duration > 0.0 && same_time(step.duration, dynamic.end_time - dynamic.start_time)) {
+        return Err("Fixed flow requires STEP ETIME to match the DYNAMIC time span.");
+    }
+    if !setup.nodal_loads.is_empty() || !setup.distributed_loads.is_empty() {
+        return Err(
+            "Flow output supports prescribed velocity groups; CLOAD and DLOAD are not supported.",
+        );
+    }
+    if setup.boundary_conditions.iter().any(|bc| {
+        !(1..=i32::MAX as u32).contains(&bc.group_id)
+            || bc.rotation_center.is_some()
+            || bc.dof_start == 0
+            || bc.dof_start > bc.dof_end
+            || bc.dof_end > 3
+            || !bc.value.is_finite()
+    }) {
+        return Err(
+            "Flow BOUNDARY requires finite velocity components 1 to 3 and a positive GRPID.",
+        );
+    }
+    let mut seen_groups = std::collections::HashSet::new();
+    if step.groups.is_empty()
+        || step.groups.iter().any(|group| {
+            let StepGroup::Boundary(id) = *group else {
+                return true;
+            };
+            !seen_groups.insert(id) || !setup.boundary_conditions.iter().any(|bc| bc.group_id == id)
+        })
+    {
+        return Err("Flow STEP requires distinct BOUNDARY groups defined in the project.");
+    }
+    Ok(())
 }
 
 pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> String {

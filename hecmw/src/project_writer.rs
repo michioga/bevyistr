@@ -186,16 +186,6 @@ pub fn validate_frontistr_project(
         if mesh.elements.is_empty() {
             report.warning(&location, "contains no elements");
         }
-        if mesh
-            .elements
-            .iter()
-            .any(|element| element.element_type == ElementType::FluidTet4)
-        {
-            report.error(
-                &location,
-                "Flow setup for element type 3414 is unavailable for project export and Run FrontISTR",
-            );
-        }
 
         let mut node_ids = BTreeSet::new();
         for node in &mesh.nodes {
@@ -297,8 +287,94 @@ pub fn validate_frontistr_project(
     }
 
     validate_analysis_setup(model, setup, &mut report);
+    validate_flow_mesh(model, setup, &mut report);
     validate_contacts(model, setup, &mut report);
     report
+}
+
+fn validate_flow_mesh(
+    model: &FemModel,
+    setup: &AnalysisSetup,
+    report: &mut FrontistrValidationReport,
+) {
+    let has_fluid_elements = model.meshes.iter().any(|mesh| {
+        mesh.elements
+            .iter()
+            .any(|element| element.element_type == ElementType::FluidTet4)
+    });
+    if setup.solver.analysis_type != AnalysisType::Dynamic {
+        if has_fluid_elements {
+            report.error(
+                "Flow mesh",
+                "Flow setup for element type 3414 requires Dynamic analysis",
+            );
+        }
+        return;
+    }
+
+    let [mesh] = model.meshes.as_slice() else {
+        report.error("Flow mesh", "Dynamic flow requires a single mesh");
+        return;
+    };
+    if !has_fluid_elements
+        || mesh
+            .elements
+            .iter()
+            .any(|element| element.element_type != ElementType::FluidTet4)
+    {
+        report.error(
+            "Flow mesh",
+            "Dynamic flow requires a mesh made entirely of element type 3414",
+        );
+        return;
+    }
+    if !model.contacts.is_empty() || !setup.mpc_equations.is_empty() {
+        report.error(
+            "Flow mesh",
+            "This flow setup does not support contact pairs or MPC equations",
+        );
+    }
+    let mut assigned = BTreeSet::new();
+    for section in setup
+        .sections
+        .iter()
+        .filter(|section| section.mesh_index == 0)
+    {
+        if section.kind != SectionKind::Solid
+            || !setup
+                .material_by_name(&section.material_name)
+                .is_some_and(|material| material.mesh_fluid_placeholder)
+        {
+            report.error(
+                &section.name,
+                "Flow elements need a SOLID section with a mesh-side fluid material",
+            );
+            continue;
+        }
+        let element_ids: Box<dyn Iterator<Item = _>> = match &section.element_set_name {
+            None => Box::new(mesh.elements.iter().map(|element| element.id)),
+            Some(group) => {
+                let Some(set) = mesh.element_sets.iter().find(|set| &set.name == group) else {
+                    continue; // Reported by generic section validation.
+                };
+                Box::new(set.elements.iter().copied())
+            }
+        };
+        let overlapping = element_ids.fold(false, |overlap, id| !assigned.insert(id) || overlap);
+        if overlapping {
+            report.error(&section.name, "Flow SOLID section assignments overlap");
+        }
+    }
+    if mesh
+        .elements
+        .iter()
+        .any(|element| !assigned.contains(&element.id))
+    {
+        report.error(
+            "Flow mesh",
+            "Every fluid element needs a SOLID section with a mesh-side fluid material",
+        );
+    }
 }
 
 fn validate_analysis_setup(

@@ -74,6 +74,8 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
     let mut seen_result = false;
     let mut seen_visual = false;
     let mut seen_subdir = false;
+    let mut visualizer_mesh = None;
+    let mut visualizer_result = None;
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
 
@@ -129,11 +131,30 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
                         line, filename, &mut seen_visual,
                         &mut c.settings.visual_header, &mut c.settings.binary_visual,
                     ).err();
+                } else if name.eq_ignore_ascii_case("result")
+                    && line.split(',').count() == 3
+                    && parameter("IO").is_some_and(|io| io.eq_ignore_ascii_case("IN"))
+                    && visualizer_result.is_none()
+                    && let Some(path) = filename
+                {
+                    visualizer_result = Some((i, line, path));
                 } else {
                     problem = Some("This global control setting cannot be regenerated");
                 }
+            } else if keyword.eq_ignore_ascii_case("!MESH") && name.eq_ignore_ascii_case("mesh") {
+                if line.split(',').count() == 3
+                    && parameter("TYPE")
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("HECMW-ENTIRE"))
+                    && visualizer_mesh.is_none()
+                    && let Some(path) = filename
+                {
+                    visualizer_mesh = Some((i, line, path));
+                } else {
+                    problem =
+                        Some("Unsupported visualizer mesh input; expected one HECMW-ENTIRE alias");
+                }
             } else if keyword.eq_ignore_ascii_case("!RESTART")
-                || (keyword.eq_ignore_ascii_case("!MESH") && parameter("REFINE").is_some())
+                || (keyword.eq_ignore_ascii_case("!MESH") && !has_no_mesh_refinement(line))
             {
                 problem = Some("This global control setting cannot be regenerated");
             }
@@ -191,7 +212,47 @@ fn parse_ctrl(text: &str) -> HecmwCtrlContent {
         i += 1;
     }
 
+    for (alias, target, flag, message) in [
+        (
+            visualizer_mesh,
+            c.mesh_path.as_deref(),
+            &mut c.settings.visualizer_mesh_input,
+            "Visualizer mesh input must use the same entire mesh as the project",
+        ),
+        (
+            visualizer_result,
+            c.settings.result_header.as_deref(),
+            &mut c.settings.visualizer_result_input,
+            "Visualizer result input must use the same file header as fstrRES",
+        ),
+    ] {
+        if let Some((i, line, path)) = alias {
+            if target == Some(path) {
+                *flag = true;
+            } else {
+                c.import_issues.push(SetupImportIssue {
+                    source: "hecmw_ctrl.dat".into(),
+                    line: i + 1,
+                    keyword: line.into(),
+                    message: message.into(),
+                });
+            }
+        }
+    }
     c
+}
+
+fn has_no_mesh_refinement(line: &str) -> bool {
+    let mut values = line.split(',').skip(1).filter_map(|field| {
+        let (key, value) = field.split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case("REFINE")
+            .then(|| value.trim())
+    });
+    values
+        .next()
+        .is_none_or(|value| value.parse::<u32>() == Ok(0))
+        && values.next().is_none()
 }
 
 fn read_result_output(
@@ -282,6 +343,20 @@ mod tests {
             let issue = &data.import_issues[0];
             assert_eq!(issue.line, if card.ends_with("other") { 3 } else { 1 });
         }
+    }
+
+    #[test]
+    fn rejects_refinement_and_visualizer_aliases_that_point_to_other_files() {
+        let text = format!(
+            "{}!MESH,NAME=mesh,TYPE=HECMW-ENTIRE\nother.msh\n!RESULT,NAME=result,IO=IN\nother.res\n",
+            SAMPLE.replace("TYPE=HECMW-ENTIRE", "TYPE=HECMW-ENTIRE, REFINE=1")
+        );
+        let c = parse_ctrl(&text);
+        assert_eq!(c.import_issues.len(), 3);
+        assert!(!c.settings.visualizer_mesh_input);
+        assert!(!c.settings.visualizer_result_input);
+        assert_eq!(c.mesh_path.as_deref(), Some("hinge.msh"));
+        assert!(!has_no_mesh_refinement("!MESH, REFINE=0, REFINE=1"));
     }
 
     #[test]

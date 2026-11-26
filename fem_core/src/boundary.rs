@@ -769,6 +769,9 @@ pub struct FrontistrControlSettings {
     pub result_header: Option<String>,
     pub visual_header: Option<String>,
     pub binary_visual: Option<bool>,
+    /// Standalone visualizer aliases for the same entire mesh and RES output.
+    pub visualizer_mesh_input: bool,
+    pub visualizer_result_input: bool,
     pub subdirectories: Option<FrontistrSubdirectories>,
 }
 

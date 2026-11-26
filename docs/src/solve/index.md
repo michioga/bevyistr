@@ -47,7 +47,21 @@ Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角ス�
 
 明示的な固定増分の `!STEP` が1つある場合は、**Solve → IMPORTED !STEP | fixed increment** で `DTIME`（入力上の増分）、`ETIME`（ステップ時間幅）、反復設定、有効な拘束・荷重のグループを確認できます。この欄は読込内容の表示用です。例題の `DTIME` は `10`、`ETIME` は `100000`、`BOUNDARY` はグループ1と2です。`!STEP` の `DTIME` と `!DYNAMIC` の `t_delta` は別々に保持します。使用するFrontISTRの版に応じて、固定増分の扱いも確認してください。 [FrontISTRの `!STEP` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/step.html)
 
-動解析のプロジェクト全体の **Export／Run FrontISTR** は対応準備中です。
+### 18_cavity_flow をMPIで書き出し・実行する
+
+1. **Model → Open Project** で `18_cavity_flow/hecmw_ctrl.dat` を開きます。
+2. **Solve → FrontISTR Execution → MPI** を選びます。例題から読み込んだ **8 ranks** と **KMETIS** を確認します。
+3. **Export** では `.msh`、`.cnt`、`hecmw_ctrl.dat`、`hecmw_part_ctrl.dat` を出力します。**Run FrontISTR** を選ぶと入力の出力に続けて領域分割とMPI実行を開始します。例題とは別の出力フォルダを選んでください。
+4. 正常終了後、Resultsで **VELOCITY** または **PRESSURE** を選びます。
+
+対象は単一の流体メッシュ（要素 `3414`）、非圧縮ニュートン流体、陰解法Newmarkと固定増分の `!STEP` 1件、速度の `!BOUNDARY` 指定です。`!STEP` の `DTIME` と `!DYNAMIC` の `t_delta`、および `ETIME` と開始・終了時刻の差は一致させます。構造と流体の混在、接触・MPC、集中・分布荷重は再出力制限の対象です。 [FrontISTRの並列実行手順](https://source-docs.frontistr.com/execution_guide/procedure/02_parallel.html)
+
+自動検証では実例題を別フォルダにMPI用に書き出し、4ファイルを再読込して確認しています。実際にFrontISTRを呼ぶテストは、対応するMPIランチャーと `hecmw_part1` が動く端末で実行できます。
+
+```powershell
+$env:BEVYISTR_TUTORIAL_DIR = 'D:/Work/FrontISTR/tutorial'
+cargo test -p bevyistr-ui --lib --locked installed_frontistr_cavity_flow_mpi -- --ignored --nocapture
+```
 
 ### 読み込んだ設定に未対応項目がある場合
 
@@ -60,8 +74,8 @@ Solveの最下部には元ファイル名・行番号・
 | --- | --- | --- |
 | 拘束・荷重の`GRPID` | 静解析・固有値では`GRPID=1`。省略時は1。対応する動解析の`!STEP`では複数の`GRPID`を読み込み、`BOUNDARY`／`LOAD`参照を保持します。 | 未定義グループの参照、静解析・固有値でのグループ1以外の指定 |
 | `!SOLVER` | 対応METHOD、反復法の`PRECOND=1`／`2`／`3`。標準の2データ行の `NITER`、`iterPREmax`、`NREST`、`NCOLOR_IN`、`RECYCLEPRE`、`RESID`、`SIGMA_DIAG`、`OMEGA` を保持します。反復法の `SCALING`、`ITERLOG`／`TIMELOG`、`DUMPTYPE`／`DUMPEXIT` にも対応します。 | その他の前処理、未知のMETHOD、追加のデータ行や列 |
-| 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md) | 動解析・熱解析のプロジェクト出力、複数ステップ、自動増分、非線形静解析での個別の時間設定や一部グループの有効化 |
-| 材料 | 等方弾性・密度。[非圧縮ニュートン流体の一定粘度・密度](../materials.md#非圧縮ニュートン流体)は読込・編集に対応。 | 流体プロジェクト全体のExport／Run、温度依存テーブル、異方弾性、弾塑性、超弾性 |
+| 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md)、上記の流体時刻歴 | 対応範囲外の動解析、熱解析、複数ステップ、自動増分、非線形静解析での個別の時間設定や一部グループの有効化 |
+| 材料 | 等方弾性・密度。[非圧縮ニュートン流体の一定粘度・密度](../materials.md#非圧縮ニュートン流体)は読込・編集・再出力に対応。 | 温度依存テーブル、異方弾性、弾塑性、超弾性 |
 | 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |
 | 保存間隔・出力項目 | 基本の`!WRITE`。`!OUTPUT_RES`／`!OUTPUT_VIS`のGROUP／ACTIONなどの拡張カードは単体出力で内容を保持します。 | `!WRITE`の追加オプション、名前付き出力GROUPを含む複数部品の統合出力 |
 
@@ -76,10 +90,10 @@ FrontISTRの仕様を確認する際は、設定項目ごとのページを参�
 - 新しいモデルをOpen Model／Open Projectで開き直すと、そのモデルの設定として再評価します。
   警告を消す目的で原本から必要な設定を削除しないでください。
 
-新規作成でDynamicを選んだ場合も、動解析のプロジェクト全体のExport／Runは制限されます。
+動解析のExport／Runには、流体メッシュと対応する材料・断面・時間積分・境界条件が必要です。
 互換性検査は、対応する入力設定と参照を保持できるかを確認します。解析モデルの妥当性は別途確認してください。
 
-`hecmw_ctrl.dat` の `fstrDYNA`、`result-in`、`fstrTEMP` は、既存プロジェクトを開いたときに再出力制限の理由として表示されます。 [結果ファイルの指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html)
+`hecmw_ctrl.dat` の `REFINE=0` は細分化なしの既定値として扱います。単独可視化用の `mesh` と `result` は、計算用の全体メッシュと `fstrRES` と同じファイルを指す場合、書き出し先でも対応するファイルを参照します。`fstrDYNA`、`result-in`、`fstrTEMP` は再出力制限の対象です。 [結果ファイルの指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html)
 
 Open Projectで読み込んだ `fstrRES` と `vis_out` の出力ファイル名と相対フォルダを、ExportとRun FrontISTRで保持します。たとえば `results/hinge.res` は、選択した出力フォルダを基準に使われます。`!SUBDIR,ON` を使用する場合は、そのファイル名と相対フォルダがFrontISTRのステップ・ランク別のフォルダ配置に組み込まれます。テキスト結果の自動読込も `fstrRES` の指定に従います。絶対パスや `..` を含む出力指定は、Solveに再出力制限として表示されます。 [FrontISTRの結果ファイル指定](https://source-docs.frontistr.com/en/keyword_reference/dat/result.html) · [サブディレクトリ設定](https://source-docs.frontistr.com/en/keyword_reference/dat/subdir.html)
 

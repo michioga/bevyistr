@@ -132,6 +132,17 @@ fn write_result_controls(
         }
         writeln!(out, "\n {header}").unwrap();
     }
+    if settings.visualizer_mesh_input {
+        writeln!(
+            out,
+            "!MESH, NAME=mesh, TYPE=HECMW-ENTIRE\n {}.msh",
+            p.mesh_name
+        )
+        .unwrap();
+    }
+    if settings.visualizer_result_input {
+        writeln!(out, "!RESULT, NAME=result, IO=IN\n {result}").unwrap();
+    }
     if let Some(subdir) = settings.subdirectories {
         write!(out, "!SUBDIR,{}", if subdir.enabled { "ON" } else { "OFF" }).unwrap();
         if let Some(limit) = subdir.limit {
@@ -216,6 +227,8 @@ mod tests {
             result_header: Some("results/analysis.out".into()),
             visual_header: Some("view/shape".into()),
             binary_visual: Some(false),
+            visualizer_mesh_input: true,
+            visualizer_result_input: true,
             subdirectories: Some(fem_core::FrontistrSubdirectories {
                 enabled: true,
                 limit: std::num::NonZeroU32::new(8000),

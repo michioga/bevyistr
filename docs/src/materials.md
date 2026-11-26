@@ -15,7 +15,7 @@
 
 両方の値をモデルの単位系で入力します。Enterで確定し、Escで入力前の値に戻ります。対応範囲は、有限で正の一定の粘度と密度を持つ `INCOMP_NEWTONIAN` です。温度依存のテーブルや他の流体モデルが含まれる場合は、Solveの互換性表示で確認できます。
 
-例題の `.msh` だけを開いた場合は、粘度と密度が未定義なので両欄を空欄で表示します。MSHの再出力では元の `!SECTION, TYPE=SOLID` の割り当てと、同名の `!MATERIAL, ITEM=3` のゼロ3項目を保持します。流体プロジェクト全体の **Export** と **Run FrontISTR** は対応準備中です。 [FrontISTRの `!MATERIAL` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/material.html) · [`!SECTION` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/section.html)
+例題の `.msh` だけを開いた場合は、粘度と密度が未定義なので両欄を空欄で表示します。MSHの再出力では元の `!SECTION, TYPE=SOLID` の割り当てと、同名の `!MATERIAL, ITEM=3` のゼロ3項目を保持します。プロジェクト全体を書き出す手順は、[流体例題のMPI実行](solve/index.md#18_cavity_flow-をmpiで書き出し実行する)を参照してください。 [FrontISTRの `!MATERIAL` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/material.html) · [`!SECTION` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/section.html)
 
 ## materials.toml
 

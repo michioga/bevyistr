@@ -355,7 +355,28 @@ pub(crate) fn export_button_system(
                 continue;
             };
 
-            match hecmw::write_frontistr_project(&dir, &stem, model, &setup) {
+            let preferences = run_state.preferences();
+            let exported = if setup.solver.analysis_type == fem_core::AnalysisType::Dynamic
+                && preferences.launch_mode == crate::solver_process::SolverLaunchMode::Mpi
+            {
+                crate::solver_process::new_partition_prefix(preferences.mpi_ranks).and_then(
+                    |prefix| {
+                        hecmw::write_parallel_frontistr_project(
+                            &dir,
+                            &stem,
+                            model,
+                            &setup,
+                            &prefix,
+                            preferences.mpi_ranks,
+                        )
+                        .map_err(|error| error.to_string())
+                    },
+                )
+            } else {
+                hecmw::write_frontistr_project(&dir, &stem, model, &setup)
+                    .map_err(|error| error.to_string())
+            };
+            match exported {
                 Ok(summary) => {
                     run_state.register_export(dir.clone(), stem.clone());
                     let part_note = if summary.part_count > 1 {
