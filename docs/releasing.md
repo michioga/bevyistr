@@ -2,7 +2,7 @@
 
 0.3.0以降のタグ・保守ブランチ・Windowsバイナリ配布の設計は
 [リリース管理方針](release-policy.md)を参照してください。
-配布用Actionsと検証スクリプトの操作は[Windows ZIP](windows-package.md)にまとめています。
+配布用Actionsと検証スクリプトの操作は[Windows MSI](windows-package.md)にまとめています。
 
 コミット・push・マージ・タグ作成・crates.io公開はメンテナーが行います。
 `publish_crates_io`で準備し、mainへマージしたv0.2.0を2026-09-20に公開しました。

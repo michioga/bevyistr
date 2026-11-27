@@ -1,9 +1,11 @@
-# Creates a reviewable ZIP. Never commits, tags, uploads, or publishes.
+# Creates a reviewable MSI. Never commits, tags, uploads, or publishes.
 [CmdletBinding()]
 param(
     [switch]$AllowDirty,
     [string]$Tag = '',
     [string]$AboutTool = 'cargo-about',
+    [string]$WixTool = 'wix',
+    [switch]$AcceptWixEula,
     [string]$ResultPath = 'target/windows-package-result.json'
 )
 $ErrorActionPreference = 'Stop'
@@ -36,6 +38,8 @@ try {
         if ($LASTEXITCODE -ne 0 -or $tagSha -ne $sha) { throw 'Checkout the tagged commit first' }
     }
     if ((& $AboutTool --version) -ne 'cargo-about 0.9.2') { throw 'Install cargo-about 0.9.2 with --features cli' }
+    $wixVersion = & $WixTool --version
+    if ($LASTEXITCODE -ne 0 -or $wixVersion -notmatch '^7\.0\.1(?:\+.+)?$') { throw 'WiX 7.0.1 is required' }
 
     # A unique output directory prevents silently replacing a reviewed candidate.
     $name = "bevyistr-v$version-windows-x86_64"
@@ -59,13 +63,14 @@ try {
     Copy-Item -LiteralPath $exe -Destination $bundle
     Copy-Item -LiteralPath 'materials.toml', 'LICENSE' -Destination $bundle
     $readme = [IO.File]::ReadAllText((Join-Path $repoRoot 'distribution/README-windows.txt'))
-    if (!$readme.StartsWith("bevyistr $version ")) { throw 'Update distribution/README-windows.txt version' }
+    if (!$readme.StartsWith('bevyistr @VERSION@ ')) { throw 'Expected version placeholder in distribution/README-windows.txt' }
+    $readme = $readme.Replace('@VERSION@', $version)
     [IO.File]::WriteAllText((Join-Path $bundle 'README.txt'), $readme, [Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath 'distribution/licenses' -Destination $bundle -Recurse
     Copy-Item -LiteralPath 'ui/assets/fonts/UDEVGothic-LICENSE.txt' -Destination (Join-Path $bundle 'licenses')
 
     # Preserve crate copyright notices, including licenses of bundled native code.
-    # Raw cargo-about JSON stays OUTSIDE the ZIP: it contains machine-local paths.
+    # Raw cargo-about JSON stays OUTSIDE the MSI: it contains machine-local paths.
     foreach ($entry in $licenses.crates) {
         $package = $entry.package
         if (!$package.source) { continue }
@@ -129,19 +134,20 @@ try {
         runner_image = $env:ImageOS; runner_image_version = $env:ImageVersion
         cargo_lock_sha256 = (Get-FileHash -LiteralPath Cargo.lock).Hash.ToLowerInvariant()
         license_tool = 'cargo-about 0.9.2'; license_crates = $licenses.crates.Count
+        installer_tool = "WiX $wixVersion"
         direct_dll_imports = $dlls; files_sha256 = $fileHashes
     }
     $record | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $bundle 'BUILD-INFO.json') -Encoding utf8
-    $zip = Join-Path $runRoot "$name.zip"
-    Compress-Archive -LiteralPath $bundle -DestinationPath $zip -CompressionLevel Optimal
-    $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-    "$hash  $name.zip" | Set-Content -LiteralPath (Join-Path $runRoot 'SHA256SUMS.txt') -Encoding ascii
+    $msi = Join-Path $runRoot "$name.msi"
+    & (Join-Path $PSScriptRoot 'build-windows-installer.ps1') -Bundle $bundle -Output $msi -WixTool $WixTool -AcceptWixEula:$AcceptWixEula
+    $hash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $name.msi" | Set-Content -LiteralPath (Join-Path $runRoot 'SHA256SUMS.txt') -Encoding ascii
     $public = Join-Path $runRoot 'artifacts'
     New-Item -ItemType Directory -Path $public | Out-Null
-    Copy-Item -LiteralPath $zip, (Join-Path $runRoot 'SHA256SUMS.txt') -Destination $public
-    $result = [ordered]@{ version=$version; source_commit=$sha; source_dirty=$dirty; tag=$Tag; artifact_directory=$public; zip=$zip; sha256=$hash; bundle=$bundle }
+    Copy-Item -LiteralPath $msi, (Join-Path $runRoot 'SHA256SUMS.txt') -Destination $public
+    $result = [ordered]@{ version=$version; source_commit=$sha; source_dirty=$dirty; tag=$Tag; artifact_directory=$public; msi=$msi; sha256=$hash; bundle=$bundle }
     $result | ConvertTo-Json | Set-Content -LiteralPath $ResultPath -Encoding utf8
-    Write-Host "Created $zip"
+    Write-Host "Created $msi"
     Write-Host "SHA256 $hash"
 } finally {
     [Environment]::SetEnvironmentVariable($rustFlagsName, $oldFlags, 'Process')

@@ -1,65 +1,44 @@
-# Windows ZIPの作成と検証
+# Windows MSIの作成と検証
 
-0.3.0からの配布用手順です。commit・push・main統合・タグ作成はメンテナーが行います。
-[公開チェックリスト](release-0.3.0.md)の確認を済ませてから正式公開します。
+v0.6.0からのWindows x86_64配布手順です。
 
 ## ローカル候補
 
-Windows、PowerShell 7、MSVC C++ビルドツールを使用します。
+Windows、PowerShell 7、MSVC C++ビルドツール、WiX 7.0.1を使います。WiXの利用条件を確認し、同意した環境でビルドしてください。PATHにWiXがない場合は、作成と検証の両方で `-WixTool <wix.exeのパス>` を指定できます。 [WiXの導入手順](https://docs.firegiant.com/wix/using-wix/) · [WiX Open Source Maintenance Fee EULA](https://docs.firegiant.com/wix/osmf/)
 
 ```powershell
 rustup toolchain install 1.99.1 --profile minimal
 cargo +1.99.1 install cargo-about --version 0.9.2 --features cli --locked
 pwsh -File scripts/package-windows.ps1
 $result = Get-Content target/windows-package-result.json -Raw | ConvertFrom-Json
-pwsh -File scripts/test-windows-package.ps1 -Zip $result.zip -Checksums (Join-Path $result.artifact_directory 'SHA256SUMS.txt')
+pwsh -File scripts/test-windows-package.ps1 -Msi $result.msi -Checksums (Join-Path $result.artifact_directory 'SHA256SUMS.txt')
 ```
 
-未コミットのスクリプトを検証するときだけ `-AllowDirty` を付けます。
-そのZIPはBUILD-INFO.jsonの `source_dirty=true` で識別し、正式配布しません。
-ローカルに入れたcargo-aboutは `-AboutTool <exeのパス>` で指定できます。
-RUSTFLAGS / CARGO_ENCODED_RUSTFLAGSが設定されている場合は、配布ビルド用のシェルで解除してください。
+未コミットの変更をローカルで検証するときは `-AllowDirty` を付けます。その候補には `source_dirty=true` が記録されます。cargo-aboutを別の場所にインストールした場合は `-AboutTool <exeのパス>` で指定できます。配布ビルド用のシェルでは `RUSTFLAGS` と `CARGO_ENCODED_RUSTFLAGS` を解除してください。
 
-出力先は `target/dist/<版番号・SHA・ランダムID>/` です。以前の候補は上書きしません。
-`artifacts/` 内のZIPとSHA256SUMS.txtだけが配布対象です。
-同階層のlicenses-private.jsonは収集用のローカルパスを含むため配布しません。
+出力先は `target/dist/<版番号・SHA・ランダムID>/` です。配布対象は `artifacts/` にあるMSIと `SHA256SUMS.txt` です。ライセンス収集に使う `licenses-private.json` はローカルパスを含み、同階層に留めます。
 
-Rust 1.99.1、target x86_64-pc-windows-msvc、release、locked依存、
-`-C target-feature=+crt-static` でビルドします。直接DLL参照をdumpbinで検査します。
-GPUドライバーなど実行時ロードの依存や、別PCでの操作確認は別途必要です。
+Rust 1.99.1で `x86_64-pc-windows-msvc` を対象に、release・locked依存・`-C target-feature=+crt-static` でビルドし、dumpbinで直接DLL参照を検査します。
 
 ## GitHub Actions
 
-[Windows package](../.github/workflows/windows-package.yml)はwindows-2025で実行します。
-runnerの世代とRust版を指定していますが、runnerの更新まで固定するものではありません。
-実際のrunner image番号・ツール版・ソースSHA・lockfileハッシュはBUILD-INFO.jsonへ記録します。
+[Windows package](../.github/workflows/windows-package.yml)は `windows-2025` で実行します。メンテナーはWiXのEULAを確認し、同意後にリポジトリの **Settings → Secrets and variables → Actions → Variables** に `WIX7_EULA_ACCEPTED=true` を設定します。新規ランナーではこの設定を確認してからWiXを実行します。実際のランナーイメージ番号、ツールの版、ソースSHA、lockfileのハッシュは `BUILD-INFO.json` に記録されます。 [WiXの利用条件](https://docs.firegiant.com/wix/osmf/)
 
-- ブランチの候補: Actions → Windows package → Run workflow。対象ブランチを選び、
-  release_tagを空、attach_draftをOFFにして実行します。
-- タグ: 既存の注釈付き `v0.3.0` をpushするとZIPを作成します。
-  タグの版番号とCargoが一致し、コミットがorigin/mainに含まれることを検査します。
-- Release下書き: 手動実行でrelease_tagに `v0.3.0`、attach_draftをONにします。
-  同じタグから再ビルドしたZIPとチェックサムを下書きに添付します。
-  既に公開したReleaseや同名添付ファイルは上書きしません。
-  再ビルドしたZIPも改めて動作確認してください。別実行のZIPと同じハッシュとは限りません。
+- **ブランチ候補**は **Actions → Windows package → Run workflow** で対象ブランチを選び、`release_tag` を空、`attach_draft` をOFFにして作成します。
+- **タグ付き候補**は注釈付きの `vX.Y.Z` タグのpushで作成します。タグとCargoの版、およびコミットが `origin/main` に含まれることを検査します。
+- **Release下書きへの添付**は手動実行で `release_tag` に注釈付きタグを指定し、`attach_draft` をONにします。対象版のリリースノート `distribution/release-notes-X.Y.Z.md` を同じタグに含めてください。検証済みMSIとチェックサムを下書きに添付します。正式公開はメンテナーが行います。
 
-このworkflowはタグを作成せず、Releaseを正式公開せず、crates.ioへも公開しません。
-通常ビルドはcontents: read、明示的な下書き添付ジョブだけcontents: writeです。
-ダウンロードしたartifactの外側のZIPを展開すると、配布用ZIPとSHA256SUMS.txtが得られます。
+候補はActionsの `windows-x86_64` アーティファクトから取得できます。ダウンロードしたZIPを展開するとMSIと `SHA256SUMS.txt` が入っています。同じ候補SHAで **Release checks** も実施し、Windows／Linuxのテストと配布ソースを検証してください。
 
-既存のRelease checksで同じ候補SHAのWindows/Linuxテスト・配布ソースの検証も実施してください。
-Windows packageの成功だけではそれらの代わりになりません。
+## パッケージの確認
 
-## 同梱と確認
+検証スクリプトは、MSIをインストールせずに展開し、SHA-256、ユーザー単位のインストール先、スタートメニューのショートカット、製品の更新識別子、MSIとEXEの版番号、同梱ファイルを照合します。収録するのは、EXE、標準 `materials.toml`、MIT LICENSE、README、第三者ライセンス、`BUILD-INFO.json`、`DLL-DEPENDENCIES.txt` です。 [ライセンスの収集範囲](../distribution/README.md)
 
-EXE、materials.toml、MIT LICENSE、README、第三者ライセンス、
-BUILD-INFO.json、DLL-DEPENDENCIES.txtを同梱します。
-ライセンス収集の出典・範囲は[distribution/README.md](../distribution/README.md)を参照してください。
+正式候補はRust、FrontISTR、oneAPIのないWindows x86_64環境で次を確認します。
 
-検証スクリプトはZIPハッシュ、パスと重複、必須ファイル、各ファイルのハッシュ、
-EXE版番号、個人設定・解析データが入っていないことを検査します。
-チェックサムはコード署名ではありません。
+1. 標準ユーザーでMSIを開き、スタートメニューから起動する。版番号とアイコン、メッシュと既存結果の読込を確認する。
+2. ユーザー用の `materials.toml` を `%APPDATA%\bevyistr` に置く。**Materials → Reload materials.toml** で読込先を確認し、ユーザー設定とともに再起動後も使えることを確かめる。
+3. 後続バージョンのMSIで更新し、ショートカットと「インストールされているアプリ」の登録が各1件であることを確認する。ユーザー設定と編集した材料が引き継がれることを確かめる。
+4. Windowsの設定からbevyistrをアンインストールする。インストール先のファイルとショートカットが削除され、ユーザー設定、材料ファイル、インストール先の外に置いた解析データが残ることを確認する。
 
-正式候補では空白を含む別の展開先から起動し、版番号・アイコン・材料読込とReload・
-設定保存/再起動・結果の読込/コンターを確認します。開発環境やoneAPIがないPCでも確認してください。
-ローカルでPATHだけ制限した起動と、クリーンな別PCでの確認は区別します。
+v0.5.0のZIPから移行する場合は、編集済みの材料ファイルを先にユーザー用の場所へコピーしてください。標準位置にある既存のユーザー設定は起動時に読み込まれます。 [インストールと移行](src/getting-started.md#windowsでmsiを使う)

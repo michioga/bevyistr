@@ -181,20 +181,23 @@ fn default_path() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("BEVYISTR_CONFIG").filter(|s| !s.is_empty()) {
         return std::path::absolute(PathBuf::from(path)).map_err(|e| e.to_string());
     }
-    config_path(cfg!(windows), |key| {
-        std::env::var_os(key).map(PathBuf::from)
-    })
-    .ok_or_else(|| "Set BEVYISTR_CONFIG to a writable bevyistr.toml path".into())
+    user_config_directory()
+        .map(|directory| directory.join("bevyistr.toml"))
+        .ok_or_else(|| "Set BEVYISTR_CONFIG to a writable bevyistr.toml path".into())
 }
 
-fn config_path(windows: bool, get: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+pub(crate) fn user_config_directory() -> Option<PathBuf> {
+    config_directory(cfg!(windows), |key| std::env::var_os(key).map(PathBuf::from))
+}
+
+fn config_directory(windows: bool, get: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
     let absolute = |key| get(key).filter(|p| p.is_absolute());
     let base = if windows {
         absolute("APPDATA").or_else(|| absolute("USERPROFILE").map(|p| p.join("AppData/Roaming")))
     } else {
         absolute("XDG_CONFIG_HOME").or_else(|| absolute("HOME").map(|p| p.join(".config")))
     }?;
-    Some(base.join("bevyistr/bevyistr.toml"))
+    Some(base.join("bevyistr"))
 }
 
 fn read_document(path: &Path) -> Result<DocumentMut, String> {
@@ -381,22 +384,22 @@ mod tests {
     #[test]
     fn config_location_is_independent_of_working_directory() {
         let root = std::env::temp_dir();
-        let expected = root.join("bevyistr/bevyistr.toml");
+        let expected = root.join("bevyistr");
         assert_eq!(
-            config_path(true, |k| (k == "APPDATA").then(|| root.clone())),
+            config_directory(true, |k| (k == "APPDATA").then(|| root.clone())),
             Some(expected.clone())
         );
         assert_eq!(
-            config_path(false, |k| (k == "XDG_CONFIG_HOME").then(|| root.clone())),
+            config_directory(false, |k| (k == "XDG_CONFIG_HOME").then(|| root.clone())),
             Some(expected)
         );
         assert_eq!(
-            config_path(false, |k| match k {
+            config_directory(false, |k| match k {
                 "XDG_CONFIG_HOME" => Some("relative".into()),
                 "HOME" => Some(root.clone()),
                 _ => None,
             }),
-            Some(root.join(".config/bevyistr/bevyistr.toml"))
+            Some(root.join(".config/bevyistr"))
         );
     }
 

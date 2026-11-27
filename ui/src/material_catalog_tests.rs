@@ -48,6 +48,30 @@ fn installed_defaults_allow_external_override_without_hiding_errors() {
 }
 
 #[test]
+fn user_override_survives_replacing_the_installed_library() {
+    let root = tempfile::tempdir().unwrap();
+    let library = |directory: &str| {
+        let directory = root.path().join(directory);
+        std::fs::create_dir(&directory).unwrap();
+        directory.join("materials.toml")
+    };
+    let installed = library("installed");
+    let user = library("user");
+    let project = library("project");
+    let choose = |cwd| select_library_path(cwd, Some(installed.clone()), Some(user.clone()));
+
+    assert_eq!(choose(project.clone()), user);
+    std::fs::write(&installed, CUSTOM).unwrap();
+    assert_eq!(choose(project.clone()), installed);
+    std::fs::write(&user, CUSTOM).unwrap();
+    assert_eq!(choose(installed.clone()), user);
+    std::fs::write(&installed, include_str!("../assets/materials.toml")).unwrap();
+    assert_eq!(choose(installed.clone()), user);
+    std::fs::write(&project, CUSTOM).unwrap();
+    assert_eq!(choose(project.clone()), project);
+}
+
+#[test]
 fn custom_comments_unicode_bom_and_optional_density_are_supported() {
     let catalog = Catalog::parse(&format!("\u{feff}# user library\n{CUSTOM}")).unwrap();
     assert_eq!(catalog.materials[0].label, "試験材");

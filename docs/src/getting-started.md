@@ -22,6 +22,14 @@ bevyistr
 アプリアイコンと標準材料は内蔵されているため、起動用に別途配置する必要はありません。
 材料を独自に変更する場合は[材料ライブラリ](materials.md)を参照してください。
 
+## WindowsでMSIを使う
+
+v0.6.0から、Windows x86_64の実行ファイルはMSIで配布します。GitHub Releaseで目的の版の `bevyistr-vX.Y.Z-windows-x86_64.msi` を入手してください。MSIを開くと、現在のユーザーの `%LOCALAPPDATA%\Programs\bevyistr` にインストールされます。スタートメニューで **bevyistr** を選ぶと起動します。 [GitHub Release](https://github.com/michioga/bevyistr/releases)
+
+v0.5.0のZIP版から移行する場合、編集済みの `materials.toml` があれば、`%APPDATA%\bevyistr\materials.toml` にコピーしてください。ユーザー設定は、そのまま `%APPDATA%\bevyistr\bevyistr.toml` から読み込まれます。設定先を `BEVYISTR_CONFIG` で指定している場合は、同じ環境で起動してください。
+
+更新時は新しい版のMSIを開きます。削除するときはWindowsの **設定 → アプリ → インストールされているアプリ** で **bevyistr** を選びます。ユーザー用の材料と設定、インストール先の外に保存した解析ファイルは残ります。
+
 ## ソースから実行する
 
 0.5.0と同じソースを使う場合は、公開時のタグ`v0.5.0`を選びます。

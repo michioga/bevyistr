@@ -13,9 +13,11 @@
 - Resultsで断面を1枚設定できる。X／Y／Zプリセット、位置のスライダーと数値欄、方位角と仰角、外形のメッシュ線に対応する。[操作手順](src/results/contours.md#一次四面体の内部を断面で見る)
 - 一次四面体の体積結果を対象とし、変形前の座標で断面と交わる節点値を補間する。速度の大きさは交点の補間ベクトルから求める。未対応の体積要素や節点値のないフィールドは状態を表示する。
 - 実例題の最終フレームの圧力断面をPVTUとMPI RESで比較した。中央断面の面積は両方とも1.00000000、斜め断面は1.34638188と1.34638187。線形分布の補間と、重複セル・共有面の描画を自動テストで確認する。
+- 利用者の環境で、MPI RESの59／101フレーム目を開き、Z断面の圧力と外形メッシュ線を表示できることを確認した。
 
 ## WindowsのMSI配布
 
 - v0.6.0から、GitHub ReleaseのWindows x86_64バイナリを`bevyistr-v0.6.0-windows-x86_64.msi`と`SHA256SUMS.txt`で配布する。既存のWindowsパッケージ作成を利用し、タグ・Cargo・EXE・MSIの版番号、ライセンス、DLL依存、ビルド情報の確認をMSIに引き継ぐ。
-- WiXでユーザー単位のインストーラーを作成する方針。スタートメニューから起動し、Windowsの「インストールされているアプリ」から削除できるようにする。後続版で同じ製品を更新できるようにし、編集用の材料ファイルはユーザー側の保存場所を案内し、ユーザー設定・編集した材料データ・解析ファイルを更新や削除から保護する。FrontISTR、Intel oneAPI／MPI、Gmshは既存の外部ツール設定を使う。[WiXのPackage仕様](https://docs.firegiant.com/wix/schema/wxs/package/) · [Windows Installerのインストール範囲](https://learn.microsoft.com/en-us/windows/win32/msi/installation-context)
+- WiXでユーザー単位のインストーラーを作る。スタートメニューにショートカットを登録し、後続版で同じ製品を更新できるよう製品の識別子を固定する。設定と編集用の材料ファイルはインストール先と別のユーザー用フォルダーに置く。FrontISTR、Intel oneAPI／MPI、Gmshは既存の外部ツール設定を使う。 [作成と検証](windows-package.md) ·[WiXのPackage仕様](https://docs.firegiant.com/wix/schema/wxs/package/) · [Windows Installerのインストール範囲](https://learn.microsoft.com/en-us/windows/win32/msi/installation-context)
+- v0.5.0の公開済みバイナリを使ったMSIで、721ファイル、版番号、SHA-256、インストール先とショートカットの設定を、インストールせずに展開して照合した。
 - リリース候補では、開発環境やoneAPIを入れていないWindowsでインストール、スタートメニューからの起動、メッシュと結果の読込、後続バージョンへの更新、アンインストールを確認する。v0.5.0のZIP利用者向けには、既存の設定を引き継ぐ手順を記載する。MSI検証後に、注釈付きタグを基準としてGitHub Release、crates.io、マニュアルの公開を進める。

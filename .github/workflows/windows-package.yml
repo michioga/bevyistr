@@ -11,7 +11,7 @@ on:
         type: string
         default: ''
       attach_draft:
-        description: 'Attach the tagged ZIP to a draft Release; never publish'
+        description: 'Attach the tagged MSI to a draft Release; never publish'
         required: true
         type: boolean
         default: false
@@ -54,6 +54,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Release source must be included in main' }
           }
           "PACKAGE_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Install WiX
+        env:
+          WIX7_EULA_ACCEPTED: ${{ vars.WIX7_EULA_ACCEPTED }}
+        run: |
+          if ($env:WIX7_EULA_ACCEPTED -cne 'true') {
+            throw 'Review the WiX 7 EULA and set the WIX7_EULA_ACCEPTED repository variable to true. See docs/windows-package.md.'
+          }
+          dotnet tool install wix --tool-path (Join-Path $env:RUNNER_TEMP 'wix') --version 7.0.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install pinned Rust and release tools
         run: |
           rustup toolchain install 1.99.1 --profile minimal --no-self-update
@@ -66,12 +75,13 @@ jobs:
         run: |
           cargo +1.99.1 audit --deny unsound
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build and verify ZIP
+      - name: Build and verify MSI
         id: package
         run: |
-          ./scripts/package-windows.ps1 -Tag $env:PACKAGE_TAG
+          $wix = Join-Path $env:RUNNER_TEMP 'wix/wix.exe'
+          ./scripts/package-windows.ps1 -Tag $env:PACKAGE_TAG -WixTool $wix -AcceptWixEula
           $result = Get-Content target/windows-package-result.json -Raw | ConvertFrom-Json
-          ./scripts/test-windows-package.ps1 -Zip $result.zip -Checksums (Join-Path $result.artifact_directory 'SHA256SUMS.txt')
+          ./scripts/test-windows-package.ps1 -Msi $result.msi -WixTool $wix -AcceptWixEula -Checksums (Join-Path $result.artifact_directory 'SHA256SUMS.txt')
           "artifact_directory=$($result.artifact_directory)" >> $env:GITHUB_OUTPUT
           "version=$($result.version)" >> $env:GITHUB_OUTPUT
           "tag=$($result.tag)" >> $env:GITHUB_OUTPUT
@@ -116,4 +126,4 @@ jobs:
               --title "bevyistr $RELEASE_TAG" \
               --notes-file "distribution/release-notes-$RELEASE_VERSION.md"
           fi
-          gh release upload "$RELEASE_TAG" artifacts/*.zip artifacts/SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" "artifacts/bevyistr-v$RELEASE_VERSION-windows-x86_64.msi" artifacts/SHA256SUMS.txt

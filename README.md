@@ -226,13 +226,15 @@ project material, independently of assignment confirmation.
 
 ### Standard material library
 
-The app reads **materials.toml** from its working directory; if absent, it
-looks next to **bevyistr.exe**. The Materials panel displays the exact path.
-For Cargo runs from the repository root, edit [materials.toml](materials.toml).
-To customize a standalone distribution, ship this file alongside the executable.
+The app looks for **materials.toml** in a separate working directory first,
+then in the user configuration directory, then next to the executable.
+On Windows, copy the installed catalogue to `%APPDATA%\bevyistr\materials.toml`
+before customizing it. On Linux, use `$XDG_CONFIG_HOME/bevyistr/materials.toml`
+or `~/.config/bevyistr/materials.toml`. For Cargo runs from the repository root,
+edit [materials.toml](materials.toml). Materials shows the active path.
 The standard file is loaded automatically at startup. Edit the displayed file,
 then press **Reload materials.toml** to apply library changes without recompiling
-or restarting; reload runs off the UI thread. If neither external file exists,
+or restarting; reload runs off the UI thread. If no external file exists,
 the app uses embedded standard records and displays **Bundled defaults** with
 the external override path. No file is created or overwritten automatically.
 Invalid values, duplicate names, unreadable files, and TOML syntax errors in an

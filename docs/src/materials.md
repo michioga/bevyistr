@@ -19,9 +19,15 @@
 
 ## materials.toml
 
-起動時に作業ディレクトリの`materials.toml`を読み込みます。なければ実行ファイルの隣を探します。Materialsに表示されるパスが実際の読み込み先です。
+起動時と **Reload materials.toml** では、次の順でファイルを探します。
 
-どちらにもファイルがない場合は、アプリ内蔵の標準材料を使い、**Bundled defaults**と外部ファイルの配置先を表示します。ファイルは自動作成・上書きしません。表示された場所へ`materials.toml`を置いてReloadすると、外部の設定へ切り替わります。既存ファイルの記述ミスや読み込みエラーは、内蔵版へ黙って切り替えずエラーとして表示します。
+1. 実行ファイルのフォルダーとは別の作業ディレクトリにある `materials.toml`
+2. ユーザー用の `materials.toml`。Windowsでは `%APPDATA%\bevyistr\materials.toml`、Linuxでは `$XDG_CONFIG_HOME/bevyistr/materials.toml`（未指定なら `~/.config/bevyistr/materials.toml`）
+3. 実行ファイルの隣にある標準の `materials.toml`
+
+WindowsのMSI版は、標準ファイルをユーザー用の場所へコピーしてから編集します。Materialsに表示されるパスで読込先を確認できます。
+
+いずれにもファイルがない場合は、アプリ内蔵の標準材料を使い、**Bundled defaults**と外部ファイルの配置先を表示します。ファイルは自動作成・上書きしません。表示された場所へ`materials.toml`を置いてReloadすると、外部の設定へ切り替わります。既存ファイルの記述ミスや読み込みエラーは、内蔵版へ黙って切り替えずエラーとして表示します。
 
 外部ファイルを編集後、**Reload materials.toml**で再読み込みできます。保存値はPa、kg/m³で、割り当て時に選択したモデル単位系へ変換します。既存形状・荷重・読み込み済み材料をまとめて変換する機能ではありません。
 

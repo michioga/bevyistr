@@ -1,0 +1,30 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="bevyistr"
+           Manufacturer="Michio Ogawa"
+           Version="$(var.AppVersion)"
+           ProductCode="$(var.ProductCode)"
+           UpgradeCode="E00A7055-6478-4A7B-9CB4-0ED5A16C99CD"
+           Scope="perUser"
+           InstallerVersion="500">
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of bevyistr is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserPrograms" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="bevyistr" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="726CEFD7-2BED-452D-967A-BC666B21F6E4" Bitness="always64">
+        <Shortcut Id="BevyistrShortcut" Name="bevyistr" Target="[#BevyistrExecutable]"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\bevyistr\Installer" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+    <Feature Id="Bevyistr" Title="bevyistr" Level="1">
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentGroupRef Id="Payload" />
+    </Feature>
+  </Package>
+</Wix>

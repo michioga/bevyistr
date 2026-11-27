@@ -192,13 +192,34 @@ pub(crate) fn default_path() -> PathBuf {
     let cwd = std::env::current_dir()
         .unwrap_or_default()
         .join("materials.toml");
-    if cwd.is_file() {
-        return cwd;
-    }
-    std::env::current_exe()
+    let executable = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("materials.toml")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join("materials.toml")));
+    let user = crate::app_settings::user_config_directory()
+        .map(|directory| directory.join("materials.toml"));
+    select_library_path(cwd, executable, user)
+}
+
+fn select_library_path(cwd: PathBuf, executable: Option<PathBuf>, user: Option<PathBuf>) -> PathBuf {
+    // The Start menu starts bevyistr in its installation directory.
+    // A project directory can supply its own library, but installed defaults
+    // should not shadow a user library.
+    if cwd.is_file() {
+        let working_file = std::fs::canonicalize(&cwd).ok();
+        let is_installed_file = executable.as_ref().is_some_and(|path| {
+            path == &cwd
+                || (working_file.is_some() && std::fs::canonicalize(path).ok() == working_file)
+        });
+        if !is_installed_file {
+            return cwd;
+        }
+    }
+    if let Some(path) = user.as_ref().filter(|path| path.is_file()) {
+        return path.clone();
+    }
+    executable
         .filter(|path| path.is_file())
+        .or(user)
         .unwrap_or(cwd)
 }
 
