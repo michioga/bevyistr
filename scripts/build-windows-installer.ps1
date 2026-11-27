@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Bundle,
+    [Parameter(Mandatory)][string]$AppIcon,
     [Parameter(Mandatory)][string]$Output,
     [string]$WixTool = 'wix',
     [switch]$AcceptWixEula
@@ -9,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $bundlePath = (Resolve-Path -LiteralPath $Bundle).Path
+$appIconPath = (Resolve-Path -LiteralPath $AppIcon).Path
 $outputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
 $outputDirectory = Split-Path -Parent $outputPath
 $info = Get-Content -LiteralPath (Join-Path $bundlePath 'BUILD-INFO.json') -Raw | ConvertFrom-Json
@@ -102,7 +104,8 @@ $fragmentPath = Join-Path $outputDirectory 'installer-payload.wxs'
 $source.Save($fragmentPath)
 $template = Join-Path (Split-Path -Parent $PSScriptRoot) 'distribution/bevyistr.wxs'
 $wixArgs = @('build', $template, $fragmentPath, '-arch', 'x64', '-pdbtype', 'none',
-    '-d', "AppVersion=$version", '-d', "ProductCode=$(Get-ComponentGuid "product/$version")", '-o', $outputPath)
+    '-d', "AppVersion=$version", '-d', "ProductCode=$(Get-ComponentGuid "product/$version")",
+    '-d', "AppIcon=$appIconPath", '-o', $outputPath)
 if ($AcceptWixEula) { $wixArgs += @('-acceptEula', 'wix7') }
 & $WixTool @wixArgs
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'WiX MSI build failed' }

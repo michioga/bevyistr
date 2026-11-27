@@ -60,6 +60,11 @@ if (!$shortcut -or !$shortcut.SelectSingleNode('ancestor::w:StandardDirectory[@I
     $shortcut.GetAttribute('WorkingDirectory') -cne 'INSTALLFOLDER') {
     throw 'MSI is missing the Start menu shortcut for bevyistr.exe'
 }
+$icon = $package.SelectSingleNode('w:Property[@Id="ARPPRODUCTICON" and @Value="BevyistrApp.ico"]', $ns)
+$iconPath = Join-Path $extract 'Icon/BevyistrApp.ico'
+if (!$icon -or !(Test-Path -LiteralPath $iconPath -PathType Leaf) -or $shortcut.HasAttribute('Icon')) {
+    throw 'Expected the app-list icon stream and a Start menu shortcut that uses the EXE icon'
+}
 $components = $package.SelectNodes('.//w:Component', $ns)
 foreach ($component in $components) {
     if ($component.GetAttribute('Bitness') -cne 'always64' -or
@@ -103,6 +108,9 @@ $info = Get-Content -LiteralPath $files['BUILD-INFO.json'] -Raw | ConvertFrom-Js
 if ($name -cne "bevyistr-v$($info.version)-windows-x86_64.msi" -or
     $info.target -cne 'x86_64-pc-windows-msvc' -or $package.GetAttribute('Version') -cne $info.version) {
     throw 'MSI, filename and build metadata disagree'
+}
+if ((Get-FileHash -LiteralPath $iconPath).Hash -ne $info.app_icon_sha256) {
+    throw 'The MSI app-list icon does not match the ICO used to build bevyistr.exe'
 }
 if ($info.source_commit -notmatch '^[0-9a-f]{40}$') { throw 'Missing full source SHA' }
 $recorded = @($info.files_sha256.PSObject.Properties)

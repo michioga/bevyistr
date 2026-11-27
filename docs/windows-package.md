@@ -32,7 +32,7 @@ Rust 1.99.1で `x86_64-pc-windows-msvc` を対象に、release・locked依存・
 
 ## パッケージの確認
 
-検証スクリプトは、MSIをインストールせずに展開し、SHA-256、ユーザー単位のインストール先、スタートメニューのショートカット、製品の更新識別子、MSIとEXEの版番号、同梱ファイルを照合します。収録するのは、EXE、標準 `materials.toml`、MIT LICENSE、README、第三者ライセンス、`BUILD-INFO.json`、`DLL-DEPENDENCIES.txt` です。 [ライセンスの収集範囲](../distribution/README.md)
+検証スクリプトは、MSIをインストールせずに展開し、SHA-256、ユーザー単位のインストール先、スタートメニューのショートカット、「インストールされているアプリ」に登録するアイコン、製品の更新識別子、MSIとEXEの版番号、同梱ファイルを照合します。収録するのは、EXE、標準 `materials.toml`、MIT LICENSE、README、第三者ライセンス、`BUILD-INFO.json`、`DLL-DEPENDENCIES.txt` です。 [ライセンスの収集範囲](../distribution/README.md)
 
 正式候補はRust、FrontISTR、oneAPIのないWindows x86_64環境で次を確認します。
 

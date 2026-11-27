@@ -55,8 +55,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'License text generation failed' }
 
     [Environment]::SetEnvironmentVariable($rustFlagsName, '-C target-feature=+crt-static', 'Process')
-    & cargo "+$toolchain" build --package bevyistr --release --locked --target $target --target-dir target --jobs 2
+    # Use the same ICO that build.rs linked into this executable.
+    $appBuild = @(& cargo "+$toolchain" build --package bevyistr --release --locked --target $target --target-dir target --jobs 2 --message-format=json-render-diagnostics |
+        Where-Object { $_.StartsWith('{') } |
+        ForEach-Object { $_ | ConvertFrom-Json } |
+        Where-Object { $_.reason -eq 'build-script-executed' -and $_.package_id -ceq $app.id })
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+    if ($appBuild.Count -ne 1) { throw 'Expected one bevyistr build-script output directory' }
+    $appIcon = Join-Path $appBuild[0].out_dir 'bevyistr.ico'
+    $appIconHash = (Get-FileHash -LiteralPath $appIcon).Hash.ToLowerInvariant()
     $exe = Join-Path $repoRoot "target/$target/release/bevyistr.exe"
     $info = (Get-Item -LiteralPath $exe).VersionInfo
     if ($info.ProductVersion -ne $version) { throw 'EXE version does not match Cargo version' }
@@ -134,12 +141,12 @@ try {
         runner_image = $env:ImageOS; runner_image_version = $env:ImageVersion
         cargo_lock_sha256 = (Get-FileHash -LiteralPath Cargo.lock).Hash.ToLowerInvariant()
         license_tool = 'cargo-about 0.9.2'; license_crates = $licenses.crates.Count
-        installer_tool = "WiX $wixVersion"
+        installer_tool = "WiX $wixVersion"; app_icon_sha256 = $appIconHash
         direct_dll_imports = $dlls; files_sha256 = $fileHashes
     }
     $record | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $bundle 'BUILD-INFO.json') -Encoding utf8
     $msi = Join-Path $runRoot "$name.msi"
-    & (Join-Path $PSScriptRoot 'build-windows-installer.ps1') -Bundle $bundle -Output $msi -WixTool $WixTool -AcceptWixEula:$AcceptWixEula
+    & (Join-Path $PSScriptRoot 'build-windows-installer.ps1') -Bundle $bundle -AppIcon $appIcon -Output $msi -WixTool $WixTool -AcceptWixEula:$AcceptWixEula
     $hash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $name.msi" | Set-Content -LiteralPath (Join-Path $runRoot 'SHA256SUMS.txt') -Encoding ascii
     $public = Join-Path $runRoot 'artifacts'
