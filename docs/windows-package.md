@@ -4,11 +4,12 @@ v0.6.0からのWindows x86_64配布手順です。
 
 ## ローカル候補
 
-Windows、PowerShell 7、MSVC C++ビルドツール、WiX 7.0.1を使います。WiXの利用条件を確認し、同意した環境でビルドしてください。PATHにWiXがない場合は、作成と検証の両方で `-WixTool <wix.exeのパス>` を指定できます。 [WiXの導入手順](https://docs.firegiant.com/wix/using-wix/) · [WiX Open Source Maintenance Fee EULA](https://docs.firegiant.com/wix/osmf/)
+Windows、PowerShell 7、MSVC C++ビルドツール、WiX 7.0.1と同じ版のWixUI拡張を使います。WiXの利用条件を確認し、同意した環境でビルドしてください。PATHにWiXがない場合は、作成と検証の両方で `-WixTool <wix.exeのパス>` を指定できます。 [WiXの導入手順](https://docs.firegiant.com/wix/using-wix/) · [WiX Open Source Maintenance Fee EULA](https://docs.firegiant.com/wix/osmf/)
 
 ```powershell
 rustup toolchain install 1.99.1 --profile minimal
 cargo +1.99.1 install cargo-about --version 0.9.2 --features cli --locked
+wix extension add -g WixToolset.UI.wixext/7.0.1
 pwsh -File scripts/package-windows.ps1
 $result = Get-Content target/windows-package-result.json -Raw | ConvertFrom-Json
 pwsh -File scripts/test-windows-package.ps1 -Msi $result.msi -Checksums (Join-Path $result.artifact_directory 'SHA256SUMS.txt')
@@ -32,11 +33,11 @@ Rust 1.99.1で `x86_64-pc-windows-msvc` を対象に、release・locked依存・
 
 ## パッケージの確認
 
-検証スクリプトは、MSIをインストールせずに展開し、SHA-256、ユーザー単位のインストール先、スタートメニューのショートカット、「インストールされているアプリ」に登録するアイコン、製品の更新識別子、MSIとEXEの版番号、同梱ファイルを照合します。収録するのは、EXE、標準 `materials.toml`、MIT LICENSE、README、第三者ライセンス、`BUILD-INFO.json`、`DLL-DEPENDENCIES.txt` です。 [ライセンスの収集範囲](../distribution/README.md)
+検証スクリプトは、MSIをインストールせずに展開し、SHA-256、ユーザー単位のインストール先、スタートメニューのショートカット、「インストールされているアプリ」に登録するアイコン、製品の更新識別子、MSIとEXEの版番号、同梱ファイルを照合します。ウィザードが同梱のMITライセンス全文を表示し、同意後にインストールボタンが有効になる設定も検証します。収録するのは、EXE、標準 `materials.toml`、MIT LICENSE、README、第三者ライセンス、`BUILD-INFO.json`、`DLL-DEPENDENCIES.txt` です。 [ライセンスの収集範囲](../distribution/README.md)
 
 正式候補はRust、FrontISTR、oneAPIのないWindows x86_64環境で次を確認します。
 
-1. 標準ユーザーでMSIを開き、スタートメニューから起動する。版番号とアイコン、メッシュと既存結果の読込を確認する。
+1. 標準ユーザーでMSIを開く。日本語のウィザードにMITライセンスの英文が表示され、同意欄を選ぶとインストールボタンが有効になることを確認する。インストール完了後、スタートメニューから起動し、版番号とアイコン、メッシュと既存結果の読込を確認する。
 2. ユーザー用の `materials.toml` を `%APPDATA%\bevyistr` に置く。**Materials → Reload materials.toml** で読込先を確認し、ユーザー設定とともに再起動後も使えることを確かめる。
 3. 後続バージョンのMSIで更新し、ショートカットと「インストールされているアプリ」の登録が各1件であることを確認する。ユーザー設定と編集した材料が引き継がれることを確かめる。
 4. Windowsの設定からbevyistrをアンインストールする。インストール先のファイルとショートカットが削除され、ユーザー設定、材料ファイル、インストール先の外に置いた解析データが残ることを確認する。

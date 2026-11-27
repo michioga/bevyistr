@@ -1,4 +1,5 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="bevyistr"
            Manufacturer="Michio Ogawa"
            Version="$(var.AppVersion)"
@@ -9,6 +10,8 @@
     <MajorUpgrade Schedule="afterInstallInitialize"
                   DowngradeErrorMessage="A newer version of bevyistr is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <ui:WixUI Id="WixUI_Minimal" />
+    <UIRef Id="WixUI_ErrorProgressText" />
     <Icon Id="BevyistrApp.ico" SourceFile="$(var.AppIcon)" />
     <Property Id="ARPPRODUCTICON" Value="BevyistrApp.ico" />
     <StandardDirectory Id="LocalAppDataFolder">

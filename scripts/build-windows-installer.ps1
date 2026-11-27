@@ -102,8 +102,13 @@ $null = Add-WixElement $cleanup 'RegistryValue' @{
 
 $fragmentPath = Join-Path $outputDirectory 'installer-payload.wxs'
 $source.Save($fragmentPath)
+$licenseRtf = Join-Path $outputDirectory 'installer-license.rtf'
+$licenseText = & (Join-Path $PSScriptRoot 'windows-license-rtf.ps1') -License (Join-Path $bundlePath 'LICENSE')
+[IO.File]::WriteAllText($licenseRtf, $licenseText, [Text.Encoding]::ASCII)
+
 $template = Join-Path (Split-Path -Parent $PSScriptRoot) 'distribution/bevyistr.wxs'
 $wixArgs = @('build', $template, $fragmentPath, '-arch', 'x64', '-pdbtype', 'none',
+    '-ext', 'WixToolset.UI.wixext/7.0.1', '-culture', 'ja-JP', '-bindvariable', "WixUILicenseRtf=$licenseRtf",
     '-d', "AppVersion=$version", '-d', "ProductCode=$(Get-ComponentGuid "product/$version")",
     '-d', "AppIcon=$appIconPath", '-o', $outputPath)
 if ($AcceptWixEula) { $wixArgs += @('-acceptEula', 'wix7') }

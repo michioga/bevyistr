@@ -2,7 +2,8 @@ bevyistr @VERSION@ — Windows x86_64
 FrontISTR Pre/Post
 Michio Ogawa (michioga)
 
-Open the MSI and then launch bevyistr from the Start menu. The app installs for
+Open the MSI, read the MIT license, and select the acceptance checkbox to enable
+Install. Launch bevyistr from the Start menu after setup. The app installs for
 your Windows account in %LOCALAPPDATA%\Programs\bevyistr. A GPU with an
 up-to-date graphics driver is required.
 

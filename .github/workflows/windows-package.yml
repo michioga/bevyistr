@@ -63,6 +63,8 @@ jobs:
           }
           dotnet tool install wix --tool-path (Join-Path $env:RUNNER_TEMP 'wix') --version 7.0.1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Join-Path $env:RUNNER_TEMP 'wix/wix.exe') extension add -g WixToolset.UI.wixext/7.0.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install pinned Rust and release tools
         run: |
           rustup toolchain install 1.99.1 --profile minimal --no-self-update

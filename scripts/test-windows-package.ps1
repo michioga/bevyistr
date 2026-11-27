@@ -65,6 +65,19 @@ $iconPath = Join-Path $extract 'Icon/BevyistrApp.ico'
 if (!$icon -or !(Test-Path -LiteralPath $iconPath -PathType Leaf) -or $shortcut.HasAttribute('Icon')) {
     throw 'Expected the app-list icon stream and a Start menu shortcut that uses the EXE icon'
 }
+$licenseDialog = $package.SelectSingleNode('.//w:Dialog[@Id="WelcomeEulaDlg"]', $ns)
+if (!$licenseDialog -or $package.GetAttribute('Language') -ne '1041' -or
+    !$licenseDialog.SelectSingleNode('w:Control[@Type="CheckBox" and @Property="LicenseAccepted" and @CheckBoxValue="1"]', $ns) -or
+    !$package.SelectSingleNode('w:InstallUISequence/w:Show[@Dialog="WelcomeEulaDlg" and @Condition="NOT Installed"]', $ns)) {
+    throw 'Expected the Japanese license wizard on new installation'
+}
+foreach ($id in @('Install', 'InstallNoShield')) {
+    $installButton = $licenseDialog.SelectSingleNode("w:Control[@Id='$id']", $ns)
+    if (!$installButton -or $installButton.GetAttribute('EnableCondition') -cne 'LicenseAccepted = "1"' -or
+        $installButton.GetAttribute('DisableCondition') -cne 'LicenseAccepted <> "1"') {
+        throw "The wizard's $id button must require license acceptance"
+    }
+}
 $components = $package.SelectNodes('.//w:Component', $ns)
 foreach ($component in $components) {
     if ($component.GetAttribute('Bitness') -cne 'always64' -or
@@ -103,6 +116,11 @@ if (@(Get-ChildItem -LiteralPath $cabFiles -File).Count -ne $files.Count) {
 
 foreach ($file in @('bevyistr.exe','materials.toml','LICENSE','README.txt','THIRD-PARTY-LICENSES.txt','BUILD-INFO.json','DLL-DEPENDENCIES.txt','licenses/FiraMono-LICENSE.txt','licenses/UDEVGothic-LICENSE.txt','licenses/rust/COPYRIGHT-library.html')) {
     if (!$files.ContainsKey($file)) { throw "Missing packaged file: $file" }
+}
+$displayedLicense = $licenseDialog.SelectSingleNode('w:Control[@Id="LicenseText" and @Type="ScrollableText"]', $ns)
+$expectedLicense = & (Join-Path $PSScriptRoot 'windows-license-rtf.ps1') -License $files['LICENSE']
+if (!$displayedLicense -or $displayedLicense.GetAttribute('Text').TrimEnd() -cne $expectedLicense) {
+    throw 'The installer wizard must display the same MIT license as the installed LICENSE file'
 }
 $info = Get-Content -LiteralPath $files['BUILD-INFO.json'] -Raw | ConvertFrom-Json
 if ($name -cne "bevyistr-v$($info.version)-windows-x86_64.msi" -or
