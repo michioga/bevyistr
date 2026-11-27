@@ -54,16 +54,29 @@ if (!$sequence.ContainsKey('RemoveExistingProducts') -or
     $sequence['RemoveExistingProducts'] -ge $sequence['ProcessComponents']) {
     throw 'Major upgrade must remove the old version inside the rollback transaction, before installing the new version'
 }
-$shortcut = $package.SelectSingleNode('.//w:Shortcut[@Id="BevyistrShortcut"]', $ns)
-if (!$shortcut -or !$shortcut.SelectSingleNode('ancestor::w:StandardDirectory[@Id="ProgramMenuFolder"]', $ns) -or
-    $shortcut.GetAttribute('Target') -cne '[#BevyistrExecutable]' -or
-    $shortcut.GetAttribute('WorkingDirectory') -cne 'INSTALLFOLDER') {
-    throw 'MSI is missing the Start menu shortcut for bevyistr.exe'
+$shortcutIds = [ordered]@{
+    ProgramMenuFolder = 'BevyistrShortcut'
+    DesktopFolder = 'BevyistrDesktopShortcut'
+}
+$feature = $package.SelectSingleNode('w:Feature[@Id="Bevyistr" and @Level="1"]', $ns)
+foreach ($entry in $shortcutIds.GetEnumerator()) {
+    $shortcut = $package.SelectSingleNode("w:StandardDirectory[@Id='$($entry.Key)']/w:Component/w:Shortcut[@Id='$($entry.Value)']", $ns)
+    if (!$shortcut -or !$feature -or
+        !$feature.SelectSingleNode("w:ComponentRef[@Id='$($shortcut.ParentNode.GetAttribute('Id'))']", $ns) -or
+        $shortcut.GetAttribute('Name') -cne 'bevyistr' -or
+        $shortcut.GetAttribute('Target') -cne '[#BevyistrExecutable]' -or
+        $shortcut.GetAttribute('WorkingDirectory') -cne 'INSTALLFOLDER' -or
+        $shortcut.HasAttribute('Icon')) {
+        throw "Expected a $($entry.Key) shortcut installed by default that uses the bevyistr.exe icon"
+    }
+}
+if ($sequence['CreateShortcuts'] -le 0 -or $sequence['RemoveShortcuts'] -le 0) {
+    throw 'MSI must create and remove installer-owned shortcuts'
 }
 $icon = $package.SelectSingleNode('w:Property[@Id="ARPPRODUCTICON" and @Value="BevyistrApp.ico"]', $ns)
 $iconPath = Join-Path $extract 'Icon/BevyistrApp.ico'
-if (!$icon -or !(Test-Path -LiteralPath $iconPath -PathType Leaf) -or $shortcut.HasAttribute('Icon')) {
-    throw 'Expected the app-list icon stream and a Start menu shortcut that uses the EXE icon'
+if (!$icon -or !(Test-Path -LiteralPath $iconPath -PathType Leaf)) {
+    throw 'Expected the app-list icon stream'
 }
 $licenseDialog = $package.SelectSingleNode('.//w:Dialog[@Id="WelcomeEulaDlg"]', $ns)
 if (!$licenseDialog -or $package.GetAttribute('Language') -ne '1041' -or

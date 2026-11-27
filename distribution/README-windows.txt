@@ -3,9 +3,10 @@ FrontISTR Pre/Post
 Michio Ogawa (michioga)
 
 Open the MSI, read the MIT license, and select the acceptance checkbox to enable
-Install. Launch bevyistr from the Start menu after setup. The app installs for
-your Windows account in %LOCALAPPDATA%\Programs\bevyistr. A GPU with an
-up-to-date graphics driver is required.
+Install. Launch bevyistr from its desktop shortcut or the Start menu after
+setup. The app installs for your Windows account in
+%LOCALAPPDATA%\Programs\bevyistr. A GPU with an up-to-date graphics driver
+is required.
 
 Install FrontISTR separately to solve a model, then select it in Solve.
 FrontISTR, MPI, Gmsh and Intel oneAPI are optional when viewing existing results.

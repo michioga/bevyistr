@@ -27,8 +27,17 @@
                        Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="8F90A833-EA85-484A-9552-731A121F9EF1" Bitness="always64">
+        <Shortcut Id="BevyistrDesktopShortcut" Name="bevyistr" Target="[#BevyistrExecutable]"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\bevyistr\Installer" Name="DesktopShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
     <Feature Id="Bevyistr" Title="bevyistr" Level="1">
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
       <ComponentGroupRef Id="Payload" />
     </Feature>
   </Package>
