@@ -11,6 +11,9 @@ use bevy::prelude::*;
 pub enum SliderId {
     ResultStep,
     DeformScale,
+    SectionPosition,
+    SectionAzimuth,
+    SectionElevation,
     LoadMagnitude,
     /// Shell thickness or beam cross-sectional area for the section
     /// definition panel in ANALYSIS SETUP.
@@ -135,7 +138,11 @@ pub fn spawn_slider(parent: &mut ChildSpawnerCommands, config: SliderConfig) -> 
                 },
                 TextColor(Color::srgb(0.75, 0.82, 0.88)),
             ));
-            if matches!(config.id, SliderId::PlaybackSpeed | SliderId::DeformScale) {
+            if matches!(
+                config.id,
+                SliderId::PlaybackSpeed | SliderId::DeformScale
+                    | SliderId::SectionPosition | SliderId::SectionAzimuth | SliderId::SectionElevation
+            ) {
                 crate::result_number_input::spawn(row, &config);
             } else {
                 row.spawn((

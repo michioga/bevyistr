@@ -130,6 +130,7 @@ pub fn update_colorbar(
     results: Res<FemResultSet>,
     range_mode: Option<Res<crate::ContourRangeMode>>,
     geometry: Option<Res<fem_core::ResultGeometry>>,
+    section: Option<Res<crate::ResultSectionDisplay>>,
     mut root_query: Query<&mut Visibility, With<ColorbagRoot>>,
     mut title_query: Query<
         &mut Text,
@@ -160,6 +161,7 @@ pub fn update_colorbar(
     if !results.is_changed()
         && !geometry.as_ref().is_some_and(|g| g.is_changed())
         && !range_mode.as_ref().is_some_and(|r| r.is_changed())
+        && !section.as_ref().is_some_and(|state| state.is_changed())
     {
         return;
     }
@@ -180,7 +182,12 @@ pub fn update_colorbar(
     *vis = Visibility::Visible;
 
     let mode = range_mode.as_deref().copied().unwrap_or_default();
-    let Some((min, max)) = crate::contour_range::resolve(&results, mode) else {
+    let cut = section.as_deref().filter(|state| state.is_cut());
+    let range = match cut {
+        Some(state) => state.range,
+        None => crate::contour_range::resolve(&results, mode),
+    };
+    let Some((min, max)) = range else {
         *vis = Visibility::Hidden;
         return;
     };
@@ -196,8 +203,9 @@ pub fn update_colorbar(
 
     if let Ok(mut text) = title_query.single_mut() {
         **text = format!(
-            "{}\n{}",
+            "{}\n{}{}",
             field.name(),
+            if cut.is_some() { "Section | " } else { "" },
             if mode == crate::ContourRangeMode::AllFrames {
                 "All frames"
             } else {

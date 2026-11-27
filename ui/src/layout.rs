@@ -442,6 +442,7 @@ fn spawn_sidebar_content(panel: &mut ChildSpawnerCommands) {
                             );
                         });
                         crate::result_menu::spawn(sec);
+                        crate::result_section_ui::spawn(sec);
                         sec.spawn((
                             Node {
                                 flex_direction: FlexDirection::Column,

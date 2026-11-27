@@ -4,11 +4,15 @@ use crate::demo_mesh::{
     ContourSettings, FemMeshVisual, FemPartVisual, VisualLayer, VisualizationMode,
     VisualizationSettings, build_contour_edge_mesh, build_contour_surface_mesh,
 };
+use crate::ResultSectionDisplay;
 use bevy::{pbr::wireframe::Wireframe, prelude::*};
 use fem_core::{FemModel, FemModelVersion, FemResultSet};
 
 #[derive(Resource, Default)]
-pub(crate) struct ContourSurface(Vec<RenderedSurface>);
+pub(crate) struct ContourSurface {
+    parts: Vec<RenderedSurface>,
+    presentation: (bool, bool),
+}
 struct RenderedSurface {
     entity: Entity,
     mesh_index: usize,
@@ -16,6 +20,7 @@ struct RenderedSurface {
     material: Handle<StandardMaterial>,
     edge_entity: Entity,
     edge_mesh: Handle<Mesh>,
+    edge_material: Handle<StandardMaterial>,
 }
 #[derive(Component)]
 pub(crate) struct ContourSuppressed;
@@ -26,6 +31,7 @@ pub(crate) struct ResultHiddenOverlay(Visibility);
 pub(crate) fn hide_pre_overlays_in_result_view(
     mut commands: Commands,
     geometry: Option<Res<fem_core::ResultGeometry>>,
+    section: Option<Res<ResultSectionDisplay>>,
     mut overlays: Query<
         (Entity, &mut Visibility, Option<&ResultHiddenOverlay>),
         Or<(
@@ -34,9 +40,8 @@ pub(crate) fn hide_pre_overlays_in_result_view(
         )>,
     >,
 ) {
-    let hidden = geometry
-        .as_ref()
-        .is_some_and(|g| g.visible && g.model.is_some());
+    let hidden = section.as_ref().is_some_and(|state| state.is_cut())
+        || geometry.as_ref().is_some_and(|g| g.visible && g.model.is_some());
     for (entity, mut visibility, previous) in &mut overlays {
         if hidden {
             if previous.is_none() {
@@ -60,26 +65,38 @@ pub(crate) fn update_contour_surface(
     results: Res<FemResultSet>,
     settings: Res<VisualizationSettings>,
     range_mode: Option<Res<crate::ContourRangeMode>>,
+    section: Option<Res<ResultSectionDisplay>>,
     mut surface: ResMut<ContourSurface>,
     mut last_contour: Local<Option<ContourSettings>>,
     mut last_version: Local<Option<u64>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let rebuild = range_mode.as_ref().is_some_and(|r| r.is_changed()) || *last_version != Some(version.value)
+    let cut = section.as_ref().is_some_and(|state| state.is_cut());
+    let exterior = cut && section.as_ref().is_some_and(|state| state.exterior);
+    let presentation = (cut, exterior);
+    let rebuild = surface.presentation != presentation
+        || range_mode.as_ref().is_some_and(|r| r.is_changed())
+        || *last_version != Some(version.value)
         || *last_contour != settings.contour
         || results.is_changed()
         || geometry.as_ref().is_some_and(|g| g.is_changed());
     *last_version = Some(version.value);
     if rebuild {
+        surface.presentation = presentation;
         *last_contour = settings.contour.clone();
-        let mut previous = std::mem::take(&mut surface.0);
-        let visible = geometry.as_ref().is_none_or(|g| g.visible);
+        let mut previous = std::mem::take(&mut surface.parts);
+        let visible = (!cut || exterior) && geometry.as_ref().is_none_or(|g| g.visible);
         let model = geometry
             .as_deref()
             .and_then(|g| g.model.as_ref())
             .or(model.as_deref());
         if let (true, Some(contour), Some(model)) = (visible, &settings.contour, model) {
+            let reference = exterior.then(|| ContourSettings {
+                show_deformation: false,
+                ..contour.clone()
+            });
+            let contour = reference.as_ref().unwrap_or(contour);
             let range = crate::contour_range::resolve(&results, range_mode.as_deref().copied().unwrap_or_default());
             for (mesh_index, mesh) in model.meshes.iter().enumerate() {
                 let Some(step) = results
@@ -144,7 +161,7 @@ pub(crate) fn update_contour_surface(
                         let edge_entity = commands
                             .spawn((
                                 Mesh3d(edge_mesh.clone()),
-                                MeshMaterial3d(edge_material),
+                                MeshMaterial3d(edge_material.clone()),
                                 Transform::default(),
                                 FemPartVisual { mesh_index },
                                 Name::new("Result contour edges"),
@@ -157,9 +174,10 @@ pub(crate) fn update_contour_surface(
                             material,
                             edge_entity,
                             edge_mesh,
+                            edge_material,
                         }
                     };
-                surface.0.push(current);
+                surface.parts.push(current);
             }
         }
         for old in previous {
@@ -170,24 +188,31 @@ pub(crate) fn update_contour_surface(
     if !rebuild && !settings.is_changed() {
         return;
     }
-    for current in &surface.0 {
+    for current in &surface.parts {
         commands.entity(current.edge_entity).insert(
-            if VisualLayer::Edge.visible_in(settings.mode) {
+            if exterior || (!cut && VisualLayer::Edge.visible_in(settings.mode)) {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
             },
         );
         let mut entity = commands.entity(current.entity);
-        entity.insert(if VisualLayer::Shaded.visible_in(settings.mode) {
+        entity.insert(if !cut && VisualLayer::Shaded.visible_in(settings.mode) {
             Visibility::Visible
         } else {
             Visibility::Hidden
         });
-        if settings.mode == VisualizationMode::Wireframe {
+        if !cut && settings.mode == VisualizationMode::Wireframe {
             entity.insert(Wireframe);
         } else {
             entity.remove::<Wireframe>();
+        }
+        if let Some(mut material) = materials.get_mut(&current.edge_material) {
+            material.base_color = if exterior {
+                Color::srgb(0.30, 0.37, 0.40)
+            } else {
+                Color::srgb(0.04, 0.05, 0.055)
+            };
         }
         if let Some(mut material) = materials.get_mut(&current.material) {
             let xray = settings.mode == VisualizationMode::Transparent;
@@ -208,6 +233,7 @@ pub(crate) fn apply_contour_visibility(
     surface: Res<ContourSurface>,
     settings: Res<VisualizationSettings>,
     geometry: Option<Res<fem_core::ResultGeometry>>,
+    section: Option<Res<ResultSectionDisplay>>,
     mut visuals: Query<
         (
             Entity,
@@ -223,7 +249,8 @@ pub(crate) fn apply_contour_visibility(
         if geometry
             .as_ref()
             .is_some_and(|g| g.visible && g.model.is_some())
-            || surface.0.iter().any(|s| s.mesh_index == part.mesh_index)
+            || section.as_ref().is_some_and(|state| state.is_cut())
+            || surface.parts.iter().any(|s| s.mesh_index == part.mesh_index)
         {
             *visibility = Visibility::Hidden;
             if suppressed.is_none() {
@@ -413,7 +440,7 @@ mod tests {
         let handle = app
             .world()
             .resource::<ContourSurface>()
-            .0
+            .parts
             .first()
             .unwrap()
             .mesh
@@ -423,7 +450,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<ContourSurface>()
-                .0
+                .parts
                 .first()
                 .unwrap()
                 .mesh,
@@ -436,17 +463,17 @@ mod tests {
             .by_mesh
             .push(vec![step]);
         app.update();
-        assert_eq!(app.world().resource::<ContourSurface>().0.len(), 2);
+        assert_eq!(app.world().resource::<ContourSurface>().parts.len(), 2);
         assert_eq!(
             app.world().get::<Visibility>(other),
             Some(&Visibility::Hidden)
         );
-        assert_eq!(app.world().resource::<ContourSurface>().0[0].mesh, handle);
+        assert_eq!(app.world().resource::<ContourSurface>().parts[0].mesh, handle);
         app.world_mut()
             .resource_mut::<VisualizationSettings>()
             .contour = None;
         app.update();
-        assert!(app.world().resource::<ContourSurface>().0.is_empty());
+        assert!(app.world().resource::<ContourSurface>().parts.is_empty());
         assert_eq!(
             app.world().get::<Visibility>(edge),
             Some(&Visibility::Visible)

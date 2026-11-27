@@ -256,7 +256,10 @@ pub(crate) fn apply_slider_to_results(
             | SliderId::ContactReviewSeparation
             | SliderId::ContactSearchGap
             | SliderId::ContactSearchAngle
-            | SliderId::RigidSpiderRadius => {}
+            | SliderId::RigidSpiderRadius
+            | SliderId::SectionPosition
+            | SliderId::SectionAzimuth
+            | SliderId::SectionElevation => {}
         }
     }
 

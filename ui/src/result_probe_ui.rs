@@ -126,6 +126,7 @@ fn update(
     mut overlays: Query<(&Overlay, &mut Node)>,
     mut text: Query<&mut Text, With<ProbeText>>,
     mut pin: ResMut<crate::result_probe_pin::ProbePin>,
+    section: Option<Res<visualization::ResultSectionDisplay>>,
 ) {
     pin.hovered = None;
     if geometry.is_changed()
@@ -136,6 +137,9 @@ fn update(
     }
     for (_, mut node) in &mut overlays {
         node.display = Display::None;
+    }
+    if section.as_ref().is_some_and(|state| state.is_cut()) {
+        return;
     }
     // Invalidate even while playback/UI suppresses querying. Rebuild lazily on
     // the next eligible hover, so playback never constructs a per-frame BVH.

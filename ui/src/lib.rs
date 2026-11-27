@@ -22,6 +22,7 @@ mod result_loading;
 mod result_requests;
 mod result_menu;
 mod result_range_ui;
+mod result_section_ui;
 mod result_probe_ui;
 mod result_probe_cache;
 mod result_probe_pin;
@@ -196,6 +197,7 @@ impl Plugin for UiPlugin {
         result_number_input::register(app);
         result_menu::register(app);
         result_range_ui::register(app);
+        result_section_ui::register(app);
         result_probe_ui::register(app);
         output_ui::register(app);
         solver_menu::register(app);

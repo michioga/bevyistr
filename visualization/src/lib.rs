@@ -4,6 +4,8 @@ mod contour;
 mod contour_range;
 pub use contour_range::ContourRangeMode;
 pub mod result_probe;
+mod result_section;
+pub use result_section::{ResultSectionDisplay, ResultSectionSettings, SectionStatus};
 mod demo_mesh;
 mod material_colors;
 #[cfg(test)]
@@ -48,6 +50,14 @@ impl Plugin for VisualizationPlugin {
         app.init_resource::<ContourRangeMode>();
         app.init_resource::<MaterialColorMode>();
         app.init_resource::<ContourSurface>();
+        app.init_resource::<ResultSectionSettings>();
+        app.init_resource::<ResultSectionDisplay>();
+        app.add_systems(
+            Update,
+            result_section::update_result_section
+                .before(update_contour_surface)
+                .before(update_colorbar),
+        );
         app.init_resource::<ContactReviewSettings>();
         app.init_resource::<DefinedContactPreview>();
         app.init_resource::<ContactDraftPreview>();
@@ -102,7 +112,10 @@ impl Plugin for VisualizationPlugin {
                     .after(apply_contact_review)
                     .after(respawn_elements_on_setup_change),
                 apply_contour_visibility.after(update_contour_surface),
-                contour::hide_pre_overlays_in_result_view.after(update_topology_highlights).after(spawn_boundary_visuals),
+                contour::hide_pre_overlays_in_result_view
+                    .after(result_section::update_result_section)
+                    .after(update_topology_highlights)
+                    .after(spawn_boundary_visuals),
                 update_colorbar,
                 spawn_boundary_visuals,
                 spawn_boundary_load_preview,
