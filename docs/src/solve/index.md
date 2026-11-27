@@ -138,7 +138,9 @@ bevyistr
 
 MSI版では `& (Join-Path $env:LOCALAPPDATA 'Programs/bevyistr/bevyistr.exe')` で起動します。v0.5.0のZIP版では、展開先で `./bevyistr.exe` を実行します。MPIを使う場合は **Choose mpiexec / mpirun...** で、FrontISTRのビルドに対応するランチャーを選びます。Solveの **Runtime** が `inherited process environment` なら、起動元の環境が使われます。
 
-`setvars.bat` が「入力行が長すぎます」で止まる場合にも、実行環境を用意した端末から上記の方法で起動できます。Windowsエラー623が出る場合は、同じ端末から `fistr1.exe` や `hecmw_part1.exe` を直接起動し、DLL読み込みの失敗が再現するか確認してください。
+`setvars.bat` が「入力行が長すぎます」で止まる場合にも、実行環境を用意した端末から上記の方法で起動できます。
+
+Windowsエラー623が出る場合は、同じ端末で `fistr1.exe -v` を実行して切り分けます。ここでも623になる場合は、Windowsのローダーが解析入力を読む前に起動を停止しています。配布版の実行ファイルにベース再配置情報がなく、こちらの検証環境で失敗する例を確認しました。再配置情報を含むビルドを用意し、**Choose fistr1 executable...** で指定すると、検証用のOpenMP版を **Direct** で実行できます。 [Microsoftのエラー定義](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--500-999-)
 
 ログはアプリ内部に表示します。停止する場合はSolveのStopを使います。プロセスの正常終了だけで解析の収束やモデルの妥当性まで保証されるわけではありません。
 

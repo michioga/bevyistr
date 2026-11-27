@@ -1,5 +1,11 @@
 # 動作確認チェックリスト
 
+## 0.6.0向け: Hertz接触例題とWindowsエラー623
+
+- 同一の実行環境で、公式配布のIntel MPI版とOpenMP版の `fistr1.exe -v` が起動時に623となった。配布版の `fistr1.exe` と `hecmw_part1.exe` のPEヘッダーで `IMAGE_FILE_RELOCS_STRIPPED` と空の再配置テーブルを確認した。小さなMinGW-w64の対照プログラムでは、再配置情報のない版で623を再現し、再配置情報を含む版は正常終了した。 [Microsoftのエラー定義](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--500-999-) · [PEの再配置情報](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#characteristics)
+- FrontISTRのコミット `0de79208eac65e51e4078004a6e46981d64011ee` を複製し、GNU Fortran 16.2.0とCMakeでOpenMP版を作成した。リンクに `-Wl,--enable-reloc-section,--dynamicbase,--high-entropy-va` を指定し、Windowsの逐次ビルド用に起動ログのホスト名取得だけを `GetComputerNameA` に切り替えた。GNUランタイムのDLLは同じツールチェーンから検証用EXEの隣に配置した。この構成で `fistr1.exe -v` が終了コード0になった。 [FrontISTRのCMakeビルド手順](https://source-docs.frontistr.com/build_guide/cmake_build.html)
+- `09_contact_hertz` の408節点・168要素を使い、bevyistrから `ALAGRANGE, AUGITER=4` と `SLAGRANGE` の各プロジェクトを書き出した。どちらもCG、Direct、1スレッドで最終サブステップ5まで収束し、生成したRESをbevyistrの読込処理で確認した。全408節点の変位が有限で、最大変位の大きさは両方式とも `0.30624107` だった。
+
 ## 0.4.0向け: 解析入力から結果表示まで
 
 - [x] 自動: 4要素・20節点の弾性棒のプロジェクトを読み込み、材料・拘束・荷重付きの入力を書き出してテスト用の子プロセスを実行する。RESの節点IDで変位を対応付け、Resultsの最終フレームと変位コンターを選ぶ。
