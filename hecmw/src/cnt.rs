@@ -48,9 +48,10 @@ mod solver_rows;
 #[path = "cnt_visual.rs"]
 mod visual;
 use fem_core::{
-    AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
-    DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod, MatrixDumpFormat,
-    NodalLoad, NodeId, RotationCenter, Section, SectionKind, SolverSettings, SolverTimeLog,
+    AnalysisSetup, AnalysisType, BoundaryCondition, ContactAlgorithm, ContactPair, ContactType,
+    DistributedLoad, DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod,
+    MatrixDumpFormat, NodalLoad, NodeId, RotationCenter, Section, SectionKind, SolverSettings,
+    SolverTimeLog,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -331,6 +332,24 @@ fn skip_comment_lines(lines: &[&str], i: &mut usize) {
 }
 
 /// FrontISTR group IDs use positive kint values.
+fn parse_contact_algorithm(
+    header: &KeywordHeader,
+) -> Result<(ContactAlgorithm, Option<u32>), &'static str> {
+    let algorithm = match header.params.get("TYPE") {
+        Some(value) => ContactAlgorithm::from_frontistr(value)
+            .ok_or("CONTACT_ALGO TYPE must be ALAGRANGE or SLAGRANGE")?,
+        None => ContactAlgorithm::default(),
+    };
+    let iterations = match header.params.get("AUGITER") {
+        Some(_) if algorithm != ContactAlgorithm::AugmentedLagrange => {
+            return Err("AUGITER applies only to ALAGRANGE");
+        }
+        Some(value) => Some(positive_group_id(value).ok_or("AUGITER must be in 1..=2147483647")?),
+        None => None,
+    };
+    Ok((algorithm, iterations))
+}
+
 fn positive_group_id(text: &str) -> Option<u32> {
     text.parse::<i32>()
         .ok()
@@ -488,6 +507,14 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                 i += 1;
             }
 
+            "CONTACT_ALGO" => {
+                if let Ok((algorithm, iterations)) = parse_contact_algorithm(&header) {
+                    let solver = data.solver.get_or_insert_with(SolverSettings::default);
+                    solver.contact_algorithm = algorithm;
+                    solver.contact_augmentation_iterations = iterations;
+                }
+                i += 1;
+            }
             "STEP" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
                 solver.dynamic_step =

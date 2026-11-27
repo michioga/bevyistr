@@ -83,6 +83,11 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         blockers
             .push("Boundary/load groups above 1 require a supported explicit dynamic STEP".into());
     }
+    if setup.solver.analysis_type == AnalysisType::NlStatic
+        && let Err(reason) = setup.solver.validate_contact_algorithm()
+    {
+        blockers.push(format!("Contact algorithm: {reason}"));
+    }
     if setup.solver.analysis_type == AnalysisType::Eigen {
         if let Err(reason) = setup.solver.eigen.validate() {
             blockers.push(reason.into());
@@ -318,7 +323,11 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     // pairs separate allows interaction parameters to diverge later without
     // changing the file layout or the step activation model.
     if !contacts.is_empty() {
-        writeln!(o, "!CONTACT_ALGO, TYPE=ALAGRANGE").unwrap();
+        write!(o, "!CONTACT_ALGO, TYPE={}", s.contact_algorithm.frontistr_value()).unwrap();
+        if let Some(iterations) = s.contact_augmentation_iterations {
+            write!(o, ", AUGITER={iterations}").unwrap();
+        }
+        writeln!(o).unwrap();
     }
     for (index, contact) in contacts.iter().enumerate() {
         write_contact(&mut o, contact, index + 1);

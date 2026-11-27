@@ -451,6 +451,29 @@ pub struct DynamicStep {
     pub groups: Vec<StepGroup>,
 }
 
+/// FrontISTR's contact algorithm, shared by all contact pairs in the analysis.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ContactAlgorithm {
+    #[default]
+    AugmentedLagrange,
+    LagrangeMultipliers,
+}
+
+impl ContactAlgorithm {
+    pub const fn frontistr_value(self) -> &'static str {
+        match self {
+            Self::AugmentedLagrange => "ALAGRANGE",
+            Self::LagrangeMultipliers => "SLAGRANGE",
+        }
+    }
+
+    pub fn from_frontistr(value: &str) -> Option<Self> {
+        [Self::AugmentedLagrange, Self::LagrangeMultipliers]
+            .into_iter()
+            .find(|algorithm| value.eq_ignore_ascii_case(algorithm.frontistr_value()))
+    }
+}
+
 /// Solver settings that control how FrontISTR runs the analysis.
 /// Corresponds to the `!SOLUTION`, `!STEP`, `!STATIC`, `!DYNAMIC`, and
 /// `!SOLVER` / `!EIGEN` keywords in the `.cnt` file.
@@ -461,6 +484,9 @@ pub struct SolverSettings {
     /// Complete supported time-history `!DYNAMIC` card, when imported.
     pub dynamic: Option<DynamicSettings>,
     pub dynamic_step: Option<DynamicStep>,
+    pub contact_algorithm: ContactAlgorithm,
+    /// FrontISTR AUGITER for ALAGRANGE. None leaves the FrontISTR default in effect.
+    pub contact_augmentation_iterations: Option<u32>,
     /// Analysis type: static, dynamic, or eigenvalue.
     pub analysis_type: AnalysisType,
     /// Number of substeps (for nonlinear or time-dependent analyses).
@@ -503,6 +529,8 @@ impl Default for SolverSettings {
             eigen: EigenSettings::default(),
             dynamic: None,
             dynamic_step: None,
+            contact_algorithm: ContactAlgorithm::default(),
+            contact_augmentation_iterations: None,
             analysis_type: AnalysisType::Static,
             substeps: 1,
             max_iterations: Some(100),
@@ -527,6 +555,18 @@ impl Default for SolverSettings {
 }
 
 impl SolverSettings {
+    pub fn validate_contact_algorithm(&self) -> Result<(), &'static str> {
+        if let Some(iterations) = self.contact_augmentation_iterations {
+            if self.contact_algorithm != ContactAlgorithm::AugmentedLagrange {
+                return Err("AUGITER applies only to ALAGRANGE");
+            }
+            if !(1..=i32::MAX as u32).contains(&iterations) {
+                return Err("AUGITER must be in 1..=2147483647");
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_linear_options(&self) -> Result<(), &'static str> {
         let positive = 1..=i32::MAX as u32;
         if self.max_iterations.is_some_and(|n| !positive.contains(&n)) {

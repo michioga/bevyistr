@@ -170,7 +170,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "BOUNDARY" | "CLOAD" => &["GRPID", "ROT_CENTER"],
         "DLOAD" => &["GRPID"],
         "CONTACT" => &["GRPID", "INTERACTION"],
-        "CONTACT_ALGO" => &["TYPE"],
+        "CONTACT_ALGO" => &["TYPE", "AUGITER"],
         "MATERIAL" => &["NAME"],
         "NGROUP" | "NGRP" => &["NGRP"],
         "WRITE" => &["RESULT", "VISUAL", "FREQUENCY"],
@@ -347,10 +347,16 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
             Some("Distributed load row is incomplete or its target cannot be resolved")
         }
         "CONTACT" => check_contact(h, body, data),
-        "CONTACT_ALGO"
-            if !is("TYPE", "ALAGRANGE") || !body.is_empty() || data.contact_settings.is_empty() =>
-        {
-            Some("Only the default ALAGRANGE contact algorithm without extra options is preserved")
+        "CONTACT_ALGO" => {
+            if !body.is_empty() {
+                Some("Unexpected CONTACT_ALGO data rows")
+            } else if data.contact_settings.is_empty()
+                || data.solver.as_ref().is_none_or(|s| s.analysis_type != AnalysisType::NlStatic)
+            {
+                Some("CONTACT_ALGO requires nonlinear static analysis with contact pairs")
+            } else {
+                super::parse_contact_algorithm(h).err()
+            }
         }
         "FLUID" => {
             if !material
@@ -757,9 +763,45 @@ mod tests {
                 .iter()
                 .any(|issue| issue.message.contains("PAIR_B"))
         );
+        use fem_core::ContactAlgorithm::{AugmentedLagrange, LagrangeMultipliers};
+        for (header, algorithm, iterations, expected) in [
+            (
+                "!CONTACT_ALGO, AUGITER=4",
+                AugmentedLagrange,
+                Some(4),
+                "!CONTACT_ALGO, TYPE=ALAGRANGE, AUGITER=4",
+            ),
+            (
+                "!CONTACT_ALGO, TYPE=slagrange",
+                LagrangeMultipliers,
+                None,
+                "!CONTACT_ALGO, TYPE=SLAGRANGE",
+            ),
+        ] {
+            let input = text.replace("!CONTACT_ALGO, TYPE=ALAGRANGE", header);
+            let mut data = read(&input);
+            data.check_contact_references(&pairs, std::path::Path::new("input.cnt"), true);
+            assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+            let mut imported = AnalysisSetup::default();
+            data.merge_into(&mut imported);
+            assert_eq!(imported.solver.contact_algorithm, algorithm);
+            assert_eq!(imported.solver.contact_augmentation_iterations, iterations);
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("contact.cnt");
+            crate::write_cnt_file_with_contacts(&path, &imported, &pairs).unwrap();
+            let output = std::fs::read_to_string(path).unwrap();
+            assert!(output.lines().any(|line| line == expected));
+            let reloaded = read(&output);
+            assert!(reloaded.import_issues.is_empty(), "{:?}", reloaded.import_issues);
+            assert_eq!(reloaded.solver.unwrap(), imported.solver);
+        }
         for unsupported in [
             text.replace("CONTACT, 2\n", ""),
-            text.replace("TYPE=ALAGRANGE", "TYPE=SLAGRANGE"),
+            text.replace("TYPE=ALAGRANGE", "TYPE=UNKNOWN"),
+            text.replace("TYPE=ALAGRANGE", "TYPE=SLAGRANGE, AUGITER=2"),
+            text.replace("TYPE=ALAGRANGE", "TYPE=ALAGRANGE, AUGITER=0"),
+            text.replace("TYPE=ALAGRANGE", "TYPE=ALAGRANGE, FRICTION_CONE=FROZEN"),
             text.replace("INTERACTION=FSLID", "INTERACTION=FSLID, NPENALTY=100"),
             text.replace("INTERACTION=FSLID", "INTERACTION=UNKNOWN"),
             text.replace("PAIR_B\n", "PAIR_A\n"),

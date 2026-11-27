@@ -10,7 +10,8 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use bevy::ui_widgets::SelectAllOnFocus;
 use fem_core::{
-    AnalysisType, DynamicStep, LinearSolverMethod, SolverSettings, StepGroup, UiKeyboardState,
+    AnalysisType, ContactAlgorithm, DynamicStep, LinearSolverMethod, SolverSettings, StepGroup,
+    UiKeyboardState,
 };
 
 const INPUT_BG: Color = Color::srgba(0.075, 0.09, 0.10, 0.98);
@@ -45,6 +46,7 @@ pub(crate) enum SolverField {
     DynamicIncrement,
     NewmarkGamma,
     NewmarkBeta,
+    ContactAugmentationIterations,
 }
 
 impl SolverField {
@@ -69,6 +71,7 @@ impl SolverField {
             Self::DynamicIncrement => "Time increment (t_delta)",
             Self::NewmarkGamma => "Newmark gamma",
             Self::NewmarkBeta => "Newmark beta",
+            Self::ContactAugmentationIterations => "Contact AUGITER",
         }
     }
 
@@ -92,6 +95,10 @@ impl SolverField {
             Self::DynamicSubsteps | Self::DynamicIncrement | Self::NewmarkGamma | Self::NewmarkBeta => {
                 settings.analysis_type == AnalysisType::Dynamic && settings.dynamic.is_some()
             }
+            Self::ContactAugmentationIterations => {
+                settings.analysis_type == AnalysisType::NlStatic
+                    && settings.contact_algorithm == ContactAlgorithm::AugmentedLagrange
+            }
             Self::Substeps | Self::NonlinearMaxIterations | Self::NonlinearConvergenceTolerance => {
                 settings.analysis_type == AnalysisType::NlStatic
             }
@@ -103,7 +110,7 @@ impl SolverField {
             self,
             Self::MaxIterations | Self::ConvergenceTolerance | Self::PreconditionerIterations
                 | Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
-                | Self::DiagonalScale | Self::SsorRelaxation
+                | Self::DiagonalScale | Self::SsorRelaxation | Self::ContactAugmentationIterations
         )
     }
 
@@ -113,7 +120,7 @@ impl SolverField {
             Self::Substeps | Self::MaxIterations | Self::PreconditionerIterations
                 | Self::GmresSubspaces | Self::OrderingColors | Self::PreconditionerReuse
                 | Self::NonlinearMaxIterations | Self::EigenModes | Self::EigenMaxIterations
-                | Self::DynamicSubsteps
+                | Self::DynamicSubsteps | Self::ContactAugmentationIterations
         )
     }
 }
@@ -220,6 +227,12 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
                 "Independent of linear tolerance. Other nonlinear criteria use FrontISTR defaults.",
             );
         });
+    solver_value_row(
+        parent,
+        "Contact AUGITER",
+        SolverField::ContactAugmentationIterations,
+        "ContactAugmentationIterationsInput",
+    );
     parent.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), ..default() }, SolverControlGroup::Eigen))
         .with_children(|group| {
             solver_hint(group, "EIGENVALUE | !EIGEN (Lanczos)");
@@ -488,6 +501,9 @@ pub(crate) fn solver_numeric_input_system(
 fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
     match field {
         SolverField::Substeps => settings.substeps.to_string(),
+        SolverField::ContactAugmentationIterations => {
+            format_optional_count(settings.contact_augmentation_iterations)
+        }
         SolverField::MaxIterations => format_optional_count(settings.max_iterations),
         SolverField::ConvergenceTolerance => format_optional_real(settings.convergence_tol),
         SolverField::PreconditionerIterations => format_optional_count(settings.preconditioner_iterations),
@@ -618,6 +634,9 @@ fn apply_solver_value(
 ) {
     match (field, value) {
         (SolverField::Substeps, ParsedSolverValue::Integer(value)) => settings.substeps = value,
+        (SolverField::ContactAugmentationIterations, ParsedSolverValue::OptionalInteger(value)) => {
+            settings.contact_augmentation_iterations = value;
+        }
         (SolverField::MaxIterations, ParsedSolverValue::OptionalInteger(value)) => {
             settings.max_iterations = value;
         }
@@ -715,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn solve_preconditioner_fields_commit_and_round_trip_through_cnt() {
+    fn solve_numeric_options_commit_and_round_trip_through_cnt() {
         let mut setup = fem_core::AnalysisSetup::default();
         setup.solver.analysis_type = AnalysisType::NlStatic;
         setup.solver.solver_method = LinearSolverMethod::Gmres;
@@ -738,6 +757,7 @@ mod tests {
             (SolverField::PreconditionerIterations, "2"),
             (SolverField::OrderingColors, "24"),
             (SolverField::PreconditionerReuse, "0"),
+            (SolverField::ContactAugmentationIterations, "4"),
             (SolverField::SsorRelaxation, "1.125"),
             (SolverField::DiagonalScale, "1.2345678901234567"),
         ] {
@@ -762,12 +782,19 @@ mod tests {
         assert_eq!(setup.solver.preconditioner_iterations, Some(2));
         assert_eq!(setup.solver.ordering_colors, Some(24));
         assert_eq!(setup.solver.preconditioner_reuse, Some(0));
+        assert_eq!(setup.solver.contact_augmentation_iterations, Some(4));
         assert_eq!(setup.solver.diagonal_scale, Some(diagonal_scale));
         assert_eq!(setup.solver.ssor_relaxation, Some(1.125));
         assert_eq!(setup.solver.gmres_subspaces, None);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("solver.cnt");
-        hecmw::cnt_writer::write_cnt_file(&path, setup).unwrap();
+        let pair = fem_core::ContactPair::new(
+            "CP1",
+            fem_core::SurfaceSetRef::new(0, 0),
+            fem_core::SurfaceSetRef::new(0, 1),
+            fem_core::ContactType::SmallSliding,
+        );
+        hecmw::write_cnt_file_with_contacts(&path, setup, &[pair]).unwrap();
         let data = hecmw::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0).unwrap();
         assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
         assert_eq!(data.solver.as_ref(), Some(&setup.solver));

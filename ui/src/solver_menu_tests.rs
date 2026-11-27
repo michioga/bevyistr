@@ -103,6 +103,37 @@ fn assert_export(app: &App, choice: Choice) {
 }
 
 #[test]
+fn contact_algorithm_menu_applies_for_nonlinear_setup_and_reaches_export() {
+    use fem_core::{ContactPair, ContactType, SurfaceSetRef};
+    let mut app = app();
+    assert!(!Kind::ContactAlgorithm.available(&app.world().resource::<AnalysisSetup>().solver));
+    {
+        let mut setup = app.world_mut().resource_mut::<AnalysisSetup>();
+        setup.solver.analysis_type = AnalysisType::NlStatic;
+        setup.solver.contact_augmentation_iterations = Some(4);
+    }
+    app.update();
+    open(&mut app, Kind::ContactAlgorithm);
+    let selected = ContactAlgorithm::LagrangeMultipliers;
+    click_choice(&mut app, Choice::ContactAlgorithm(selected));
+    let setup = app.world().resource::<AnalysisSetup>();
+    assert_eq!(setup.solver.contact_algorithm, selected);
+    assert_eq!(setup.solver.contact_augmentation_iterations, None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("contact.cnt");
+    let pair = ContactPair::new(
+        "CP1",
+        SurfaceSetRef::new(0, 0),
+        SurfaceSetRef::new(0, 1),
+        ContactType::SmallSliding,
+    );
+    hecmw::write_cnt_file_with_contacts(&path, setup, &[pair]).unwrap();
+    let output = std::fs::read_to_string(path).unwrap();
+    assert!(output.lines().any(|line| line == "!CONTACT_ALGO, TYPE=SLAGRANGE"));
+}
+
+#[test]
 fn matrix_dump_menus_control_export_without_changing_the_solver_method() {
     let mut app = app();
     open(&mut app, Kind::MatrixDump);

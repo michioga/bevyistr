@@ -14,6 +14,8 @@ MUMPSとMKLは別のMETHODとして読み込み・出力します。メニュー
 線形反復は[!SOLVER](https://source-docs.frontistr.com/keyword_reference/cnt/solver.html)、非線形反復は[!STEP](https://source-docs.frontistr.com/keyword_reference/cnt/step.html)に対応します。
 [出力先・保存間隔・物理量](output-fields.md)も実行前に設定してください。
 
+Nonlinearを選ぶと、**Contact algorithm** で `ALAGRANGE`（拡張ラグランジュ乗数法）または `SLAGRANGE`（ラグランジュ乗数法）を指定できます。接触ペアのあるプロジェクトの `!CONTACT_ALGO` に書き出します。`ALAGRANGE` の **Contact AUGITER** は接触状態探索ごとの乗数更新回数です。正の整数を入力してEnterで確定し、空欄で確定するとFrontISTRの既定値（2）を使います。 [FrontISTRの `!CONTACT_ALGO` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/contact_algo.html)
+
 Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数・許容差・最大反復数・シフト量を編集できます。[固有値解析の設定](eigen.md)を参照してください。
 
 Solve の **Preconditioner** で SSOR（`PRECOND=1`／`2`）または対角スケーリング（`PRECOND=3`）を選べます。CG／BiCGSTAB／GMRESの数値欄は次のとおりです。
@@ -76,7 +78,7 @@ Solveの最下部には元ファイル名・行番号・
 | `!SOLVER` | 対応METHOD、反復法の`PRECOND=1`／`2`／`3`。標準の2データ行の `NITER`、`iterPREmax`、`NREST`、`NCOLOR_IN`、`RECYCLEPRE`、`RESID`、`SIGMA_DIAG`、`OMEGA` を保持します。反復法の `SCALING`、`ITERLOG`／`TIMELOG`、`DUMPTYPE`／`DUMPEXIT` にも対応します。 | その他の前処理、未知のMETHOD、追加のデータ行や列 |
 | 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md)、上記の流体時刻歴 | 対応範囲外の動解析、熱解析、複数ステップ、自動増分、非線形静解析での個別の時間設定や一部グループの有効化 |
 | 材料 | 等方弾性・密度。[非圧縮ニュートン流体の一定粘度・密度](../materials.md#非圧縮ニュートン流体)は読込・編集・再出力に対応。 | 温度依存テーブル、異方弾性、弾塑性、超弾性 |
-| 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |
+| 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`（`AUGITER`を含む）／`SLAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`での`AUGITER`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |
 | 保存間隔・出力項目 | 基本の`!WRITE`。`!OUTPUT_RES`／`!OUTPUT_VIS`のGROUP／ACTIONなどの拡張カードは単体出力で内容を保持します。 | `!WRITE`の追加オプション、名前付き出力GROUPを含む複数部品の統合出力 |
 
 FrontISTRの仕様を確認する際は、設定項目ごとのページを参照してください。 [拘束 `!BOUNDARY`](https://source-docs.frontistr.com/keyword_reference/cnt/boundary.html) · [集中荷重 `!CLOAD`](https://source-docs.frontistr.com/keyword_reference/cnt/cload.html) · [分布荷重 `!DLOAD`](https://source-docs.frontistr.com/keyword_reference/cnt/dload.html) · [線形ソルバー `!SOLVER`](https://source-docs.frontistr.com/keyword_reference/cnt/solver.html) · [ステップ `!STEP`](https://source-docs.frontistr.com/keyword_reference/cnt/step.html) · [固有値 `!EIGEN`](https://source-docs.frontistr.com/keyword_reference/cnt/eigen.html) · [弾性 `!ELASTIC`](https://source-docs.frontistr.com/keyword_reference/cnt/elastic.html) · [接触 `!CONTACT`](https://source-docs.frontistr.com/keyword_reference/cnt/contact.html)

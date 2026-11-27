@@ -17,7 +17,8 @@ use bevy::{
     },
 };
 use fem_core::{
-    AnalysisSetup, AnalysisType, LinearSolverMethod, MatrixDumpFormat, SolverSettings, SolverTimeLog,
+    AnalysisSetup, AnalysisType, ContactAlgorithm, LinearSolverMethod, MatrixDumpFormat,
+    SolverSettings, SolverTimeLog,
 };
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ enum Kind {
     TimingLog,
     MatrixDump,
     DumpExit,
+    ContactAlgorithm,
 }
 #[derive(Component)]
 struct Label(Kind);
@@ -51,6 +53,7 @@ enum Choice {
     TimingLog(Option<SolverTimeLog>),
     MatrixDump(MatrixDumpFormat),
     DumpExit(bool),
+    ContactAlgorithm(ContactAlgorithm),
 }
 
 impl Kind {
@@ -64,10 +67,15 @@ impl Kind {
             Self::TimingLog => "Solver timing log",
             Self::MatrixDump => "Matrix dump",
             Self::DumpExit => "Dump action",
+            Self::ContactAlgorithm => "Contact algorithm",
         }
     }
     fn available(self, settings: &SolverSettings) -> bool {
-        !matches!(self, Self::Preconditioner | Self::Scaling) || settings.solver_method.is_iterative()
+        match self {
+            Self::Preconditioner | Self::Scaling => settings.solver_method.is_iterative(),
+            Self::ContactAlgorithm => settings.analysis_type == AnalysisType::NlStatic,
+            _ => true,
+        }
     }
     fn current(self, settings: &SolverSettings) -> Choice {
         match self {
@@ -79,6 +87,7 @@ impl Kind {
             Self::TimingLog => Choice::TimingLog(settings.time_log),
             Self::MatrixDump => Choice::MatrixDump(settings.matrix_dump_format),
             Self::DumpExit => Choice::DumpExit(settings.exit_after_matrix_dump),
+            Self::ContactAlgorithm => Choice::ContactAlgorithm(settings.contact_algorithm),
         }
     }
     fn choices(self) -> Vec<Choice> {
@@ -123,6 +132,12 @@ impl Kind {
             .map(Choice::MatrixDump)
             .to_vec(),
             Self::DumpExit => vec![Choice::DumpExit(false), Choice::DumpExit(true)],
+            Self::ContactAlgorithm => [
+                ContactAlgorithm::AugmentedLagrange,
+                ContactAlgorithm::LagrangeMultipliers,
+            ]
+            .map(Choice::ContactAlgorithm)
+            .to_vec(),
         }
     }
 }
@@ -147,6 +162,7 @@ impl Choice {
             Self::MatrixDump(format) => format.frontistr_value(),
             Self::DumpExit(false) => "Continue solve",
             Self::DumpExit(true) => "Exit after dump",
+            Self::ContactAlgorithm(value) => value.frontistr_value(),
         }
     }
     fn keyword(self) -> String {
@@ -166,6 +182,7 @@ impl Choice {
             Self::MatrixDump(format) => format!("!SOLVER, DUMPTYPE={}", format.frontistr_value()),
             Self::DumpExit(false) => "!SOLVER, DUMPEXIT=NO".into(),
             Self::DumpExit(true) => "!SOLVER, DUMPEXIT=YES".into(),
+            Self::ContactAlgorithm(value) => format!("!CONTACT_ALGO, TYPE={}", value.frontistr_value()),
         }
     }
     fn selected(self, settings: &SolverSettings) -> bool {
@@ -178,6 +195,7 @@ impl Choice {
             Self::TimingLog(setting) => settings.time_log == setting,
             Self::MatrixDump(format) => settings.matrix_dump_format == format,
             Self::DumpExit(exit) => settings.exit_after_matrix_dump == exit,
+            Self::ContactAlgorithm(value) => settings.contact_algorithm == value,
         }
     }
 }
@@ -203,6 +221,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         Kind::TimingLog,
         Kind::MatrixDump,
         Kind::DumpExit,
+        Kind::ContactAlgorithm,
     ] {
         parent
             .spawn((
@@ -399,6 +418,12 @@ fn choose(
         Choice::TimingLog(setting) => setup.solver.time_log = setting,
         Choice::MatrixDump(format) => setup.solver.matrix_dump_format = format,
         Choice::DumpExit(exit) => setup.solver.exit_after_matrix_dump = exit,
+        Choice::ContactAlgorithm(value) => {
+            setup.solver.contact_algorithm = value;
+            if value != ContactAlgorithm::AugmentedLagrange {
+                setup.solver.contact_augmentation_iterations = None;
+            }
+        }
     }
 }
 
