@@ -75,7 +75,7 @@ These additions are **not included in the published 0.2.0 package**. See the
 - Follow continuous feature lines in Edge mode and preview growth results on hover.
 - Save selected topology as HEC-MW node or element groups.
 
-The in-application Selection guide shows the active controls and can be collapsed after they become familiar.
+See the [selection controls in the user manual (日本語)](docs/src/operation.md#選択).
 
 ### Contact and MPC
 

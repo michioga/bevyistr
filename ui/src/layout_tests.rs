@@ -13,9 +13,9 @@ use crate::measurement::{MeasurementBoxState, MeasurementTarget};
 use crate::mpc_ui::{next_mpc_pair_name, pair_mpc_equations, remove_mpc_equation_or_group};
 use crate::project_io::{CameraFitRequest, apply_mesh, merge_mesh_contact_pairs};
 use crate::selection_ui::{
-    SELECTION_GUIDE_TEXT, SelectionGuideState, SurfaceSelectionMode, SurfaceSelectionSettings,
-    selection_context_for_page, selection_operation_hint, supports_surface_growth,
-    surface_selection_hint, update_hover_preview_group,
+    SurfaceSelectionMode, SurfaceSelectionSettings, selection_context_for_page,
+    selection_operation_hint, supports_surface_growth, surface_selection_hint,
+    update_hover_preview_group,
 };
 use bevy::prelude::{App, Display, Update, Vec3};
 use fem_core::{
@@ -489,12 +489,7 @@ fn surface_growth_controls_only_apply_to_face_and_element() {
 }
 
 #[test]
-fn selection_guide_starts_open_and_names_every_modifier_operation() {
-    assert!(SelectionGuideState::default().expanded);
-    assert_eq!(SELECTION_GUIDE_TEXT.lines().count(), 9);
-    assert!(!SELECTION_GUIDE_TEXT.contains('\\'));
-    assert!(SELECTION_GUIDE_TEXT.contains("Double click"));
-    assert!(SELECTION_GUIDE_TEXT.contains("Triple click"));
+fn selection_operation_hint_names_every_modifier_operation() {
     assert!(
         selection_operation_hint(SelectionOperation::Replace)
             .0

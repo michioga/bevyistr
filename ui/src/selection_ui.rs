@@ -23,37 +23,10 @@ const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const COPLANAR_TOLERANCE_DEG: f32 = 0.5;
 pub(crate) const DEFAULT_SMOOTH_ANGLE_DEG: f32 = 15.0;
 
-pub(crate) const SELECTION_GUIDE_TEXT: &str = "Click / drag       Replace selection\n\
-Double click       Connected boundary\n\
-Triple click       Connected component\n\
-Ctrl + click/drag  Add to selection\n\
-Shift + click/drag Toggle selected / unselected\n\
-Alt or Ctrl+Shift  Remove from selection\n\
-Esc                Clear all\n\
-Drag left → right  Fully enclosed only\n\
-Drag right → left  Crossing / touching";
-
 #[derive(Component)]
 pub(crate) struct SelectionLevelButton {
     pub(crate) level: SelectionLevel,
 }
-
-#[derive(Resource, Debug, Clone, Copy)]
-pub(crate) struct SelectionGuideState {
-    pub expanded: bool,
-}
-
-impl Default for SelectionGuideState {
-    fn default() -> Self {
-        Self { expanded: true }
-    }
-}
-
-#[derive(Component)]
-pub(crate) struct SelectionGuideToggle;
-
-#[derive(Component)]
-pub(crate) struct SelectionGuidePanel;
 
 #[derive(Component)]
 pub(crate) struct SelectionToolbar;
@@ -393,57 +366,6 @@ pub(crate) fn update_selection_context(
         for entity in &selected_query {
             commands.entity(entity).remove::<Selected>();
         }
-    }
-}
-
-pub(crate) fn selection_guide_toggle_system(
-    mut state: ResMut<SelectionGuideState>,
-    mut buttons: Query<
-        (
-            Ref<ButtonInteraction>,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &Children,
-        ),
-        With<SelectionGuideToggle>,
-    >,
-    mut panels: Query<&mut Node, With<SelectionGuidePanel>>,
-    mut labels: Query<&mut Text>,
-) {
-    for (interaction, mut background, mut border, children) in &mut buttons {
-        if *interaction == ButtonInteraction::Pressed && interaction.is_changed() {
-            state.expanded = !state.expanded;
-        }
-
-        *background = BackgroundColor(match *interaction {
-            ButtonInteraction::Pressed => BUTTON_PRESSED,
-            ButtonInteraction::Hovered => Color::srgba(0.11, 0.20, 0.25, 0.98),
-            ButtonInteraction::None => Color::srgba(0.08, 0.14, 0.18, 0.96),
-        });
-        *border = BorderColor::all(if state.expanded {
-            ACTIVE_BORDER
-        } else {
-            Color::srgba(0.30, 0.58, 0.72, 0.90)
-        });
-
-        for &child in children {
-            if let Ok(mut text) = labels.get_mut(child) {
-                **text = if state.expanded {
-                    "Selection guide  [hide]"
-                } else {
-                    "Selection guide  [show]"
-                }
-                .to_string();
-            }
-        }
-    }
-
-    for mut node in &mut panels {
-        node.display = if state.expanded {
-            Display::Flex
-        } else {
-            Display::None
-        };
     }
 }
 

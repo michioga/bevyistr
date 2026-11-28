@@ -12,11 +12,10 @@ use crate::results_ui::{
     OpenResultButton, ResultSliderSection, ResultStatsText,
 };
 use crate::selection_ui::{
-    DEFAULT_SMOOTH_ANGLE_DEG, SELECTION_GUIDE_TEXT, SelectionContextText, SelectionGuidePanel,
-    SelectionGuideToggle, SelectionLevelButton, SelectionOperationHint, SelectionToolbar,
-    SurfaceAngleControls, SurfaceSelectionControls, SurfaceSelectionHint, SurfaceSelectionMode,
-    SurfaceSelectionModeButton, SurfaceSelectionUnavailableHint, spawn_model_selection_ui,
-    spawn_model_sets_ui,
+    DEFAULT_SMOOTH_ANGLE_DEG, SelectionContextText, SelectionLevelButton, SelectionOperationHint,
+    SelectionToolbar, SurfaceAngleControls, SurfaceSelectionControls, SurfaceSelectionHint,
+    SurfaceSelectionMode, SurfaceSelectionModeButton, SurfaceSelectionUnavailableHint,
+    spawn_model_selection_ui, spawn_model_sets_ui,
 };
 use crate::slider::{SliderConfig, SliderId, spawn_slider};
 use crate::solve_ui::spawn_solve_ui;
@@ -795,59 +794,7 @@ fn spawn_selection_level_bar(parent: &mut ChildSpawnerCommands) {
                 TextColor(Color::srgba(0.50, 0.78, 0.95, 0.95)),
                 SelectionOperationHint,
             ));
-            spawn_selection_guide(toolbar);
         });
-}
-
-fn spawn_selection_guide(parent: &mut ChildSpawnerCommands) {
-    parent
-        .spawn((
-            InteractionButton,
-            Node {
-                width: percent(100.0),
-                min_height: px(24.0),
-                padding: UiRect::axes(px(8.0), px(3.0)),
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(4.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.08, 0.14, 0.18, 0.96)),
-            BorderColor::all(Color::srgba(0.30, 0.58, 0.72, 0.90)),
-            SelectionGuideToggle,
-            Name::new("SelectionGuideToggle"),
-        ))
-        .with_child((
-            Text::new("Selection guide  [hide]"),
-            TextFont {
-                font_size: FontSize::Px(10.5),
-                ..default()
-            },
-            TextColor(Color::srgb(0.72, 0.88, 0.96)),
-        ));
-    parent
-        .spawn((
-            Node {
-                width: percent(100.0),
-                padding: UiRect::all(px(7.0)),
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(4.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.045, 0.075, 0.095, 0.94)),
-            BorderColor::all(Color::srgba(0.22, 0.40, 0.50, 0.78)),
-            SelectionGuidePanel,
-            Name::new("SelectionGuidePanel"),
-        ))
-        .with_child((
-            Text::new(SELECTION_GUIDE_TEXT),
-            TextFont {
-                font_size: FontSize::Px(9.6),
-                ..default()
-            },
-            TextColor(Color::srgba(0.70, 0.78, 0.82, 0.94)),
-        ));
 }
 
 fn sidebar_page_button(parent: &mut ChildSpawnerCommands, page: SidebarPage, label: &'static str) {

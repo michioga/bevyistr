@@ -149,11 +149,11 @@ use results_ui::{
     playback_button_system, step_keyboard_navigation, update_result_stats_text,
 };
 use selection_ui::{
-    SelectionGuideState, SurfaceSelectionSettings, make_element_group_button_system,
-    make_node_group_button_system, rebuild_sets_list, selection_guide_toggle_system,
-    selection_level_button_system, set_button_system, surface_selection_mode_button_system,
-    update_hover_preview_group, update_selection_context, update_selection_info_text,
-    update_selection_operation_hint, update_selection_stats_text, update_surface_selection_hint,
+    SurfaceSelectionSettings, make_element_group_button_system, make_node_group_button_system,
+    rebuild_sets_list, selection_level_button_system, set_button_system,
+    surface_selection_mode_button_system, update_hover_preview_group, update_selection_context,
+    update_selection_info_text, update_selection_operation_hint, update_selection_stats_text,
+    update_surface_selection_hint,
 };
 use solve_ui::update_analysis_setup_stats_text;
 use solver_editor::{SolverEditorState, solver_numeric_input_system};
@@ -264,7 +264,6 @@ impl Plugin for UiPlugin {
         app.init_resource::<QuickLoadControlState>();
         app.init_resource::<MeasurementBoxState>();
         app.init_resource::<CameraFitRequest>();
-        app.init_resource::<SelectionGuideState>();
         app.init_resource::<SelectedLoadDirection>();
         app.init_resource::<LoadDirectionPickerState>();
         app.init_resource::<ActiveLoadEditor>();
@@ -618,7 +617,6 @@ impl Plugin for UiPlugin {
                     .after(update_selection_context)
                     .after(selection_level_button_system)
                     .in_set(InteractionSystems::UiInput),
-                selection_guide_toggle_system.in_set(InteractionSystems::UiInput),
                 update_selection_operation_hint.in_set(InteractionSystems::UiInput),
                 update_hover_preview_group
                     .after(slider::update_sliders)
