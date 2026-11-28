@@ -289,6 +289,22 @@ pub fn validate_frontistr_project(
     validate_analysis_setup(model, setup, &mut report);
     validate_flow_mesh(model, setup, &mut report);
     validate_contacts(model, setup, &mut report);
+    for blocker in crate::cnt_writer::step_contact_blockers(setup, &model.contacts) {
+        report.error("Step groups", blocker);
+    }
+    if setup.solver.analysis_type == AnalysisType::NlStatic
+        && !setup.solver.nonlinear_steps.is_empty()
+    {
+        for pair in model.contacts.iter().filter(|pair| pair.group_id.is_none()) {
+            report.warning(
+                "Step groups",
+                format!(
+                    "New contact pair {} is inactive in the imported STEP sequence",
+                    pair.name
+                ),
+            );
+        }
+    }
     report
 }
 
@@ -669,7 +685,9 @@ fn validate_analysis_setup(
         report.error("Linear solver", "PRECOND must be 1, 2 or 3 for the supported SOLVER card");
     }
 
-    if setup.solver.analysis_type == AnalysisType::NlStatic {
+    if setup.solver.analysis_type == AnalysisType::NlStatic
+        && setup.solver.nonlinear_steps.is_empty()
+    {
         if setup.solver.nonlinear_max_iterations == 0
             || setup.solver.nonlinear_max_iterations > i32::MAX as u32
         {

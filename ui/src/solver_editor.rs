@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use bevy::ui_widgets::SelectAllOnFocus;
 use fem_core::{
-    AnalysisType, ContactAlgorithm, DynamicStep, LinearSolverMethod, SolverSettings, StepGroup,
-    UiKeyboardState,
+    AnalysisType, ContactAlgorithm, DynamicStep, LinearSolverMethod, NonlinearStep, SolverSettings,
+    StepGroup, UiKeyboardState,
 };
 
 const INPUT_BG: Color = Color::srgba(0.075, 0.09, 0.10, 0.98);
@@ -101,6 +101,7 @@ impl SolverField {
             }
             Self::Substeps | Self::NonlinearMaxIterations | Self::NonlinearConvergenceTolerance => {
                 settings.analysis_type == AnalysisType::NlStatic
+                    && settings.nonlinear_steps.len() <= 1
             }
         }
     }
@@ -134,6 +135,7 @@ pub(crate) enum SolverControlGroup {
     Eigen,
     Dynamic,
     DynamicStep,
+    NonlinearSteps,
 }
 
 #[derive(Component)]
@@ -151,7 +153,6 @@ pub(crate) struct SolverEditorState {
 enum ParsedSolverValue {
     Integer(u32),
     OptionalInteger(Option<u32>),
-    Float(f32),
     Double(f64),
     OptionalDouble(Option<f64>),
 }
@@ -286,6 +287,15 @@ pub(crate) fn spawn_solver_exact_editor(parent: &mut ChildSpawnerCommands) {
         SolverControlGroup::DynamicStep,
     ));
     parent.spawn((
+        Text::default(),
+        TextFont {
+            font_size: FontSize::Px(9.5),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        SolverControlGroup::NonlinearSteps,
+    ));
+    parent.spawn((
         Text::new("Enter applies an exact value; Esc restores"),
         TextFont {
             font_size: FontSize::Px(9.0),
@@ -402,14 +412,24 @@ pub(crate) fn solver_numeric_input_system(
         let visible = match group {
             SolverControlGroup::Linear => setup.solver.solver_method.is_iterative(),
             SolverControlGroup::Field(field) => field.active(&setup.solver),
-            SolverControlGroup::Nonlinear => {
-                setup.solver.analysis_type == AnalysisType::NlStatic
-            }
+            SolverControlGroup::Nonlinear => SolverField::Substeps.active(&setup.solver),
             SolverControlGroup::DirectHint => !setup.solver.solver_method.is_iterative(),
             SolverControlGroup::Eigen => {
                 setup.solver.analysis_type == AnalysisType::Eigen
             }
             SolverControlGroup::Dynamic => SolverField::DynamicSubsteps.active(&setup.solver),
+            SolverControlGroup::NonlinearSteps => {
+                let steps = &setup.solver.nonlinear_steps;
+                let visible =
+                    setup.solver.analysis_type == AnalysisType::NlStatic && !steps.is_empty();
+                if visible
+                    && let Some(mut text) = summary
+                    && (setup.is_changed() || text.0.is_empty())
+                {
+                    text.set_if_neq(Text::new(nonlinear_steps_summary(steps)));
+                }
+                visible
+            }
             SolverControlGroup::DynamicStep => {
                 if let Some(step) = setup.solver.dynamic_step.as_ref()
                     && setup.solver.analysis_type == AnalysisType::Dynamic
@@ -513,9 +533,10 @@ fn solver_value_text(settings: &SolverSettings, field: SolverField) -> String {
         SolverField::DiagonalScale => format_optional_real(settings.diagonal_scale),
         SolverField::SsorRelaxation => format_optional_real(settings.ssor_relaxation),
         SolverField::NonlinearMaxIterations => settings.nonlinear_max_iterations.to_string(),
-        SolverField::NonlinearConvergenceTolerance => {
-            format!("{:.8e}", settings.nonlinear_convergence_tol)
-        }
+        SolverField::NonlinearConvergenceTolerance => match settings.nonlinear_steps.as_slice() {
+            [step] if step.convergence.is_some() => format_optional_real(step.convergence),
+            _ => format!("{:.8e}", settings.nonlinear_convergence_tol),
+        },
         SolverField::EigenModes => settings.eigen.mode_count.to_string(),
         SolverField::EigenMaxIterations => settings.eigen.max_iterations.to_string(),
         SolverField::EigenTolerance => format!("{:.16e}", settings.eigen.tolerance),
@@ -543,14 +564,14 @@ fn dynamic_step_summary(step: &DynamicStep) -> String {
         .iter()
         .filter_map(|group| match group {
             StepGroup::Boundary(id) => Some(id.to_string()),
-            StepGroup::Load(_) => None,
+            StepGroup::Load(_) | StepGroup::Contact(_) => None,
         })
         .collect::<Vec<_>>();
     let load = step
         .groups
         .iter()
         .filter_map(|group| match group {
-            StepGroup::Boundary(_) => None,
+            StepGroup::Boundary(_) | StepGroup::Contact(_) => None,
             StepGroup::Load(id) => Some(id.to_string()),
         })
         .collect::<Vec<_>>();
@@ -571,6 +592,49 @@ fn dynamic_step_summary(step: &DynamicStep) -> String {
         group_list(boundary),
         group_list(load),
     )
+}
+
+fn nonlinear_steps_summary(steps: &[NonlinearStep]) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!("IMPORTED !STEP | {} fixed-increment step(s)", steps.len());
+    for (index, step) in steps.iter().enumerate() {
+        let groups = step
+            .groups
+            .iter()
+            .map(|group| match group {
+                StepGroup::Boundary(id) => format!("BOUNDARY {id}"),
+                StepGroup::Load(id) => format!("LOAD {id}"),
+                StepGroup::Contact(id) => format!("CONTACT {id}"),
+            })
+            .collect::<Vec<_>>();
+        let count = |n: Option<u32>| n.map_or_else(|| "default".into(), |v| v.to_string());
+        let convergence = step
+            .convergence
+            .map_or_else(|| "default".into(), |v| format!("{v:e}"));
+        let _ = write!(text, "\nStep {}", index + 1);
+        if steps.len() > 1 {
+            let _ = write!(
+                text,
+                " | SUBSTEPS {} | MAXITER {} | CONVERG {}",
+                count(step.substeps),
+                count(step.max_iterations),
+                convergence
+            );
+        }
+        if let Some(time) = step.time {
+            let _ = write!(
+                text,
+                "\nDTIME {:e} | ETIME {:e}",
+                time.increment, time.duration
+            );
+        }
+        if groups.is_empty() {
+            text.push_str("\nNo explicit group rows");
+        } else {
+            let _ = write!(text, "\n{}", groups.join(" | "));
+        }
+    }
+    text
 }
 
 fn format_optional_count(value: Option<u32>) -> String {
@@ -599,21 +663,20 @@ fn parse_solver_value(field: SolverField, text: &str) -> Result<ParsedSolverValu
         });
     }
 
-    if field == SolverField::NonlinearConvergenceTolerance {
-        let value = text
-            .parse::<f32>()
-            .ok()
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .ok_or("enter a finite positive number")?;
-        return Ok(ParsedSolverValue::Float(value));
-    }
     if optional && text.is_empty() {
         return Ok(ParsedSolverValue::OptionalDouble(None));
     }
     let value = text.parse::<f64>().ok().filter(|value| value.is_finite())
         .ok_or("enter a finite number")?;
-    if matches!(field, SolverField::EigenTolerance | SolverField::ConvergenceTolerance)
-        && value <= 0.0
+    if field == SolverField::NonlinearConvergenceTolerance
+        && (!(value as f32).is_finite() || value as f32 <= 0.0)
+    {
+        return Err("enter a finite positive tolerance in the supported range".into());
+    }
+    if matches!(
+        field,
+        SolverField::EigenTolerance | SolverField::ConvergenceTolerance
+    ) && value <= 0.0
     {
         return Err("tolerance must be finite and positive".into());
     }
@@ -633,7 +696,12 @@ fn apply_solver_value(
     value: ParsedSolverValue,
 ) {
     match (field, value) {
-        (SolverField::Substeps, ParsedSolverValue::Integer(value)) => settings.substeps = value,
+        (SolverField::Substeps, ParsedSolverValue::Integer(value)) => {
+            settings.substeps = value;
+            if let [step] = settings.nonlinear_steps.as_mut_slice() {
+                step.substeps = Some(value);
+            }
+        }
         (SolverField::ContactAugmentationIterations, ParsedSolverValue::OptionalInteger(value)) => {
             settings.contact_augmentation_iterations = value;
         }
@@ -662,10 +730,16 @@ fn apply_solver_value(
             settings.ssor_relaxation = value;
         }
         (SolverField::NonlinearMaxIterations, ParsedSolverValue::Integer(value)) => {
-            settings.nonlinear_max_iterations = value
+            settings.nonlinear_max_iterations = value;
+            if let [step] = settings.nonlinear_steps.as_mut_slice() {
+                step.max_iterations = Some(value);
+            }
         }
-        (SolverField::NonlinearConvergenceTolerance, ParsedSolverValue::Float(value)) => {
-            settings.nonlinear_convergence_tol = value
+        (SolverField::NonlinearConvergenceTolerance, ParsedSolverValue::Double(value)) => {
+            settings.nonlinear_convergence_tol = value as f32;
+            if let [step] = settings.nonlinear_steps.as_mut_slice() {
+                step.convergence = Some(value);
+            }
         }
         (SolverField::EigenModes, ParsedSolverValue::Integer(value)) => {
             settings.eigen.mode_count = value
@@ -797,7 +871,10 @@ mod tests {
         hecmw::write_cnt_file_with_contacts(&path, setup, &[pair]).unwrap();
         let data = hecmw::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0).unwrap();
         assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
-        assert_eq!(data.solver.as_ref(), Some(&setup.solver));
+        let mut reloaded = data.solver.unwrap();
+        assert_eq!(reloaded.nonlinear_steps.len(), 1);
+        reloaded.nonlinear_steps.clear();
+        assert_eq!(&reloaded, &setup.solver);
     }
 
     #[test]
@@ -825,6 +902,13 @@ mod tests {
     #[test]
     fn tolerances_round_trip_without_display_rounding() {
         let mut settings = fem_core::SolverSettings::default();
+        settings.nonlinear_steps.push(NonlinearStep {
+            time: None,
+            substeps: None,
+            max_iterations: None,
+            convergence: None,
+            groups: Vec::new(),
+        });
         for (field, value) in [
             (
                 SolverField::ConvergenceTolerance,
@@ -836,7 +920,7 @@ mod tests {
             ),
             (
                 SolverField::NonlinearConvergenceTolerance,
-                ParsedSolverValue::Float(f32::MIN_POSITIVE),
+                ParsedSolverValue::Double(1.2345678901234567e-9),
             ),
         ] {
             apply_solver_value(&mut settings, field, value);

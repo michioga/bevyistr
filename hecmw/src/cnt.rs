@@ -244,6 +244,7 @@ impl CntData {
             else {
                 continue;
             };
+            contact.group_id = Some(settings.group_id);
             contact.contact_type = settings.contact_type;
             contact.friction_coefficient = settings.friction_coefficient;
             contact.penalty_factor = settings.penalty_factor;
@@ -378,6 +379,7 @@ fn card_rows<'a>(lines: &[&'a str]) -> Vec<&'a str> {
 fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
     let mut ngroups: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut data = CntData::default();
+    let mut nonlinear_steps = Vec::new();
 
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
@@ -517,8 +519,11 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
             }
             "STEP" => {
                 let solver = data.solver.get_or_insert_with(SolverSettings::default);
-                solver.dynamic_step =
-                    dynamic_step::parse(&header, &card_rows(&lines[i + 1..])).ok();
+                let rows = card_rows(&lines[i + 1..]);
+                solver.dynamic_step = dynamic_step::parse(&header, &rows).ok();
+                if let Ok(step) = dynamic_step::parse_nonlinear(&header, &rows) {
+                    nonlinear_steps.push(step);
+                }
                 if let Some(value) = header
                     .params
                     .get("SUBSTEPS")
@@ -1000,15 +1005,33 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
         }
     }
 
-    (data.import_issues, data.output.visual) = compatibility::audit(text, &data);
     if let Some(solver) = &mut data.solver
-        && (solver.analysis_type != AnalysisType::Dynamic
-            || data
-                .import_issues
-                .iter()
-                .any(|issue| parse_keyword_header(&issue.keyword).name == "STEP"))
+        && solver.analysis_type == AnalysisType::NlStatic
     {
-        solver.dynamic_step = None;
+        if let Some(first) = nonlinear_steps.first() {
+            let defaults = SolverSettings::default();
+            solver.substeps = first.substeps.unwrap_or(defaults.substeps);
+            solver.nonlinear_max_iterations = first
+                .max_iterations
+                .unwrap_or(defaults.nonlinear_max_iterations);
+            solver.nonlinear_convergence_tol = first
+                .convergence
+                .map_or(defaults.nonlinear_convergence_tol, |value| value as f32);
+        }
+        solver.nonlinear_steps = nonlinear_steps;
+    }
+    (data.import_issues, data.output.visual) = compatibility::audit(text, &data);
+    if let Some(solver) = &mut data.solver {
+        let unsupported_step = data
+            .import_issues
+            .iter()
+            .any(|issue| parse_keyword_header(&issue.keyword).name == "STEP");
+        if solver.analysis_type != AnalysisType::Dynamic || unsupported_step {
+            solver.dynamic_step = None;
+        }
+        if unsupported_step {
+            solver.nonlinear_steps.clear();
+        }
     }
     data
 }

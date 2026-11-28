@@ -7,7 +7,7 @@
 0.3.0では、反復の種類を分けて表示します。
 
 - **LINEAR ITERATION | !SOLVER**：CG／BiCGSTAB／GMRESの最大反復数と相対残差。MUMPS／MKL／Directでは非表示になり、直接法の案内を表示します。CG／BiCGSTAB／GMRESへ戻すと入力値は保持されています。
-- **NONLINEAR STEP | !STEP**：Nonlinearでのみ表示する固定増分のサブステップ数、Newton反復上限、非線形残差の許容値です。線形反復とは独立しており、MUMPSでも設定できます。
+- **NONLINEAR STEP | !STEP**：Nonlinearでステップが1件のときに、固定増分のサブステップ数、Newton反復上限、非線形残差の許容値を編集できます。線形反復とは独立しており、MUMPSでも設定できます。
 - Enterで確定、Escで復元します。非線形の初期値は反復上限50・残差許容値`1e-3`です。変位増分など、ここで編集できない他の収束判定はFrontISTRの既定値を使用します。
 
 MUMPSとMKLは別のMETHODとして読み込み・出力します。メニューにあることは実行環境での利用可否の保証ではなく、FrontISTRのビルドによって使用可能なソルバーが異なります。
@@ -15,6 +15,10 @@ MUMPSとMKLは別のMETHODとして読み込み・出力します。メニュー
 [出力先・保存間隔・物理量](output-fields.md)も実行前に設定してください。
 
 Nonlinearを選ぶと、**Contact algorithm** で `ALAGRANGE`（拡張ラグランジュ乗数法）または `SLAGRANGE`（ラグランジュ乗数法）を指定できます。接触ペアのあるプロジェクトの `!CONTACT_ALGO` に書き出します。`ALAGRANGE` の **Contact AUGITER** は接触状態探索ごとの乗数更新回数です。正の整数を入力してEnterで確定し、空欄で確定するとFrontISTRの既定値（2）を使います。 [FrontISTRの `!CONTACT_ALGO` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/contact_algo.html)
+
+既存の非線形静解析プロジェクトでは、固定増分の `!STEP` を複数読み込み、定義順と有効化する拘束・荷重・接触の `GRPID` を保持します。Solveでは各ステップの `DTIME`（増分）と `ETIME`（時間幅）、有効なグループを確認できます。複数ステップの場合、各ステップの設定は確認表示です。既存のステップを持つプロジェクトにグループを追加した場合、対象ステップから参照されているグループが有効になります。参照先のグループを削除すると、該当ステップを示して書き出しを止めます。 [FrontISTRの `!STEP` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/step.html)
+
+通常の強制変位は増分として適用されます。例えば同じ自由度に第1ステップで `-0.153`、第2ステップでも `-0.153` を与えると、総変位は `-0.306` です。 [FrontISTRの境界条件・荷重の仕様](https://source-docs.frontistr.com/functions_reference/04_boundary_load.html)
 
 Eigenvalueを選ぶと、独立した **EIGENVALUE | !EIGEN** 欄でモード数・許容差・最大反復数・シフト量を編集できます。[固有値解析の設定](eigen.md)を参照してください。
 
@@ -74,9 +78,9 @@ Solveの最下部には元ファイル名・行番号・
 
 | 項目 | 再出力できる代表例 | Export／Runが止まる代表例 |
 | --- | --- | --- |
-| 拘束・荷重の`GRPID` | 静解析・固有値では`GRPID=1`。省略時は1。対応する動解析の`!STEP`では複数の`GRPID`を読み込み、`BOUNDARY`／`LOAD`参照を保持します。 | 未定義グループの参照、静解析・固有値でのグループ1以外の指定 |
+| 拘束・荷重の`GRPID` | 基本の静解析・固有値では`GRPID=1`。省略時は1。非線形静解析および対応する動解析の明示的な`!STEP`では、複数の`GRPID`と`BOUNDARY`／`LOAD`参照を保持します。 | 未定義グループの参照、明示的な`!STEP`がない場合のグループ1以外の指定 |
 | `!SOLVER` | 対応METHOD、反復法の`PRECOND=1`／`2`／`3`。標準の2データ行の `NITER`、`iterPREmax`、`NREST`、`NCOLOR_IN`、`RECYCLEPRE`、`RESID`、`SIGMA_DIAG`、`OMEGA` を保持します。反復法の `SCALING`、`ITERLOG`／`TIMELOG`、`DUMPTYPE`／`DUMPEXIT` にも対応します。 | その他の前処理、未知のMETHOD、追加のデータ行や列 |
-| 解析方式と`!STEP` | 基本の静解析、単一の非線形静解析ステップ（固定増分、拘束・荷重のグループ1と全接触グループを有効化）、[固有値の4設定](eigen.md)、上記の流体時刻歴 | 対応範囲外の動解析、熱解析、複数ステップ、自動増分、非線形静解析での個別の時間設定や一部グループの有効化 |
+| 解析方式と`!STEP` | 基本の静解析、非線形静解析の複数ステップ（固定増分、各ステップの時間とグループ参照を保持）、[固有値の4設定](eigen.md)、上記の流体時刻歴 | 動解析の複数ステップ、熱解析、自動増分、粘弾性・クリープのステップ |
 | 材料 | 等方弾性・密度。[非圧縮ニュートン流体の一定粘度・密度](../materials.md#非圧縮ニュートン流体)は読込・編集・再出力に対応。 | 温度依存テーブル、異方弾性、弾塑性、超弾性 |
 | 接触 | `NODE-SURF`／`SURF-SURF`、`ALAGRANGE`（`AUGITER`を含む）／`SLAGRANGE`、`SSLID`／`FSLID`／`TIED`。同じ単一ステップで全ペアを有効にする入力。すべり接触では摩擦係数と第2行の摩擦ペナルティを保持 | 複数のSlave/Master行を持つ1枚の `!CONTACT PAIR`、`SLAGRANGE`での`AUGITER`、`NPENALTY`／`TPENALTY`、`!CONTACT_PARAM`、一部ペアだけの有効化 |
 | 保存間隔・出力項目 | 基本の`!WRITE`。`!OUTPUT_RES`／`!OUTPUT_VIS`のGROUP／ACTIONなどの拡張カードは単体出力で内容を保持します。 | `!WRITE`の追加オプション、名前付き出力GROUPを含む複数部品の統合出力 |

@@ -76,7 +76,6 @@ fn direct_solver_identifiers_are_not_conflated() {
 #[test]
 fn unsupported_step_features_and_invalid_values_remain_blocked() {
     for step in [
-        "!STEP\n!STEP",
         "!STEP, INC_TYPE=AUTO\n0.1,1,0.01,0.2",
         "!STEP, TYPE=VISCO",
         "!STEP, CONVERG_DDISP=1e-9",
@@ -84,16 +83,13 @@ fn unsupported_step_features_and_invalid_values_remain_blocked() {
         "!STEP, MAXITER=5000000000",
         "!STEP, SUBSTEPS=2.5",
         "!STEP, CONVERG=NaN",
-        "!STEP\n0.1,1",
+        "!STEP\n0.1,0",
         "!STEP\nBOUNDARY,2",
         "!STEP\nCONTACT,1",
     ] {
         let data = parsed(&format!("!SOLUTION, TYPE=NLSTATIC\n{step}\n!END"));
         assert!(!data.import_issues.is_empty(), "{step}");
     }
-    // A defined BC that is NOT activated must not silently become active.
-    let data = parsed("!SOLUTION, TYPE=NLSTATIC\n!BOUNDARY, GRPID=1\n1,1,3,0\n!STEP\n!END");
-    assert!(!data.import_issues.is_empty());
     for row in [
         "100,0\n1e-8,1,0",
         "100,1,30,20,3,1\n1e-8,1,0",
@@ -353,9 +349,11 @@ fn editing_one_tolerance_does_not_change_the_other_on_export() {
         assert_eq!(after_linear.nonlinear_convergence_tol, 1e-3);
     }
     setup.solver.nonlinear_convergence_tol = 5.6789123e-5;
-    let after_nonlinear = parsed(&crate::cnt_writer::build_cnt(&setup, &[]))
+    let mut after_nonlinear = parsed(&crate::cnt_writer::build_cnt(&setup, &[]))
         .solver
         .unwrap();
+    assert_eq!(after_nonlinear.nonlinear_steps.len(), 1);
+    after_nonlinear.nonlinear_steps.clear();
     assert_eq!(after_nonlinear, setup.solver);
 }
 

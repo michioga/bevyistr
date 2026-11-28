@@ -5,6 +5,7 @@
 - 同一の実行環境で、公式配布のIntel MPI版とOpenMP版の `fistr1.exe -v` が起動時に623となった。配布版の `fistr1.exe` と `hecmw_part1.exe` のPEヘッダーで `IMAGE_FILE_RELOCS_STRIPPED` と空の再配置テーブルを確認した。小さなMinGW-w64の対照プログラムでは、再配置情報のない版で623を再現し、再配置情報を含む版は正常終了した。 [Microsoftのエラー定義](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--500-999-) · [PEの再配置情報](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#characteristics)
 - FrontISTRのコミット `0de79208eac65e51e4078004a6e46981d64011ee` を複製し、GNU Fortran 16.2.0とCMakeでOpenMP版を作成した。リンクに `-Wl,--enable-reloc-section,--dynamicbase,--high-entropy-va` を指定し、Windowsの逐次ビルド用に起動ログのホスト名取得だけを `GetComputerNameA` に切り替えた。GNUランタイムのDLLは同じツールチェーンから検証用EXEの隣に配置した。この構成で `fistr1.exe -v` が終了コード0になった。 [FrontISTRのCMakeビルド手順](https://source-docs.frontistr.com/build_guide/cmake_build.html)
 - `09_contact_hertz` の408節点・168要素を使い、bevyistrから `ALAGRANGE, AUGITER=4` と `SLAGRANGE` の各プロジェクトを書き出した。どちらもCG、Direct、1スレッドで最終サブステップ5まで収束し、生成したRESをbevyistrの読込処理で確認した。全408節点の変位が有限で、最大変位の大きさは両方式とも `0.30624107` だった。
+- 同じHertz例題の押し込みを2ステップに分割した。共通の拘束グループ1と接触グループ7を両ステップで使い、押し込みを指定する拘束グループを3から4に切り替えた。各段の強制変位は `-0.153` とした。第1ステップは `DTIME=0.25`、`ETIME=0.5`、第2ステップは時間行を省略して3サブステップとした。bevyistrから書き出し、設定の一致を再読込で確認した。同じWindowsのOpenMP版が計5サブステップで完走し、RESの最大変位の大きさは第1ステップ終了時に `0.15306960`、最終時に `0.30624291` だった。 [FrontISTRの境界条件・荷重の仕様](https://source-docs.frontistr.com/functions_reference/04_boundary_load.html)
 
 ## 0.4.0向け: 解析入力から結果表示まで
 

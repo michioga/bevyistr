@@ -433,11 +433,28 @@ pub enum SectionKind {
 /// mesh can be loaded (and re-loaded) without this data, and replacing it
 /// shouldn't require rebuilding topology caches.
 
-/// Group selected by a dynamic STEP on a separate BOUNDARY or LOAD row.
+/// Group activated on a separate row of an explicit FrontISTR STEP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StepGroup {
     Boundary(u32),
     Load(u32),
+    Contact(u32),
+}
+
+/// A fixed-increment nonlinear static step. Missing values use FrontISTR defaults.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonlinearStep {
+    pub time: Option<NonlinearStepTime>,
+    pub substeps: Option<u32>,
+    pub max_iterations: Option<u32>,
+    pub convergence: Option<f64>,
+    pub groups: Vec<StepGroup>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NonlinearStepTime {
+    pub increment: f64,
+    pub duration: f64,
 }
 
 /// One imported fixed-increment dynamic STEP with an explicit DTIME/ETIME row.
@@ -484,6 +501,8 @@ pub struct SolverSettings {
     /// Complete supported time-history `!DYNAMIC` card, when imported.
     pub dynamic: Option<DynamicSettings>,
     pub dynamic_step: Option<DynamicStep>,
+    /// Explicit nonlinear static steps in input order. Empty uses the editor's single-step setup.
+    pub nonlinear_steps: Vec<NonlinearStep>,
     pub contact_algorithm: ContactAlgorithm,
     /// FrontISTR AUGITER for ALAGRANGE. None leaves the FrontISTR default in effect.
     pub contact_augmentation_iterations: Option<u32>,
@@ -529,6 +548,7 @@ impl Default for SolverSettings {
             eigen: EigenSettings::default(),
             dynamic: None,
             dynamic_step: None,
+            nonlinear_steps: Vec::new(),
             contact_algorithm: ContactAlgorithm::default(),
             contact_augmentation_iterations: None,
             analysis_type: AnalysisType::Static,

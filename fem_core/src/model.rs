@@ -52,6 +52,9 @@ pub struct ContactPair {
 
     pub contact_type: ContactType,
 
+    /// Explicit CNT contact group. Newly created pairs receive a group on export.
+    pub group_id: Option<u32>,
+
     /// Coulomb friction coefficient from the second line of `!CONTACT`.
     /// Tied contacts do not use this value.
     pub friction_coefficient: f32,
@@ -72,6 +75,7 @@ impl ContactPair {
             master,
             slave: ContactSlaveRef::Surface(slave),
             contact_type,
+            group_id: None,
             friction_coefficient: 0.0,
             penalty_factor: None,
         }
@@ -88,6 +92,7 @@ impl ContactPair {
             master,
             slave: ContactSlaveRef::Nodes(slave),
             contact_type,
+            group_id: None,
             friction_coefficient: 0.0,
             penalty_factor: None,
         }

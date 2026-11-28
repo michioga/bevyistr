@@ -19,6 +19,7 @@ pub(super) fn audit(
     let lines: Vec<_> = text.lines().collect();
     let mut issues = Vec::new();
     let mut seen = HashSet::new();
+    let mut step_seen = false;
     let mut material = false;
     let mut fluid_seen = false;
     let mut contact_names = HashSet::new();
@@ -70,6 +71,7 @@ pub(super) fn audit(
             i += 1;
         }
         let name = header.name.as_str();
+        let repeated_step = name == "STEP" && std::mem::replace(&mut step_seen, true);
         let reason = if matches!(
             name,
             "WRITE"
@@ -90,9 +92,16 @@ pub(super) fn audit(
             != header.params.len()
         {
             Some("Repeated or empty parameters cannot be preserved unambiguously".to_string())
+        } else if repeated_step
+            && data
+                .solver
+                .as_ref()
+                .is_none_or(|s| s.analysis_type != AnalysisType::NlStatic)
+        {
+            Some("Multiple STEP cards are supported only for nonlinear static analysis".into())
         } else if matches!(
             name,
-            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "STEP" | "CONTACT_ALGO" | "DYNAMIC"
+            "SOLUTION" | "SOLVER" | "STATIC" | "EIGEN" | "VERSION" | "CONTACT_ALGO" | "DYNAMIC"
         ) && !seen.insert(header.name.clone())
         {
             Some("Repeated control cards cannot be preserved".to_string())
@@ -145,7 +154,7 @@ pub(super) fn audit(
                     .into(),
         });
     }
-    if !data.contact_settings.is_empty() && !seen.contains("STEP") {
+    if !data.contact_settings.is_empty() && !step_seen {
         issues.push(SetupImportIssue {
             source: "CNT".into(),
             line: 1,
@@ -262,11 +271,16 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         }
         "BOUNDARY" | "CLOAD" | "DLOAD"
             if group_id != 1
-                && data.solver.as_ref().is_none_or(|solver| {
-                    solver.analysis_type != AnalysisType::Dynamic || solver.dynamic_step.is_none()
-                }) =>
+                && data
+                    .solver
+                    .as_ref()
+                    .is_none_or(|solver| match solver.analysis_type {
+                        AnalysisType::NlStatic => solver.nonlinear_steps.is_empty(),
+                        AnalysisType::Dynamic => solver.dynamic_step.is_none(),
+                        _ => true,
+                    }) =>
         {
-            Some("Boundary/load groups above 1 require a supported explicit dynamic STEP")
+            Some("Boundary/load groups above 1 require a supported explicit STEP")
         }
         "BOUNDARY" | "CLOAD"
             if body.is_empty()
@@ -469,80 +483,41 @@ fn check_solver(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'st
 
 fn check_step(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
     let analysis = data.solver.as_ref().map(|solver| solver.analysis_type);
-    if analysis == Some(AnalysisType::Dynamic) {
-        let step = match super::dynamic_step::parse(h, body) {
-            Ok(step) => step,
-            Err(reason) => return Some(reason),
-        };
-        let groups: HashSet<_> = data
-            .boundary_conditions
-            .iter()
-            .map(|bc| StepGroup::Boundary(bc.group_id))
-            .chain(
-                data.nodal_loads
-                    .iter()
-                    .map(|load| StepGroup::Load(load.group_id)),
-            )
-            .chain(
-                data.distributed_loads
-                    .iter()
-                    .map(|load| StepGroup::Load(load.group_id)),
-            )
-            .collect();
-        if step.groups.iter().any(|group| !groups.contains(group)) {
-            return Some("Dynamic STEP refers to an undefined boundary/load group");
+    let groups = match analysis {
+        Some(AnalysisType::Dynamic) => super::dynamic_step::parse(h, body).map(|step| step.groups),
+        Some(AnalysisType::NlStatic) => {
+            super::dynamic_step::parse_nonlinear(h, body).map(|step| step.groups)
         }
-        return None;
-    }
-    let valid_integer = |key: &str| {
-        h.params.get(key).is_none_or(|s| {
-            s.parse::<u32>()
-                .ok()
-                .is_some_and(|v| v > 0 && v <= i32::MAX as u32)
-        })
+        _ => return Some("STEP requires nonlinear static analysis or supported dynamic analysis"),
     };
-    let valid_tol = h.params.get("CONVERG").is_none_or(|s| {
-        s.parse::<f32>()
-            .ok()
-            .is_some_and(|v| v.is_finite() && v > 0.0)
-    });
-    let mut expected = Vec::new();
-    if !data.boundary_conditions.is_empty() {
-        expected.push("BOUNDARY,1".to_string());
-    }
-    if !data.nodal_loads.is_empty() || !data.distributed_loads.is_empty() {
-        expected.push("LOAD,1".to_string());
-    }
-    let groups: HashSet<_> = data
-        .contact_settings
+    let groups = match groups {
+        Ok(groups) => groups,
+        Err(reason) => return Some(reason),
+    };
+    let available: HashSet<_> = data
+        .boundary_conditions
         .iter()
-        .map(|contact| contact.group_id)
-        .collect();
-    expected.extend(groups.into_iter().map(|group| format!("CONTACT,{group}")));
-    let mut actual: Vec<_> = body
-        .iter()
-        .map(|row| {
-            row.split(',')
-                .map(|s| s.trim().to_ascii_uppercase())
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .collect();
-    expected.sort();
-    actual.sort();
-    if analysis != Some(AnalysisType::NlStatic)
-        || (h.params.contains_key("TYPE") && !parameter_is(h, "TYPE", "STATIC"))
-        || (h.params.contains_key("INC_TYPE") && !parameter_is(h, "INC_TYPE", "FIXED"))
-        || expected != actual
-    {
-        Some(
-            "Only one fixed-increment nonlinear static STEP activating all boundary, load and contact groups is supported",
+        .map(|bc| StepGroup::Boundary(bc.group_id))
+        .chain(
+            data.nodal_loads
+                .iter()
+                .map(|load| StepGroup::Load(load.group_id)),
         )
-    } else if !valid_integer("SUBSTEPS") || !valid_integer("MAXITER") || !valid_tol {
-        Some("STEP substeps/iterations/tolerance must be valid positive values")
-    } else {
-        None
-    }
+        .chain(
+            data.distributed_loads
+                .iter()
+                .map(|load| StepGroup::Load(load.group_id)),
+        )
+        .chain(
+            data.contact_settings
+                .iter()
+                .map(|pair| StepGroup::Contact(pair.group_id)),
+        )
+        .collect();
+    groups
+        .iter()
+        .any(|id| !available.contains(id))
+        .then_some("STEP refers to an undefined boundary, load or contact group")
 }
 
 fn check_contact(h: &KeywordHeader, body: &[&str], data: &CntData) -> Option<&'static str> {
@@ -718,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn supported_contact_groups_round_trip_and_partial_activation_blocks() {
+    fn supported_contact_algorithms_round_trip_and_unsupported_controls_block() {
         use fem_core::{ContactPair, ContactType, SurfaceSetRef};
         let mut setup = AnalysisSetup::default();
         setup.solver.analysis_type = AnalysisType::NlStatic;
@@ -782,6 +757,8 @@ mod tests {
             let mut data = read(&input);
             data.check_contact_references(&pairs, std::path::Path::new("input.cnt"), true);
             assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+            let mut imported_pairs = pairs.clone();
+            assert_eq!(data.apply_contact_settings(&mut imported_pairs), 2);
             let mut imported = AnalysisSetup::default();
             data.merge_into(&mut imported);
             assert_eq!(imported.solver.contact_algorithm, algorithm);
@@ -789,7 +766,7 @@ mod tests {
 
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("contact.cnt");
-            crate::write_cnt_file_with_contacts(&path, &imported, &pairs).unwrap();
+            crate::write_cnt_file_with_contacts(&path, &imported, &imported_pairs).unwrap();
             let output = std::fs::read_to_string(path).unwrap();
             assert!(output.lines().any(|line| line == expected));
             let reloaded = read(&output);
@@ -797,7 +774,7 @@ mod tests {
             assert_eq!(reloaded.solver.unwrap(), imported.solver);
         }
         for unsupported in [
-            text.replace("CONTACT, 2\n", ""),
+            text.replace("CONTACT, 2\n", "CONTACT, 9\n"),
             text.replace("TYPE=ALAGRANGE", "TYPE=UNKNOWN"),
             text.replace("TYPE=ALAGRANGE", "TYPE=SLAGRANGE, AUGITER=2"),
             text.replace("TYPE=ALAGRANGE", "TYPE=ALAGRANGE, AUGITER=0"),
@@ -810,6 +787,117 @@ mod tests {
                 !read(&unsupported).import_issues.is_empty(),
                 "{unsupported}"
             );
+        }
+    }
+
+    #[test]
+    fn nonlinear_steps_keep_group_ids_activation_order_and_optional_time() {
+        use fem_core::{ContactPair, ContactType, NonlinearStepTime, SurfaceSetRef};
+        let source = concat!(
+            "!SOLUTION, TYPE=NLSTATIC\n",
+            "!BOUNDARY, GRPID=1\n1,1,3,0\n",
+            "!BOUNDARY, GRPID=3\n2,1,1,-0.1\n",
+            "!CLOAD, GRPID=4\n3,2,2\n",
+            "!CLOAD, GRPID=5\n3,2,5\n",
+            "!CONTACT, GRPID=12, INTERACTION=FSLID\nCP1,0,1e5\nCP2,0,1e5\n",
+            "!CONTACT, GRPID=15, INTERACTION=TIED\nCP3\n",
+            "!STEP, SUBSTEPS=4, CONVERG=1.23456789012345d-6\n",
+            "0.125,0.5\nBOUNDARY,1\nCONTACT,12\nBOUNDARY,3\n",
+            "!STEP, MAXITER=31\nBOUNDARY,1\nLOAD,4\nCONTACT,15\n",
+            "!END\n",
+        );
+        let mut pairs = ["CP1", "CP2", "CP3"].map(|name| {
+            ContactPair::new(
+                name,
+                SurfaceSetRef::new(0, 0),
+                SurfaceSetRef::new(0, 1),
+                ContactType::SmallSliding,
+            )
+        });
+        let mut imported = read(source);
+        imported.check_contact_references(&pairs, std::path::Path::new("model.cnt"), true);
+        assert!(
+            imported.import_issues.is_empty(),
+            "{:?}",
+            imported.import_issues
+        );
+        assert_eq!(imported.apply_contact_settings(&mut pairs), 3);
+        assert_eq!(
+            pairs.each_ref().map(|pair| pair.group_id),
+            [Some(12), Some(12), Some(15)]
+        );
+        let mut setup = AnalysisSetup::default();
+        imported.merge_into(&mut setup);
+        let [first, second] = setup.solver.nonlinear_steps.as_slice() else {
+            panic!("expected two steps")
+        };
+        assert_eq!(
+            first.time,
+            Some(NonlinearStepTime {
+                increment: 0.125,
+                duration: 0.5
+            })
+        );
+        assert_eq!(first.convergence, Some(1.23456789012345e-6));
+        assert_eq!(
+            first.groups,
+            [
+                StepGroup::Boundary(1),
+                StepGroup::Contact(12),
+                StepGroup::Boundary(3)
+            ]
+        );
+        assert_eq!(second.time, None);
+        assert_eq!(second.substeps, None);
+        assert_eq!(second.max_iterations, Some(31));
+        assert_eq!(
+            second.groups,
+            [
+                StepGroup::Boundary(1),
+                StepGroup::Load(4),
+                StepGroup::Contact(15)
+            ]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exported.cnt");
+        crate::write_cnt_file_with_contacts(&path, &setup, &pairs).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let reloaded = read(&text);
+        assert!(
+            reloaded.import_issues.is_empty(),
+            "{:?}",
+            reloaded.import_issues
+        );
+        assert_eq!(reloaded.solver.unwrap(), setup.solver);
+        assert_eq!(
+            reloaded
+                .contact_settings
+                .iter()
+                .map(|contact| contact.group_id)
+                .collect::<Vec<_>>(),
+            [12, 12, 15]
+        );
+        assert!(
+            crate::write_cnt_file_with_contacts(&path, &setup, &pairs[..2])
+                .unwrap_err()
+                .to_string()
+                .contains("STEP 2 refers to undefined CONTACT group 15")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        for invalid in [
+            source.replace("LOAD,4\nCONTACT,15", "LOAD,9\nCONTACT,15"),
+            source.replace("!STEP, MAXITER=31", "!STEP, INC_TYPE=AUTO, MAXITER=31"),
+            source.replace("0.125,0.5", "-0.125,0.5"),
+        ] {
+            let data = read(&invalid);
+            assert!(
+                data.import_issues
+                    .iter()
+                    .any(|issue| issue.keyword.starts_with("!STEP"))
+            );
+            assert!(data.solver.unwrap().nonlinear_steps.is_empty());
         }
     }
 

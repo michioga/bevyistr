@@ -2,10 +2,15 @@
 //! Uses !ELASTIC / !DENSITY as confirmed from tutorial files.
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
-    DistributedLoadKind, DistributedLoadTarget, DynamicStep, FemMaterial, NodalLoad,
+    DistributedLoadKind, DistributedLoadTarget, DynamicStep, FemMaterial, NodalLoad, NonlinearStep,
     RotationCenter, StepGroup,
 };
-use std::{collections::HashMap, fmt::Write as FmtWrite, io, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write as FmtWrite,
+    io,
+    path::Path,
+};
 
 pub fn write_cnt_file(
     path: impl AsRef<Path>,
@@ -26,6 +31,7 @@ pub fn write_cnt_file_with_contacts(
     contacts: &[ContactPair],
 ) -> io::Result<(usize, usize, usize, usize, usize)> {
     let mut blockers = export_blockers(setup);
+    blockers.extend(step_contact_blockers(setup, contacts));
     if setup.solver.analysis_type == AnalysisType::Dynamic && !contacts.is_empty() {
         blockers.push("Flow setup does not support contact pairs".into());
     }
@@ -73,15 +79,23 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         if let Err(details) = validate_flow_controls(setup) {
             blockers.push(format!("Dynamic setup is incomplete: {details}"));
         }
-    } else if setup.boundary_conditions.iter().any(|bc| bc.group_id != 1)
-        || setup.nodal_loads.iter().any(|load| load.group_id != 1)
-        || setup
-            .distributed_loads
-            .iter()
-            .any(|load| load.group_id != 1)
-    {
-        blockers
-            .push("Boundary/load groups above 1 require a supported explicit dynamic STEP".into());
+    } else {
+        let explicit_steps = setup.solver.analysis_type == AnalysisType::NlStatic
+            && !setup.solver.nonlinear_steps.is_empty();
+        if condition_groups(setup).any(|group| {
+            let id = group_id(group);
+            if explicit_steps {
+                !(1..=i32::MAX as u32).contains(&id)
+            } else {
+                id != 1
+            }
+        }) {
+            blockers.push(if explicit_steps {
+                "Boundary and load GRPID values must be positive FrontISTR integers".into()
+            } else {
+                "Boundary/load groups above 1 require a supported explicit STEP".into()
+            });
+        }
     }
     if setup.solver.analysis_type == AnalysisType::NlStatic
         && let Err(reason) = setup.solver.validate_contact_algorithm()
@@ -108,6 +122,121 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
     for target in [fem_core::OutputTarget::Res, fem_core::OutputTarget::Vis] {
         if let Err(reason) = setup.output.write(target).validate() {
             blockers.push(format!("{}: {reason}", target.label()));
+        }
+    }
+    blockers
+}
+
+fn condition_groups(setup: &AnalysisSetup) -> impl Iterator<Item = StepGroup> + '_ {
+    setup
+        .boundary_conditions
+        .iter()
+        .map(|bc| StepGroup::Boundary(bc.group_id))
+        .chain(
+            setup
+                .nodal_loads
+                .iter()
+                .map(|load| StepGroup::Load(load.group_id)),
+        )
+        .chain(
+            setup
+                .distributed_loads
+                .iter()
+                .map(|load| StepGroup::Load(load.group_id)),
+        )
+}
+
+fn group_id(group: StepGroup) -> u32 {
+    match group {
+        StepGroup::Boundary(id) | StepGroup::Load(id) | StepGroup::Contact(id) => id,
+    }
+}
+
+fn contact_group_ids(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Vec<u32> {
+    // An automatically assigned new pair must not take over a reference to a deleted group.
+    let mut taken: HashSet<_> = contacts
+        .iter()
+        .filter_map(|pair| pair.group_id)
+        .chain(
+            setup
+                .solver
+                .nonlinear_steps
+                .iter()
+                .flat_map(|step| &step.groups)
+                .filter_map(|group| {
+                    if let StepGroup::Contact(id) = *group {
+                        Some(id)
+                    } else {
+                        None
+                    }
+                }),
+        )
+        .collect();
+    let mut next = 1;
+    contacts
+        .iter()
+        .map(|pair| {
+            pair.group_id.unwrap_or_else(|| {
+                while !taken.insert(next) {
+                    next += 1;
+                }
+                next
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn step_contact_blockers(
+    setup: &AnalysisSetup,
+    contacts: &[ContactPair],
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    if contacts.iter().any(|pair| {
+        pair.group_id
+            .is_some_and(|id| !(1..=i32::MAX as u32).contains(&id))
+    }) {
+        blockers.push("Contact GRPID must be a positive FrontISTR integer".into());
+    }
+    if setup.solver.analysis_type == AnalysisType::NlStatic
+        && !setup.solver.nonlinear_steps.is_empty()
+    {
+        let available: HashSet<_> = condition_groups(setup)
+            .chain(
+                contacts
+                    .iter()
+                    .filter_map(|pair| pair.group_id.map(StepGroup::Contact)),
+            )
+            .collect();
+        for (index, step) in setup.solver.nonlinear_steps.iter().enumerate() {
+            let mut seen = HashSet::new();
+            for &group in &step.groups {
+                let (kind, id) = step_group_fields(group);
+                if !seen.insert(group) {
+                    blockers.push(format!("STEP {} repeats {kind} group {id}", index + 1));
+                } else if !available.contains(&group) {
+                    blockers.push(format!(
+                        "STEP {} refers to undefined {kind} group {id}",
+                        index + 1
+                    ));
+                }
+            }
+            if step
+                .substeps
+                .into_iter()
+                .chain(step.max_iterations)
+                .any(|n| !(1..=i32::MAX as u32).contains(&n))
+                || step.convergence.is_some_and(|v| !v.is_finite() || v <= 0.)
+                || step.time.is_some_and(|time| {
+                    [time.increment, time.duration]
+                        .into_iter()
+                        .any(|v| !v.is_finite() || v <= 0.)
+                })
+            {
+                blockers.push(format!(
+                    "STEP {} requires finite positive time and iteration settings",
+                    index + 1
+                ));
+            }
         }
     }
     blockers
@@ -196,7 +325,12 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
     }
 
     // ── STEP ──
-    if s.analysis_type == AnalysisType::NlStatic {
+    let contact_group_ids = contact_group_ids(setup, contacts);
+    if s.analysis_type == AnalysisType::NlStatic && !s.nonlinear_steps.is_empty() {
+        for step in &s.nonlinear_steps {
+            write_nonlinear_step(&mut o, step);
+        }
+    } else if s.analysis_type == AnalysisType::NlStatic {
         writeln!(
             o,
             "!STEP, SUBSTEPS={}, MAXITER={}, CONVERG={:.8e}",
@@ -209,8 +343,11 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
         if !setup.nodal_loads.is_empty() || !setup.distributed_loads.is_empty() {
             writeln!(o, "LOAD, 1").unwrap();
         }
-        for group_id in 1..=contacts.len() {
-            writeln!(o, "CONTACT, {group_id}").unwrap();
+        let mut seen = HashSet::new();
+        for group_id in &contact_group_ids {
+            if seen.insert(group_id) {
+                writeln!(o, "CONTACT, {group_id}").unwrap();
+            }
         }
     }
 
@@ -329,8 +466,8 @@ pub(crate) fn build_cnt(setup: &AnalysisSetup, contacts: &[ContactPair]) -> Stri
         }
         writeln!(o).unwrap();
     }
-    for (index, contact) in contacts.iter().enumerate() {
-        write_contact(&mut o, contact, index + 1);
+    for (contact, group_id) in contacts.iter().zip(contact_group_ids) {
+        write_contact(&mut o, contact, group_id);
     }
 
     // ── SOLVER ──
@@ -431,12 +568,39 @@ fn write_dynamic_step(out: &mut String, step: &DynamicStep) {
         write!(out, ", CONVERG={convergence:e}").unwrap();
     }
     writeln!(out, "\n {:e}, {:e}", step.increment, step.duration).unwrap();
-    for group in &step.groups {
-        match group {
-            StepGroup::Boundary(id) => writeln!(out, " BOUNDARY, {id}"),
-            StepGroup::Load(id) => writeln!(out, " LOAD, {id}"),
-        }
-        .unwrap();
+    write_step_groups(out, &step.groups);
+}
+
+fn write_nonlinear_step(out: &mut String, step: &NonlinearStep) {
+    write!(out, "!STEP, INC_TYPE=FIXED").unwrap();
+    if let Some(substeps) = step.substeps {
+        write!(out, ", SUBSTEPS={substeps}").unwrap();
+    }
+    if let Some(max_iterations) = step.max_iterations {
+        write!(out, ", MAXITER={max_iterations}").unwrap();
+    }
+    if let Some(convergence) = step.convergence {
+        write!(out, ", CONVERG={convergence:e}").unwrap();
+    }
+    writeln!(out).unwrap();
+    if let Some(time) = step.time {
+        writeln!(out, " {:e}, {:e}", time.increment, time.duration).unwrap();
+    }
+    write_step_groups(out, &step.groups);
+}
+
+fn step_group_fields(group: StepGroup) -> (&'static str, u32) {
+    match group {
+        StepGroup::Boundary(id) => ("BOUNDARY", id),
+        StepGroup::Load(id) => ("LOAD", id),
+        StepGroup::Contact(id) => ("CONTACT", id),
+    }
+}
+
+fn write_step_groups(out: &mut String, groups: &[StepGroup]) {
+    for &group in groups {
+        let (name, id) = step_group_fields(group);
+        writeln!(out, " {name}, {id}").unwrap();
     }
 }
 
@@ -460,7 +624,7 @@ fn rotation_center_token(center: &RotationCenter) -> Option<String> {
         .or_else(|| center.node.map(|node| node.0.to_string()))
 }
 
-fn write_contact(out: &mut String, contact: &ContactPair, group_id: usize) {
+fn write_contact(out: &mut String, contact: &ContactPair, group_id: u32) {
     writeln!(
         out,
         "!CONTACT, GRPID={group_id}, INTERACTION={}",
