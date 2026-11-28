@@ -13,7 +13,8 @@ fn editor_app() -> App {
     setup.add_section(0, "STEEL", None, fem_core::SectionKind::Solid);
     setup.add_section(1, "STEEL", None, fem_core::SectionKind::Solid);
     let mut app = App::new();
-    app.insert_resource(setup)
+    app.add_plugins(bevy::ui_widgets::ButtonPlugin)
+        .insert_resource(setup)
         .insert_resource(SidebarPage::Materials)
         .init_resource::<FemModelVersion>()
         .init_resource::<ButtonInput<KeyCode>>()
@@ -27,6 +28,7 @@ fn editor_app() -> App {
             },
         )))
         .init_resource::<MaterialEditorState>()
+        .init_resource::<crate::plasticity_editor::PlasticityEditor>()
         .insert_resource(MaterialLibraryState::from_path(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/materials.toml"),
         ))
@@ -42,6 +44,7 @@ fn editor_app() -> App {
             (
                 material_library_system,
                 material_select_button_system,
+                crate::plasticity_editor::update,
                 material_numeric_input_system,
                 rebuild_section_def_panel,
                 push_undo_before_setup_change,
@@ -80,6 +83,160 @@ fn imported_plasticity_is_shown_for_the_selected_material() {
         .0 = Some("AL".into());
     app.update();
     assert_eq!(app.world().get::<Node>(row).unwrap().display, Display::None);
+}
+
+#[test]
+fn bilinear_plasticity_is_committed_as_one_change_and_round_trips() {
+    use fem_core::AnalysisType;
+
+    let mut app = editor_app();
+    app.world_mut()
+        .resource_mut::<AnalysisSetup>()
+        .solver
+        .analysis_type = AnalysisType::NlStatic;
+    app.update();
+    let undo_before_edit = app.world().resource::<UndoStack>().undo.len();
+    click_widget(&mut app, "PlasticityOpen");
+    click_widget(&mut app, "PlasticityBilinear");
+    type_plasticity(&mut app, "PlasticityYield", "4.500000000001D2");
+    type_plasticity(&mut app, "PlasticityModulus", "-1");
+    click_widget(&mut app, "PlasticityApply");
+    assert_eq!(plasticity(&app, 0), None);
+    assert!(plasticity_status(&mut app).contains("nonnegative"));
+
+    type_plasticity(&mut app, "PlasticityModulus", "0");
+    click_widget(&mut app, "PlasticityApply");
+    let expected = Some(MisesPlasticity::Bilinear {
+        initial_yield_stress: 450.0000000001,
+        hardening_modulus: 0.0,
+    });
+    assert_eq!(plasticity(&app, 0), expected);
+    assert_eq!(plasticity(&app, 1), None);
+    assert_eq!(
+        app.world().resource::<UndoStack>().undo.len(),
+        undo_before_edit + 1
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("edited.cnt");
+    let setup = app.world().resource::<AnalysisSetup>();
+    hecmw::write_cnt_file(&path, setup).unwrap();
+    let loaded = hecmw::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0).unwrap();
+    assert!(
+        loaded.import_issues.is_empty(),
+        "{:?}",
+        loaded.import_issues
+    );
+    assert_eq!(loaded.materials[0].plasticity, expected);
+
+    click_widget(&mut app, "PlasticityOpen");
+    click_widget(&mut app, "PlasticityApply");
+    assert_eq!(
+        app.world().resource::<UndoStack>().undo.len(),
+        undo_before_edit + 1
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ControlLeft);
+    key(&mut app, KeyCode::KeyZ);
+    assert_eq!(plasticity(&app, 0), None);
+}
+
+#[test]
+fn multilinear_paste_validates_the_table_and_stale_drafts_do_not_apply() {
+    use fem_core::PlasticHardeningPoint;
+
+    let mut app = editor_app();
+    click_widget(&mut app, "PlasticityOpen");
+    click_widget(&mut app, "PlasticityMultilinear");
+    type_plasticity(
+        &mut app,
+        "PlasticityCurve",
+        "450\t0\r\n608\t0.05\r\n780\t0.05",
+    );
+    click_widget(&mut app, "PlasticityApply");
+    assert!(plasticity_status(&mut app).contains("strictly increasing"));
+    assert_eq!(plasticity(&app, 0), None);
+    type_plasticity(&mut app, "PlasticityCurve", "450, 0\n608, bad\n780, 0.5");
+    click_widget(&mut app, "PlasticityApply");
+    assert!(plasticity_status(&mut app).contains("Row 2"));
+
+    type_plasticity(
+        &mut app,
+        "PlasticityCurve",
+        "450\t0\r\n608\t0.05\r\n780,0.5",
+    );
+    assert_eq!(plasticity(&app, 0), None);
+    click_widget(&mut app, "PlasticityApply");
+    let expected = Some(MisesPlasticity::Multilinear(vec![
+        PlasticHardeningPoint {
+            yield_stress: 450.0,
+            plastic_strain: 0.0,
+        },
+        PlasticHardeningPoint {
+            yield_stress: 608.0,
+            plastic_strain: 0.05,
+        },
+        PlasticHardeningPoint {
+            yield_stress: 780.0,
+            plastic_strain: 0.5,
+        },
+    ]));
+    assert_eq!(plasticity(&app, 0), expected);
+    click_widget(&mut app, "PlasticityOpen");
+    let curve = named_entity(&mut app, "PlasticityCurve");
+    assert_eq!(
+        editable_value(app.world().get::<EditableText>(curve).unwrap()),
+        "4.5e2, 0e0\n6.08e2, 5e-2\n7.8e2, 5e-1"
+    );
+    click_widget(&mut app, "PlasticityElastic");
+    key(&mut app, KeyCode::Escape);
+    assert_eq!(plasticity(&app, 0), expected);
+
+    click_widget(&mut app, "PlasticityOpen");
+    click_widget(&mut app, "PlasticityElastic");
+    app.world_mut()
+        .resource_mut::<SelectedMaterialForSection>()
+        .0 = Some("AL".into());
+    click_widget(&mut app, "PlasticityApply");
+    assert_eq!(plasticity(&app, 0), expected);
+    assert_eq!(plasticity(&app, 1), None);
+
+    click(&mut app, "MatSel_STEEL");
+    click_widget(&mut app, "PlasticityOpen");
+    click_widget(&mut app, "PlasticityElastic");
+    click_widget(&mut app, "PlasticityApply");
+    assert_eq!(plasticity(&app, 0), None);
+}
+
+fn plasticity(app: &App, index: usize) -> Option<MisesPlasticity> {
+    app.world().resource::<AnalysisSetup>().materials[index]
+        .plasticity
+        .clone()
+}
+
+fn plasticity_status(app: &mut App) -> String {
+    app.world_mut()
+        .query_filtered::<&Text, With<crate::plasticity_editor::Status>>()
+        .single(app.world())
+        .unwrap()
+        .0
+        .clone()
+}
+
+fn type_plasticity(app: &mut App, name: &str, value: &str) {
+    let entity = named_entity(app, name);
+    app.world_mut()
+        .get_mut::<EditableText>(entity)
+        .unwrap()
+        .editor_mut()
+        .set_text(value);
+}
+
+fn click_widget(app: &mut App, name: &str) {
+    let entity = named_entity(app, name);
+    crate::widget_test_input::click(app.world_mut(), entity);
+    app.update();
 }
 
 #[test]

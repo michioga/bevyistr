@@ -12,6 +12,7 @@ mod material_catalog;
 mod material_assignment;
 mod material_library;
 mod materials_ui;
+mod plasticity_editor;
 mod measurement;
 mod mpc_ui;
 mod project_io;
@@ -271,6 +272,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<SelectedEgrp>();
         app.init_resource::<SelectedMaterialForSection>();
         app.init_resource::<MaterialEditorState>();
+        app.init_resource::<plasticity_editor::PlasticityEditor>();
         app.init_resource::<MaterialLibraryState>();
         app.init_resource::<MaterialViewportHover>();
         app.init_resource::<visualization::MaterialColorMode>();
@@ -320,7 +322,11 @@ impl Plugin for UiPlugin {
 
         app.add_systems(
             Update,
-            material_numeric_input_system
+            (
+                plasticity_editor::update.before(selection::clear_selection_shortcut_system),
+                material_numeric_input_system,
+            )
+                .chain()
                 .after(update_ui_keyboard_state)
                 .after(sidebar_page_button_system)
                 .after(material_library_system)

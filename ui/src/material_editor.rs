@@ -154,6 +154,7 @@ pub(crate) fn spawn_material_exact_editor(parent: &mut ChildSpawnerCommands) {
                         TextFont { font_size: FontSize::Px(9.5), ..default() },
                         TextColor(TEXT_MAIN),
                     ));
+                    crate::plasticity_editor::spawn(fields);
                 });
             editor.spawn((
                 Text::new(""),
@@ -311,15 +312,7 @@ pub(crate) fn material_numeric_input_system(
             selected.0 = None;
         }
     }
-    let index = selected.0.as_ref().and_then(|name| {
-        let mut matches = setup
-            .materials
-            .iter()
-            .enumerate()
-            .filter(|(_, material)| material.name == *name);
-        let (index, _) = matches.next()?;
-        matches.next().is_none().then_some(index)
-    });
+    let index = unique_material_index(&setup, selected.0.as_deref());
     let fingerprint = index.map(|index| MaterialFingerprint::from(&setup.materials[index]));
     let context = (version.value, fingerprint);
     let context_changed = state.context.as_ref() != Some(&context);
@@ -454,27 +447,27 @@ pub(crate) fn material_numeric_input_system(
     }
 }
 
-fn plasticity_text(plasticity: &MisesPlasticity) -> String {
-    use std::fmt::Write as _;
+pub(crate) fn unique_material_index(setup: &AnalysisSetup, name: Option<&str>) -> Option<usize> {
+    let name = name?;
+    let mut matches = setup
+        .materials
+        .iter()
+        .enumerate()
+        .filter(|(_, material)| material.name == name);
+    let (index, _) = matches.next()?;
+    matches.next().is_none().then_some(index)
+}
 
+fn plasticity_text(plasticity: &MisesPlasticity) -> String {
     match plasticity {
         MisesPlasticity::Bilinear {
             initial_yield_stress,
             hardening_modulus,
         } => format!(
-            "von Mises | Bilinear (imported)\nYield stress: {initial_yield_stress:e}\nHardening modulus: {hardening_modulus:e}"
+            "von Mises | Bilinear\nYield stress: {initial_yield_stress:e}\nHardening modulus: {hardening_modulus:e}"
         ),
         MisesPlasticity::Multilinear(points) => {
-            let mut summary =
-                String::from("von Mises | Multilinear (imported)\nYield stress | Plastic strain");
-            for point in points {
-                let _ = write!(
-                    summary,
-                    "\n{:e} | {:e}",
-                    point.yield_stress, point.plastic_strain
-                );
-            }
-            summary
+            format!("von Mises | Multilinear | {} points", points.len())
         }
     }
 }

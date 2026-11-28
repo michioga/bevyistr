@@ -19,11 +19,15 @@
 
 ## von Misesの弾塑性
 
-**Model → Open Project** で `05_plastic_cylinder` の `hecmw_ctrl.dat` を開き、**Materials** で `MAT1` を選ぶと、`!PLASTIC` の降伏応力と塑性ひずみの7点を確認できます。応力と硬化係数はモデルの応力単位で、塑性ひずみは無次元です。 [FrontISTRの `!PLASTIC` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/plastic.html) · [円柱の例題](https://source-docs.frontistr.com/examples/tutorial_05.html)
+**Model → Open Project** で `05_plastic_cylinder` の `hecmw_ctrl.dat` を開き、**Materials** で `MAT1` を選びます。**Edit plasticity...** を開くと、`!PLASTIC` の降伏応力と塑性ひずみの7点を確認・編集できます。応力と硬化係数はモデルの応力単位で、塑性ひずみは無次元です。 [FrontISTRの `!PLASTIC` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/plastic.html) · [円柱の例題](https://source-docs.frontistr.com/examples/tutorial_05.html)
 
 非線形静解析では、同じ `!MATERIAL` 内の等方弾性 `!ELASTIC` に続く、温度非依存の `YIELD=MISES` を読み込み・再出力できます。**BILINEAR** は正の初期降伏応力とゼロ以上の硬化係数を保持し、硬化係数がゼロなら完全塑性です。**MULTILINEAR** は塑性ひずみゼロから始まり、ひずみが増加する順に並んだ2点以上の表を保持します。
 
-Materialsの弾塑性欄は確認表示です。硬化則や表を変更する場合は元のCNTで編集し、プロジェクトを読み込み直します。温度依存、他の降伏条件や硬化則、`INFINITESIMAL` 指定はSolveの互換性表示で確認できます。
+1. プロジェクトの材料を選び、**Edit plasticity...** から **Bilinear** または **Multilinear** を選びます。
+2. **Bilinear** は **Initial yield stress** と **Hardening modulus** を入力します。**Multilinear** は1行に降伏応力と塑性ひずみを入力します。例えば第1行は `450, 0`、第2行は `608, 0.05` です。表計算で選択した2列をタブ区切りのまま貼り付けることもできます。
+3. **Apply plasticity** で選択中の材料に反映します。**Cancel** またはEscで下書きを破棄できます。確定後はCtrl+Zで元に戻せます。**Elastic** を選んで確定すると、その材料の `!PLASTIC` を解除します。
+
+弾塑性材料を使う場合は、Solveの解析方式を **Nonlinear** にします。温度依存、他の降伏条件や硬化則、`INFINITESIMAL` 指定はSolveの互換性表示で確認できます。
 
 ## materials.toml
 
