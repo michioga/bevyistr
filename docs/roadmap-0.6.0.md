@@ -8,6 +8,7 @@
 - 非線形静解析の接触設定に `!CONTACT_ALGO` の `ALAGRANGE`／`SLAGRANGE` と、`ALAGRANGE` の `AUGITER` を追加した。Solveから変更できる。Hertz接触例題（408節点、168要素）で `ALAGRANGE, AUGITER=4` と `SLAGRANGE` の読み込み・一式の書き出し・再読込を確認した。再配置情報を含むWindowsの検証用OpenMP版で実行し、両方式とも最終サブステップのRESを読めた。 [検証記録](verification.md#060向け-hertz接触例題とwindowsエラー623) · [FrontISTRの仕様](https://source-docs.frontistr.com/keyword_reference/cnt/contact_algo.html)
 - 非線形静解析の固定増分 `!STEP` を複数保持し、Solveでステップごとの時間設定と有効な拘束・荷重・接触グループを確認できる。Hertz例題を2ステップに分け、書き出し・再読込・WindowsでのFrontISTR実行とRES読込を確認した。 [検証記録](verification.md#060向け-hertz接触例題とwindowsエラー623) · [FrontISTRの `!STEP` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/step.html)
 - 非線形静解析の温度非依存のvon Mises弾塑性は、二直線・多直線硬化をCNTから読み込み、Materialsで編集して再出力できる。多直線硬化の表はタブ区切りで貼り付けられる。円柱例題と二直線硬化に変更した入力の両方で、元のCNTと再出力後の最終RESを節点単位で比較した。 [操作手順](src/materials.md#von-misesの弾塑性) · [検証記録](verification.md#060向け-円柱例題のvon-mises弾塑性)
+- Contactの定義欄から、部品番号付きの節点・面グループを選べる。2個のSTEP部品で、片側の接触面を細分化し、NODE-SURFの定義、プロジェクト出力、Windows版FrontISTRでの計算、Resultsの自動表示まで確認した。 [操作手順](src/contact.md#stepの面グループから接触を定義する) · [検証記録](verification.md#060向け-stepのメッシュ生成から接触解析まで)
 - MPI設定でRCB／PMETIS／KMETISを選択できる。RCBでは2の累乗のランク数と分割軸を指定し、`hecmw_part_ctrl.dat` に再出力する。`18_cavity_flow` は8ランクのKMETISを使用する。[公式仕様](https://source-docs.frontistr.com/keyword_reference/part/partition.html)
 - 次版へ回す候補はAMG／DIRECTmfの詳細設定、複数ソリッドSTEPの一括メッシュ化、高度な材料・連成・周波数応答。
 

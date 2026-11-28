@@ -114,8 +114,11 @@ pub(crate) struct SetButton {
 }
 
 /// Dynamic list rebuilt from the node, element, and surface sets in the model.
-#[derive(Component)]
-pub(crate) struct SetsListContainer;
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SetsListContainer {
+    Model,
+    Contact,
+}
 
 pub(crate) fn spawn_model_selection_ui(parent: &mut ChildSpawnerCommands) {
     parent.spawn((
@@ -164,6 +167,18 @@ pub(crate) fn spawn_model_selection_ui(parent: &mut ChildSpawnerCommands) {
 }
 
 pub(crate) fn spawn_model_sets_ui(parent: &mut ChildSpawnerCommands) {
+    spawn_sets_list(parent, SetsListContainer::Model);
+    selection_hint(
+        parent,
+        "Click a set to select its members   Scroll to see more",
+    );
+}
+
+pub(crate) fn spawn_contact_sets_ui(parent: &mut ChildSpawnerCommands) {
+    spawn_sets_list(parent, SetsListContainer::Contact);
+}
+
+fn spawn_sets_list(parent: &mut ChildSpawnerCommands, scope: SetsListContainer) {
     parent.spawn((
         Node {
             flex_direction: FlexDirection::Column,
@@ -174,13 +189,12 @@ pub(crate) fn spawn_model_sets_ui(parent: &mut ChildSpawnerCommands) {
         },
         ScrollPosition::default(),
         ScrollArea,
-        SetsListContainer,
-        Name::new("SetsListContainer"),
+        scope,
+        Name::new(match scope {
+            SetsListContainer::Model => "SetsListContainer",
+            SetsListContainer::Contact => "ContactSetsList",
+        }),
     ));
-    selection_hint(
-        parent,
-        "Click a set to select its members   Scroll to see more",
-    );
 }
 
 fn selection_action_button(
@@ -830,7 +844,7 @@ pub(crate) fn rebuild_sets_list(
     model: Option<Res<FemModel>>,
     version: Res<FemModelVersion>,
     mut last_version: Local<Option<u64>>,
-    container_query: Query<Entity, With<SetsListContainer>>,
+    container_query: Query<(Entity, &SetsListContainer)>,
     children_query: Query<&Children>,
 ) {
     let current = version.value;
@@ -841,59 +855,77 @@ pub(crate) fn rebuild_sets_list(
     }
     *last_version = Some(current);
 
-    let Ok(container) = container_query.single() else {
-        return;
-    };
-
-    if let Ok(children) = children_query.get(container) {
-        for &child in children {
-            commands.entity(child).despawn();
+    for (container, scope) in &container_query {
+        if let Ok(children) = children_query.get(container) {
+            for &child in children {
+                commands.entity(child).despawn();
+            }
+        }
+        if let Some(model) = model.as_deref() {
+            commands.entity(container).with_children(|list| {
+                fill_sets_list(list, model, *scope);
+            });
         }
     }
+}
 
-    let Some(model) = model else {
-        return;
-    };
+fn fill_sets_list(parent: &mut ChildSpawnerCommands, model: &FemModel, scope: SetsListContainer) {
+    if scope == SetsListContainer::Contact
+        && model
+            .meshes
+            .iter()
+            .any(|mesh| !mesh.node_sets.is_empty() || !mesh.surface_sets.is_empty())
+    {
+        selection_hint(
+            parent,
+            "Select a mesh set, then capture it as Slave or Master.",
+        );
+    }
 
-    commands.entity(container).with_children(|list| {
-        for (mesh_index, mesh) in model.meshes.iter().enumerate() {
-            for (set_index, set) in mesh.node_sets.iter().enumerate() {
-                set_list_button(
-                    list,
-                    SetButton {
-                        mesh_index,
-                        kind: SetKind::Node,
-                        set_index,
-                    },
-                    &format!("[N] {}  ({} nodes)", set.name, set.nodes.len()),
-                );
-            }
+    for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+        let part = if model.meshes.len() > 1 {
+            format!("[{}] ", mesh_index + 1)
+        } else {
+            String::new()
+        };
+        for (set_index, set) in mesh.node_sets.iter().enumerate() {
+            set_list_button(
+                parent,
+                SetButton {
+                    mesh_index,
+                    kind: SetKind::Node,
+                    set_index,
+                },
+                &format!("{part}[N] {}  ({} nodes)", set.name, set.nodes.len()),
+            );
+        }
 
+        if scope == SetsListContainer::Model {
             for (set_index, set) in mesh.element_sets.iter().enumerate() {
                 set_list_button(
-                    list,
+                    parent,
                     SetButton {
                         mesh_index,
                         kind: SetKind::Element,
                         set_index,
                     },
-                    &format!("[E] {}  ({} elems)", set.name, set.elements.len()),
-                );
-            }
-
-            for (set_index, set) in mesh.surface_sets.iter().enumerate() {
-                set_list_button(
-                    list,
-                    SetButton {
-                        mesh_index,
-                        kind: SetKind::Surface,
-                        set_index,
-                    },
-                    &format!("[S] {}  ({} faces)", set.name, set.surfaces.len()),
+                    &format!("{part}[E] {}  ({} elems)", set.name, set.elements.len()),
                 );
             }
         }
-    });
+
+        for (set_index, set) in mesh.surface_sets.iter().enumerate() {
+            set_list_button(
+                parent,
+                SetButton {
+                    mesh_index,
+                    kind: SetKind::Surface,
+                    set_index,
+                },
+                &format!("{part}[S] {}  ({} faces)", set.name, set.surfaces.len()),
+            );
+        }
+    }
 }
 
 fn set_list_button(parent: &mut ChildSpawnerCommands, set_button: SetButton, label: &str) {

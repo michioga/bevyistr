@@ -28,6 +28,57 @@ use selection::{SelectionOperation, SelectionState};
 use visualization::{ContactDraftPreview, ContactDraftSlave, ContactDraftSurface};
 
 #[test]
+fn contact_lists_part_numbers_for_identically_named_sets_and_omits_element_sets() {
+    use crate::selection_ui::{rebuild_sets_list, spawn_contact_sets_ui, spawn_model_sets_ui};
+    use bevy::prelude::{Children, Commands, Name, Node, Startup};
+    use fem_core::{FemElementSet, FemNodeSet};
+
+    let mut mesh = FemMesh::demo_hex8();
+    mesh.node_sets.push(FemNodeSet {
+        name: "STEP_FACE_1".into(),
+        nodes: vec![mesh.nodes[0].id],
+    });
+    mesh.element_sets.push(FemElementSet {
+        name: "STEP_SOLID".into(),
+        elements: vec![mesh.elements[0].id],
+    });
+    let mut model = FemModel::single_mesh("A", mesh.clone());
+    model.add_mesh("B", mesh);
+
+    let mut app = App::new();
+    app.insert_resource(model)
+        .init_resource::<FemModelVersion>()
+        .add_systems(Startup, |mut commands: Commands| {
+            commands.spawn(Node::default()).with_children(|root| {
+                spawn_model_sets_ui(root);
+                spawn_contact_sets_ui(root);
+            });
+        })
+        .add_systems(Update, rebuild_sets_list);
+    app.update();
+
+    let mut lists = app.world_mut().query::<(&Name, &Children)>();
+    let lists = lists
+        .iter(app.world())
+        .filter(|(name, _)| matches!(name.as_str(), "SetsListContainer" | "ContactSetsList"))
+        .collect::<Vec<_>>();
+    assert_eq!(lists.len(), 2);
+    for (name, children) in lists {
+        let rows = children
+            .iter()
+            .filter_map(|&entity| app.world().get::<Name>(entity))
+            .map(Name::as_str)
+            .collect::<Vec<_>>();
+        assert!(rows.contains(&"SetButton_[1] [N] STEP_FACE_1  (1 nodes)"));
+        assert!(rows.contains(&"SetButton_[2] [N] STEP_FACE_1  (1 nodes)"));
+        assert_eq!(
+            rows.iter().any(|row| row.contains("STEP_SOLID")),
+            name.as_str() == "SetsListContainer"
+        );
+    }
+}
+
+#[test]
 fn analysis_shell_is_limited_to_analysis_pages() {
     let pages = SidebarPageContent::analysis();
 

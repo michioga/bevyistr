@@ -14,6 +14,17 @@ Windowsの検証用OpenMP版FrontISTRを1スレッドで実行した。`05_plast
 - 多直線硬化の7点を再読込で照合した。最大変位は `7.004295349`、最大節点von Mises応力は `790.631165`。元入力との最大節点差は変位 `1.49e-8`、von Mises応力 `0`（RES読込後の精度）だった。
 - 同じメッシュで初期降伏応力 `450`、硬化係数 `3160` の二直線硬化と強制変位 `-2.0` を指定し、材料定数を再読込で照合した。最大変位は `2.011131525`、最大節点von Mises応力は `682.156860`。最大節点差は変位 `2.11e-8`、von Mises応力 `0`（RES読込後の精度）だった。
 
+## 0.6.0向け: STEPのメッシュ生成から接触解析まで
+
+- Gmsh 4.13.1で `20 × 10 × 6 mm` の直方体STEPを2個読み込み、片側の接触予定面を局所細分化して確定した。部品を並べ、Contact欄の `[2] [N]` からSlaveの90節点、`[1] [S]` からMasterの42面を取り込み、摩擦なしのNODE-SURFを登録した。 [接触の操作手順](src/contact.md#stepの面グループから接触を定義する)
+- `E=1000`、`ν=0`、外端の強制変位 `-0.04 mm` を与え、Windowsの検証用OpenMP版FrontISTRをDirect・1スレッドで実行した。非線形静解析の第4サブステップまで完走し、Resultsに両部品の変位が自動で開いた。軸方向に線形な理論変位と比較した全節点での最大差は `4.79e-5 mm` だった。書き出したメッシュとCNTを再読込し、同じ名前のNODE-SURF接触を参照することを確認した。
+
+GmshをPATHに置き、使用するFrontISTRを `FRONTISTR_EXECUTABLE` で指定して実行します。
+
+```powershell
+cargo test -p bevyistr-ui --lib --locked step_contact_groups_run_through_frontistr_and_open_results -- --ignored --nocapture
+```
+
 ## 0.4.0向け: 解析入力から結果表示まで
 
 - [x] 自動: 4要素・20節点の弾性棒のプロジェクトを読み込み、材料・拘束・荷重付きの入力を書き出してテスト用の子プロセスを実行する。RESの節点IDで変位を対応付け、Resultsの最終フレームと変位コンターを選ぶ。

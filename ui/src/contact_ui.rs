@@ -366,6 +366,8 @@ pub(crate) fn spawn_contact_definition_ui(parent: &mut ChildSpawnerCommands) {
                 });
         });
 
+    crate::selection_ui::spawn_contact_sets_ui(parent);
+
     parent
         .spawn((Node {
             flex_direction: FlexDirection::Row,

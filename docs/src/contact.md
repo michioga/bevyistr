@@ -2,6 +2,13 @@
 
 接触面や節点を選び、NODE-SURF／SURF-SURFなどの対応関係を確認します。Small、Finite、Tiedの挙動、摩擦係数、必要に応じたペナルティ値を設定します。
 
+## STEPの面グループから接触を定義する
+
+1. STEPから生成したメッシュを確定し、**PART POSITION** で部品を配置します。接触予定面の細分化は、メッシュ確定前のプレビューで行います。 [メッシュと局所細分化の操作](model.md#接触予定面を細かく分割する)
+2. **Contact → CONTACT DEFINITION** の一覧からSlave側の `STEP_FACE_*` を選び、**Capture Slave** を押します。複数部品では `[1]`、`[2]` などが部品番号です。**NODE-SURF** は節点グループ `[N]`、**SURF-SURF** は面グループ `[S]` を使います。
+3. Master側の面グループ `[S]` を選んで **Capture Master** を押し、青（Master）とオレンジ（Slave）のプレビューを確認して **Create Contact Pair** を押します。 [FrontISTRの接触ペア仕様](https://source-docs.frontistr.com/keyword_reference/msh/contactpair.html)
+4. **Materials** と **BC / Loads** で両部品の物性・断面・拘束・荷重を設定します。**Solve** で **Nonlinear** を選び、**Run FrontISTR** で計算します。
+
 ## 候補を検出する
 
 1. 部品の実際の位置関係を確認します。微調整はContact内のPART POSITIONからも行えます。
@@ -18,6 +25,6 @@ MPCや剛体スパイダーは接触とは別の拘束です。定義した式�
 
 ## 接触を含むプロジェクトを開き直す
 
-bevyistrで出力した非線形静解析の接触設定を **Open Project** で再読込できます。対象は、単一の固定増分ステップで全接触ペアを有効にする `ALAGRANGE` の設定です。接触形式、摩擦係数、第2行の摩擦ペナルティを保持します。FrontISTRのヘルツ接触例題もこの範囲に入ります。 [接触条件](https://source-docs.frontistr.com/keyword_reference/cnt/contact.html) · [ヘルツ接触例題](https://source-docs.frontistr.com/examples/tutorial_09.html)
+bevyistrで出力した非線形静解析の接触設定を **Open Project** で再読込できます。`ALAGRANGE`／`SLAGRANGE` の接触形式、摩擦係数、第2行の摩擦ペナルティ、固定増分ステップごとの接触グループ参照を保持します。FrontISTRのヘルツ接触例題もこの範囲に入ります。 [接触条件](https://source-docs.frontistr.com/keyword_reference/cnt/contact.html) · [ヘルツ接触例題](https://source-docs.frontistr.com/examples/tutorial_09.html)
 
 同名のSTEP部品などを統合出力するときは、グループ名の衝突を防ぐため `PART1_`、`PART2_` などの接頭辞を使います。生成されたCNTの拘束・荷重とMSHの接触ペアは同じ接頭辞を参照します。

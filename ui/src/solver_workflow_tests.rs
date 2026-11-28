@@ -602,21 +602,7 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
     use fem_core::{ContactPair, ContactType, MainViewportCamera, SurfaceSetRef};
 
     let input = tempfile::tempdir().unwrap();
-    std::fs::write(
-        input.path().join("box.geo"),
-        "SetFactory(\"OpenCASCADE\");\nBox(1) = {0,0,0,20,10,6};\nSave \"box.step\";\n",
-    )
-    .unwrap();
-    let gmsh = std::process::Command::new("gmsh")
-        .current_dir(input.path())
-        .args(["box.geo", "-parse_and_exit", "-nopopup"])
-        .output()
-        .unwrap();
-    assert!(
-        gmsh.status.success(),
-        "{}",
-        String::from_utf8_lossy(&gmsh.stderr)
-    );
+    write_step_box(input.path());
 
     bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
     let mut request = MeshLoadRequest::default();
@@ -1027,3 +1013,25 @@ fn step_model_preserves_analysis_groups_in_mesh_and_solver_inputs() {
     assert_eq!(pairs[0].slave_group_name, slave_name);
     assert_eq!(pairs[0].master_surface_name, master_name);
 }
+
+fn write_step_box(directory: &Path) {
+    std::fs::write(
+        directory.join("box.geo"),
+        "SetFactory(\"OpenCASCADE\");\nBox(1) = {0,0,0,20,10,6};\nSave \"box.step\";\n",
+    )
+    .unwrap();
+    let gmsh = std::process::Command::new("gmsh")
+        .current_dir(directory)
+        .args(["box.geo", "-parse_and_exit", "-nopopup"])
+        .output()
+        .unwrap();
+    assert!(
+        gmsh.status.success() && directory.join("box.step").is_file(),
+        "{}\n{}",
+        String::from_utf8_lossy(&gmsh.stdout),
+        String::from_utf8_lossy(&gmsh.stderr)
+    );
+}
+
+#[path = "step_contact_workflow_tests.rs"]
+mod step_contact;
