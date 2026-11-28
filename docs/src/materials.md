@@ -17,6 +17,14 @@
 
 例題の `.msh` だけを開いた場合は、粘度と密度が未定義なので両欄を空欄で表示します。MSHの再出力では元の `!SECTION, TYPE=SOLID` の割り当てと、同名の `!MATERIAL, ITEM=3` のゼロ3項目を保持します。プロジェクト全体を書き出す手順は、[流体例題のMPI実行](solve/index.md#18_cavity_flow-をmpiで書き出し実行する)を参照してください。 [FrontISTRの `!MATERIAL` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/material.html) · [`!SECTION` 仕様](https://source-docs.frontistr.com/keyword_reference/msh/section.html)
 
+## von Misesの弾塑性
+
+**Model → Open Project** で `05_plastic_cylinder` の `hecmw_ctrl.dat` を開き、**Materials** で `MAT1` を選ぶと、`!PLASTIC` の降伏応力と塑性ひずみの7点を確認できます。応力と硬化係数はモデルの応力単位で、塑性ひずみは無次元です。 [FrontISTRの `!PLASTIC` 仕様](https://source-docs.frontistr.com/keyword_reference/cnt/plastic.html) · [円柱の例題](https://source-docs.frontistr.com/examples/tutorial_05.html)
+
+非線形静解析では、同じ `!MATERIAL` 内の等方弾性 `!ELASTIC` に続く、温度非依存の `YIELD=MISES` を読み込み・再出力できます。**BILINEAR** は正の初期降伏応力とゼロ以上の硬化係数を保持し、硬化係数がゼロなら完全塑性です。**MULTILINEAR** は塑性ひずみゼロから始まり、ひずみが増加する順に並んだ2点以上の表を保持します。
+
+Materialsの弾塑性欄は確認表示です。硬化則や表を変更する場合は元のCNTで編集し、プロジェクトを読み込み直します。温度依存、他の降伏条件や硬化則、`INFINITESIMAL` 指定はSolveの互換性表示で確認できます。
+
 ## materials.toml
 
 起動時と **Reload materials.toml** では、次の順でファイルを探します。

@@ -54,6 +54,35 @@ fn editor_app() -> App {
 }
 
 #[test]
+fn imported_plasticity_is_shown_for_the_selected_material() {
+    let mut app = editor_app();
+    app.world_mut().resource_mut::<AnalysisSetup>().materials[0].plasticity =
+        Some(MisesPlasticity::Bilinear {
+            initial_yield_stress: 450.0,
+            hardening_modulus: 0.0,
+        });
+    app.update();
+    let row = app
+        .world_mut()
+        .query::<(Entity, &MaterialRow)>()
+        .iter(app.world())
+        .find_map(|(entity, row)| matches!(row, MaterialRow::Plasticity).then_some(entity))
+        .unwrap();
+    assert_eq!(app.world().get::<Node>(row).unwrap().display, Display::Flex);
+    assert!(
+        app.world()
+            .get::<Text>(row)
+            .unwrap()
+            .contains("Yield stress: 4.5e2")
+    );
+    app.world_mut()
+        .resource_mut::<SelectedMaterialForSection>()
+        .0 = Some("AL".into());
+    app.update();
+    assert_eq!(app.world().get::<Node>(row).unwrap().display, Display::None);
+}
+
+#[test]
 fn fluid_editor_shows_viscosity_and_requires_positive_density() {
     let mut app = editor_app();
     let fluid = FemMaterial {

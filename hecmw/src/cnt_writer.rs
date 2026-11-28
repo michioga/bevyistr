@@ -2,8 +2,8 @@
 //! Uses !ELASTIC / !DENSITY as confirmed from tutorial files.
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactPair, ContactType, DistributedLoad,
-    DistributedLoadKind, DistributedLoadTarget, DynamicStep, FemMaterial, NodalLoad, NonlinearStep,
-    RotationCenter, StepGroup,
+    DistributedLoadKind, DistributedLoadTarget, DynamicStep, FemMaterial, MisesPlasticity,
+    NodalLoad, NonlinearStep, RotationCenter, StepGroup,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -59,6 +59,29 @@ pub(crate) fn export_blockers(setup: &AnalysisSetup) -> Vec<String> {
         .map(ToString::to_string)
         .collect();
     for material in &setup.materials {
+        if let Some(plasticity) = &material.plasticity {
+            let name = &material.name;
+            if let Err(reason) = plasticity.validate() {
+                blockers.push(format!("Material {name}: {reason}"));
+            }
+            if material.is_fluid()
+                || material
+                    .young_modulus
+                    .is_none_or(|young| !young.is_finite() || young <= 0.0)
+                || material
+                    .poisson_ratio
+                    .is_none_or(|nu| !nu.is_finite() || nu <= -1.0 || nu >= 0.5)
+            {
+                blockers.push(format!(
+                    "Material {name}: plasticity requires valid isotropic elastic properties"
+                ));
+            }
+            if setup.solver.analysis_type != AnalysisType::NlStatic {
+                blockers.push(format!(
+                    "Material {name}: plasticity requires nonlinear static analysis"
+                ));
+            }
+        }
         if !material.is_fluid() {
             continue;
         }
@@ -700,6 +723,21 @@ fn write_material(o: &mut String, mat: &FemMaterial) {
         )
         .unwrap();
     }
+    match &mat.plasticity {
+        Some(MisesPlasticity::Bilinear {
+            initial_yield_stress,
+            hardening_modulus,
+        }) => {
+            writeln!(o, "!PLASTIC, YIELD=MISES, HARDEN=BILINEAR\n {initial_yield_stress:e}, {hardening_modulus:e}").unwrap();
+        }
+        Some(MisesPlasticity::Multilinear(points)) => {
+            writeln!(o, "!PLASTIC, YIELD=MISES, HARDEN=MULTILINEAR").unwrap();
+            for point in points {
+                writeln!(o, " {:e}, {:e}", point.yield_stress, point.plastic_strain).unwrap();
+            }
+        }
+        None => {}
+    }
     if let Some(rho) = mat.density {
         writeln!(o, "!DENSITY").unwrap();
         if mat.dynamic_viscosity.is_some() {
@@ -831,6 +869,95 @@ mod tests {
         let loaded = crate::load_cnt_file(&path, &fem_core::FemMesh::demo_hex8(), 0);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(loaded.unwrap().materials, setup.materials);
+    }
+
+    #[test]
+    fn mises_hardening_round_trips_and_rejects_unrepresentable_materials() {
+        use fem_core::FemMesh;
+
+        let mesh = FemMesh::demo_hex8();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plastic.cnt");
+        let input = concat!(
+            "!SOLUTION, TYPE=NLSTATIC\n",
+            "!MATERIAL, NAME=CURVE\n!ELASTIC\n206900,0.29\n",
+            "!Plastic, Yield=mises, Harden=multilinear, Dependencies=0\n",
+            "4.50000000000001D2, 0\n608, 0.05\n780, 0.5\n",
+            "!DENSITY\n7.85e-9\n",
+            "!MATERIAL, NAME=PERFECT\n!ELASTIC\n200000,0.3\n!PLASTIC\n450,0\n",
+            "!END\n",
+        );
+        let read = |source: &str| {
+            std::fs::write(&path, source).unwrap();
+            crate::load_cnt_file(&path, &mesh, 0).unwrap()
+        };
+        let data = read(input);
+        assert!(data.import_issues.is_empty(), "{:?}", data.import_issues);
+        let mut setup = AnalysisSetup::default();
+        data.merge_into(&mut setup);
+        let [curve, perfect] = setup.materials.as_slice() else {
+            panic!("expected two plastic materials");
+        };
+        assert_eq!(curve.density, Some(7.85e-9));
+        assert!(
+            matches!(&curve.plasticity, Some(MisesPlasticity::Multilinear(points))
+            if points.len() == 3 && points[0].yield_stress == 450.000000000001)
+        );
+        assert_eq!(
+            perfect.plasticity,
+            Some(MisesPlasticity::Bilinear {
+                initial_yield_stress: 450.0,
+                hardening_modulus: 0.0,
+            })
+        );
+        write_cnt_file(&path, &setup).unwrap();
+        let reloaded = crate::load_cnt_file(&path, &mesh, 0).unwrap();
+        assert!(
+            reloaded.import_issues.is_empty(),
+            "{:?}",
+            reloaded.import_issues
+        );
+        assert_eq!(reloaded.materials, setup.materials);
+
+        setup.solver.analysis_type = AnalysisType::Static;
+        let original = std::fs::read(&path).unwrap();
+        assert!(
+            write_cnt_file(&path, &setup)
+                .unwrap_err()
+                .to_string()
+                .contains("plasticity requires nonlinear static analysis")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        setup.solver.analysis_type = AnalysisType::NlStatic;
+        setup.materials[0].young_modulus = None;
+        assert!(
+            write_cnt_file(&path, &setup)
+                .unwrap_err()
+                .to_string()
+                .contains("plasticity requires valid isotropic elastic properties")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        for source in [
+            input.replace("Dependencies=0", "Dependencies=1"),
+            input.replace("Dependencies=0", "Dependencies=0, INFINITESIMAL"),
+            input.replace("Harden=multilinear", "Harden=multilinear, Harden=BILINEAR"),
+            input.replace("Yield=mises", "Yield=DRUCKER-PRAGER"),
+            input.replace("206900,0.29\n", "206900,0.29\n!PLASTIC\n500,30\n"),
+            input.replace("!ELASTIC\n206900,0.29\n", ""),
+            input.replace("608, 0.05", "608, 0"),
+            input.replace("450,0", "450,-1"),
+            input.replace("450,0", "NaN,0"),
+            input.replace("780, 0.5", "780, 0.5, 20"),
+        ] {
+            let data = read(&source);
+            assert!(
+                data.import_issues
+                    .iter()
+                    .any(|issue| { issue.keyword.to_ascii_uppercase().starts_with("!PLASTIC") }),
+                "{source}"
+            );
+        }
     }
 
     #[test]

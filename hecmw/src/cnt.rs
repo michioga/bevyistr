@@ -50,8 +50,8 @@ mod visual;
 use fem_core::{
     AnalysisSetup, AnalysisType, BoundaryCondition, ContactAlgorithm, ContactPair, ContactType,
     DistributedLoad, DistributedLoadKind, ElementId, FemMaterial, FemMesh, LinearSolverMethod,
-    MatrixDumpFormat, NodalLoad, NodeId, RotationCenter, Section, SectionKind, SolverSettings,
-    SolverTimeLog,
+    MatrixDumpFormat, MisesPlasticity, NodalLoad, NodeId, PlasticHardeningPoint, RotationCenter,
+    Section, SectionKind, SolverSettings, SolverTimeLog,
 };
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -108,6 +108,58 @@ fn parse_material_real(text: &str) -> Option<f32> {
     } else {
         text.parse().ok()
     }
+}
+
+fn parse_plastic(header: &KeywordHeader, rows: &[&str]) -> Result<MisesPlasticity, &'static str> {
+    if header
+        .params
+        .get("YIELD")
+        .is_some_and(|value| !value.eq_ignore_ascii_case("MISES"))
+        || header
+            .params
+            .get("DEPENDENCIES")
+            .is_some_and(|value| value.parse::<u32>() != Ok(0))
+    {
+        return Err("PLASTIC requires von Mises yield without temperature dependencies");
+    }
+
+    fn read_pair(row: &str) -> Result<(f64, f64), &'static str> {
+        let number = |text: &str| text.trim().replace(['d', 'D'], "e").parse::<f64>().ok();
+        row.split_once(',')
+            .and_then(|(first, second)| Some((number(first)?, number(second)?)))
+            .ok_or("PLASTIC requires exactly two numbers per data row")
+    }
+
+    let hardening = header
+        .params
+        .get("HARDEN")
+        .map(|value| value.to_ascii_uppercase());
+    let plasticity = match hardening.as_deref().unwrap_or("BILINEAR") {
+        "BILINEAR" => {
+            let [row] = rows else {
+                return Err("bilinear PLASTIC requires one YIELD0, H row");
+            };
+            let (initial_yield_stress, hardening_modulus) = read_pair(row)?;
+            MisesPlasticity::Bilinear {
+                initial_yield_stress,
+                hardening_modulus,
+            }
+        }
+        "MULTILINEAR" => MisesPlasticity::Multilinear(
+            rows.iter()
+                .map(|row| {
+                    let (yield_stress, plastic_strain) = read_pair(row)?;
+                    Ok(PlasticHardeningPoint {
+                        yield_stress,
+                        plastic_strain,
+                    })
+                })
+                .collect::<Result<_, &'static str>>()?,
+        ),
+        _ => return Err("PLASTIC supports only bilinear or multilinear isotropic hardening"),
+    };
+    plasticity.validate()?;
+    Ok(plasticity)
 }
 
 impl Default for CntData {
@@ -909,6 +961,11 @@ fn parse_cnt(text: &str, mesh: &FemMesh, mesh_index: usize) -> CntData {
                                 i += 1;
                             }
                         }
+                    } else if sub_trimmed.split(',').next().map(str::trim) == Some("!PLASTIC") {
+                        let plastic = parse_keyword_header(sub_trimmed);
+                        let rows = card_rows(&lines[i + 1..]);
+                        material.plasticity = parse_plastic(&plastic, &rows).ok();
+                        i += 1;
                     } else if sub_trimmed.starts_with("!DENSITY") {
                         // Older/simpler files use a standalone !DENSITY
                         // block instead of !MATERIAL's !ITEM=2.

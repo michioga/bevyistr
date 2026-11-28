@@ -345,7 +345,7 @@ pub enum DistributedLoadKind {
 
 // ─── materials ───────────────────────────────────────────────────────────────
 
-/// Constant material properties from the FrontISTR material cards.
+/// Temperature-independent material properties from the FrontISTR material cards.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FemMaterial {
     pub name: String,
@@ -357,12 +357,67 @@ pub struct FemMaterial {
     /// Mass density (solver units, typically t/mm³ or kg/m³ depending on
     /// the model's unit system — `fem_core` does not assume a system).
     pub density: Option<f32>,
+    /// Isotropic von Mises hardening from the CNT `!PLASTIC` card.
+    pub plasticity: Option<MisesPlasticity>,
     /// Dynamic viscosity for `!FLUID, TYPE=INCOMP_NEWTONIAN` in model units.
     pub dynamic_viscosity: Option<f32>,
 
     /// The MSH declares three zero-valued items for a fluid section. The
     /// physical density and viscosity, when present, come from the CNT.
     pub mesh_fluid_placeholder: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MisesPlasticity {
+    Bilinear {
+        initial_yield_stress: f64,
+        hardening_modulus: f64,
+    },
+    Multilinear(Vec<PlasticHardeningPoint>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlasticHardeningPoint {
+    pub yield_stress: f64,
+    pub plastic_strain: f64,
+}
+
+impl MisesPlasticity {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+        match self {
+            Self::Bilinear {
+                initial_yield_stress,
+                hardening_modulus,
+            } => {
+                if !positive(*initial_yield_stress) {
+                    return Err("initial yield stress must be finite and positive");
+                }
+                if !hardening_modulus.is_finite() || *hardening_modulus < 0.0 {
+                    return Err("hardening modulus must be finite and nonnegative");
+                }
+            }
+            Self::Multilinear(points) => {
+                if points.len() < 2 || points[0].plastic_strain != 0.0 {
+                    return Err(
+                        "multilinear hardening needs at least two points starting at zero plastic strain",
+                    );
+                }
+                if points
+                    .iter()
+                    .any(|point| !positive(point.yield_stress) || !point.plastic_strain.is_finite())
+                    || points
+                        .windows(2)
+                        .any(|pair| pair[0].plastic_strain >= pair[1].plastic_strain)
+                {
+                    return Err(
+                        "multilinear hardening needs positive yield stresses and strictly increasing finite plastic strains",
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl FemMaterial {

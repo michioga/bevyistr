@@ -10,7 +10,7 @@ use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use bevy::ui_widgets::SelectAllOnFocus;
-use fem_core::{AnalysisSetup, FemMaterial, FemModelVersion, UiKeyboardState};
+use fem_core::{AnalysisSetup, FemMaterial, FemModelVersion, MisesPlasticity, UiKeyboardState};
 
 const TEXT_MAIN: Color = Color::srgb(0.88, 0.92, 0.94);
 const TEXT_MUTED: Color = Color::srgb(0.58, 0.66, 0.70);
@@ -73,6 +73,7 @@ pub(crate) struct MaterialFields;
 pub(crate) enum MaterialRow {
     Field(MaterialField),
     Units { fluid: bool },
+    Plasticity,
 }
 #[derive(Component)]
 pub(crate) struct MaterialEditorStatus;
@@ -146,6 +147,13 @@ pub(crate) fn spawn_material_exact_editor(parent: &mut ChildSpawnerCommands) {
                             TextColor(TEXT_MUTED),
                         ));
                     }
+                    fields.spawn((
+                        MaterialRow::Plasticity,
+                        Node { display: Display::None, ..default() },
+                        Text::default(),
+                        TextFont { font_size: FontSize::Px(9.5), ..default() },
+                        TextColor(TEXT_MAIN),
+                    ));
                 });
             editor.spawn((
                 Text::new(""),
@@ -280,7 +288,14 @@ pub(crate) fn material_numeric_input_system(
         &mut BorderColor,
     )>,
     mut field_panels: Query<&mut Node, With<MaterialFields>>,
-    mut rows: Query<(&MaterialRow, &mut Node), Without<MaterialFields>>,
+    mut rows: Query<
+        (&MaterialRow, &mut Node, Option<&mut Text>),
+        (
+            Without<MaterialFields>,
+            Without<MaterialEditorHeading>,
+            Without<MaterialEditorStatus>,
+        ),
+    >,
     mut headings: Query<&mut Text, With<MaterialEditorHeading>>,
     mut statuses: Query<
         (&mut Text, &mut TextColor),
@@ -385,10 +400,19 @@ pub(crate) fn material_numeric_input_system(
             panel.display = display;
         }
     }
-    for (row, mut node) in &mut rows {
+    let plasticity = index.and_then(|index| setup.materials[index].plasticity.as_ref());
+    for (row, mut node, text) in &mut rows {
         let visible = match *row {
             MaterialRow::Field(field) => field.available(fluid),
             MaterialRow::Units { fluid: fluid_units } => fluid == fluid_units,
+            MaterialRow::Plasticity => {
+                if let (Some(plasticity), Some(mut text)) = (plasticity, text)
+                    && (setup.is_changed() || context_changed || text.0.is_empty())
+                {
+                    text.set_if_neq(Text::new(plasticity_text(plasticity)));
+                }
+                plasticity.is_some()
+            }
         };
         let display = if visible { Display::Flex } else { Display::None };
         if node.display != display {
@@ -427,6 +451,31 @@ pub(crate) fn material_numeric_input_system(
         } else {
             TEXT_MUTED
         }));
+    }
+}
+
+fn plasticity_text(plasticity: &MisesPlasticity) -> String {
+    use std::fmt::Write as _;
+
+    match plasticity {
+        MisesPlasticity::Bilinear {
+            initial_yield_stress,
+            hardening_modulus,
+        } => format!(
+            "von Mises | Bilinear (imported)\nYield stress: {initial_yield_stress:e}\nHardening modulus: {hardening_modulus:e}"
+        ),
+        MisesPlasticity::Multilinear(points) => {
+            let mut summary =
+                String::from("von Mises | Multilinear (imported)\nYield stress | Plastic strain");
+            for point in points {
+                let _ = write!(
+                    summary,
+                    "\n{:e} | {:e}",
+                    point.yield_stress, point.plastic_strain
+                );
+            }
+            summary
+        }
     }
 }
 

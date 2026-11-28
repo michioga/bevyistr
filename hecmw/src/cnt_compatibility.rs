@@ -22,6 +22,8 @@ pub(super) fn audit(
     let mut step_seen = false;
     let mut material = false;
     let mut fluid_seen = false;
+    let mut elastic_seen = false;
+    let mut plastic_seen = false;
     let mut contact_names = HashSet::new();
     let mut visual = None;
     let mut i = 0;
@@ -80,6 +82,7 @@ pub(super) fn audit(
                 | "STEP"
                 | "SOLVER"
                 | "FLUID"
+                | "PLASTIC"
                 | "DYNAMIC"
                 | "BOUNDARY"
                 | "CLOAD"
@@ -107,6 +110,10 @@ pub(super) fn audit(
             Some("Repeated control cards cannot be preserved".to_string())
         } else if name == "FLUID" && material && fluid_seen {
             Some("Repeated FLUID cards within a material cannot be preserved".into())
+        } else if name == "PLASTIC" && material && plastic_seen {
+            Some("Repeated PLASTIC cards within a material cannot be preserved".into())
+        } else if name == "PLASTIC" && (!material || !elastic_seen) {
+            Some("PLASTIC requires a preceding ELASTIC card within the same material".into())
         } else if name == "CONTACT"
             && body.iter().any(|row| {
                 !contact_names.insert(
@@ -132,11 +139,17 @@ pub(super) fn audit(
         }
         // The reader only consumes material subcards immediately after MATERIAL.
         material = name == "MATERIAL"
-            || (material && (matches!(name, "ELASTIC" | "DENSITY" | "FLUID") || name.starts_with("ITEM")));
+            || (material
+                && (matches!(name, "ELASTIC" | "DENSITY" | "FLUID" | "PLASTIC")
+                    || name.starts_with("ITEM")));
         if !material || name == "MATERIAL" {
             fluid_seen = false;
-        } else if name == "FLUID" {
-            fluid_seen = true;
+            elastic_seen = false;
+            plastic_seen = false;
+        } else {
+            fluid_seen |= name == "FLUID";
+            elastic_seen |= name == "ELASTIC";
+            plastic_seen |= name == "PLASTIC";
         }
     }
     if data
@@ -185,6 +198,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
         "WRITE" => &["RESULT", "VISUAL", "FREQUENCY"],
         "ELASTIC" => &["TYPE"],
         "FLUID" => &["TYPE", "DEPENDENCIES"],
+        "PLASTIC" => &["YIELD", "HARDEN", "DEPENDENCIES"],
         "VERSION" | "END" | "STATIC" | "EIGEN" | "DENSITY" | "ITEM=1" | "ITEM=2" => &[],
         "STEP" => &["TYPE", "INC_TYPE", "SUBSTEPS", "MAXITER", "CONVERG"],
         "DYNAMIC" => &["TYPE"],
@@ -383,6 +397,7 @@ fn check_card(h: &KeywordHeader, body: &[&str], data: &CntData, material: bool) 
                 None
             }
         }
+        "PLASTIC" => super::parse_plastic(h, body).err(),
         "ELASTIC" | "DENSITY" | "ITEM=1" | "ITEM=2" => {
             let elastic = matches!(name, "ELASTIC" | "ITEM=1");
             let values: Option<Vec<f32>> = body.first().and_then(|row| {
